@@ -26,13 +26,18 @@
 // Finds the newest build file automatically, injects it into THIS page so the app
 // runs in the shell's origin + sessionStorage (required for TONE3000 PKCE OAuth).
 //
-// TO RELEASE: just upload the new build as builds/app-<N>.html. The loader probes
-// downward from a high number and loads the first file that exists. No manifest edit.
+// TO RELEASE: upload the new build as builds/app-<N>.html. Nothing else. Ever.
+//
+// PROBE (v2): builds do NOT need to be contiguous. The scanner checks a WINDOW of
+// numbers in parallel, jumps past the highest hit, and only stops once a full
+// window of consecutive numbers is missing. Skipping 533 → 542 resolves in one
+// window; any gap smaller than WINDOW is tolerated, forever.
 (function(){
   const MSG=document.getElementById('bootMsg');
-  const START=999;
-  const FLOOR=1;
-  const BUILDS='builds/';       // folder holding app-<N>.html files + hundred-markers (500,600,…)
+  const FLOOR=525;              // lowest build number ever published
+  const CEIL=999;               // upper sanity bound
+  const WINDOW=10;              // consecutive misses required to declare "no more builds"
+  const BUILDS='builds/';       // folder holding app-<N>.html
   const KEY='improvs2_loaded_build';
   const CACHE='improvs2_newest_build';
 
@@ -44,42 +49,46 @@
   }
   const buildExists=n=>exists(url(n));
 
+  // Scan upward from `start`. Probe WINDOW numbers at once; if any exist, continue
+  // from just past the highest one. Stop when an entire window comes back empty.
+  // Returns the highest build number found, or null.
+  async function scanUp(start){
+    let best=null, n=Math.max(FLOOR,start);
+    while(n<=CEIL){
+      const cands=[];
+      for(let i=0;i<WINDOW && n+i<=CEIL;i++) cands.push(n+i);
+      if(!cands.length) break;
+      MSG.textContent='probing '+cands[0]+'–'+cands[cands.length-1]+'…';
+      const res=await Promise.all(cands.map(buildExists));
+      let hit=null;
+      for(let i=cands.length-1;i>=0;i--){ if(res[i]){ hit=cands[i]; break; } }
+      if(hit==null) break;          // full window of misses → nothing higher exists
+      best=hit; n=hit+1;            // jump past the highest hit, keep climbing
+    }
+    return best;
+  }
+
   async function findBuild(){
     // OAuth return: reuse the exact build that began the flow (matching sessionStorage/PKCE).
-    const returning=new URLSearchParams(location.search).has('code');
-    if(returning){
+    if(new URLSearchParams(location.search).has('code')){
       const stored=sessionStorage.getItem(KEY);
       if(stored && await buildExists(+stored)) return +stored;
     }
-    // Cache: last newest found. Returning visitors verify in ~2 checks.
+    // Warm path: cached build still present → only look for something NEWER (1 window).
     const cached=parseInt(localStorage.getItem(CACHE)||'',10);
-    if(cached && await buildExists(cached)){
-      if(!(await buildExists(cached+1))) return cached;   // still newest, instant
+    if(cached>=FLOOR && await buildExists(cached)){
+      const higher=await scanUp(cached+1);
+      const best=(higher!=null)?higher:cached;
+      localStorage.setItem(CACHE,String(best));
+      return best;
     }
-    // First visit (or new build shipped): probe upward from the higher of cached / floor.
-    const found=await probeFrom(cached && cached>=525 ? cached : 525);
+    // Cold path, or the cached build was deleted / cache is bogus: full scan from floor.
+    localStorage.removeItem(CACHE);
+    const found=await scanUp(FLOOR);
     if(found!=null) localStorage.setItem(CACHE,String(found));
     return found;
   }
 
-  // Fallback when no bucket markers: exponential up from seed, then binary.
-  // If the seed build itself is absent (e.g. Claude preview has no builds/ folder),
-  // check only a small window below it, then give up fast — never scan hundreds of files.
-  async function probeFrom(seed){
-    if(!(await buildExists(seed))){
-      for(let n=seed-1; n>=Math.max(FLOOR,seed-25); n--){
-        MSG.textContent='finding build '+n+'…';
-        if(await buildExists(n)) return probeFrom(n);   // found one lower; probe up from it
-      }
-      return null;   // nothing near seed — bail (preview/empty repo)
-    }
-    let lo=seed, hi=seed, step=1;
-    while(hi<=START){ const next=lo+step; MSG.textContent='probing '+next+'…';
-      if(await buildExists(next)){ lo=next; step*=2; hi=next; } else { hi=next; break; } }
-    let a=lo, b=Math.min(hi,START+1);
-    while(b-a>1){ const mid=(a+b)>>1; if(await buildExists(mid)) a=mid; else b=mid; }
-    return a;
-  }
   // Re-execute a script node (innerHTML scripts don't run; must recreate).
   function runScript(oldEl){
     return new Promise((resolve,reject)=>{
