@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IMPROVS2</title>
+<style>
+  html,body{margin:0;padding:0;background:#0a0a0f;color:#cbd5e1;font-family:system-ui,sans-serif;height:100%;}
+  #boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:99999;}
+  #boot h1{font-size:2em;letter-spacing:2px;color:#a78bfa;margin:0;}
+  #boot .bar{width:180px;height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden;}
+  #boot .fill{height:100%;width:30%;background:linear-gradient(90deg,#38bdf8,#a78bfa);animation:slide 1s ease-in-out infinite;}
+  @keyframes slide{0%{margin-left:-30%;}100%{margin-left:100%;}}
+  #boot small{color:#556;font-size:0.8em;}
+</style>
+</head>
+<body>
+<div id="boot">
+  <h1>IMPROVS2</h1>
+  <div class="bar"><div class="fill"></div></div>
+  <small id="bootMsg">loading latest build…</small>
+</div>
+<script>
+// ── LOADER SHELL ─────────────────────────────────────────────────────────────
+// Permanent entry point. OAuth redirect URI = this URL (…/tone3000/), never changes.
+// Finds the newest build file automatically, injects it into THIS page so the app
+// runs in the shell's origin + sessionStorage (required for TONE3000 PKCE OAuth).
+//
+// TO RELEASE: upload the new build as builds/app-<N>.html. Nothing else. Ever.
+//
+// PROBE (v2): builds do NOT need to be contiguous. The scanner checks a WINDOW of
+// numbers in parallel, jumps past the highest hit, and only stops once a full
+// window of consecutive numbers is missing. Skipping 533 → 542 resolves in one
+// window; any gap smaller than WINDOW is tolerated, forever.
+(function(){
+  const MSG=document.getElementById('bootMsg');
+  const FLOOR=700;              // scan floor - builds start at 700; nothing older is needed
+  const CEIL=999;               // upper sanity bound
+  const WINDOW=10;              // consecutive misses required to declare "no more builds"
+  const BUILDS='builds/';       // folder holding app-<N>.html
+  const KEY='improvs2_loaded_build';
+  const CACHE='improvs2_newest_build';
+
+  function url(n){ return BUILDS+'app-'+n+'.html'; }
+
+  async function exists(path){
+    try{ const r=await fetch(path,{method:'HEAD',cache:'no-store'}); return r.ok; }
+    catch(e){ return false; }
+  }
+  const buildExists=n=>exists(url(n));
+
+  // Scan upward from `start`. Probe WINDOW numbers at once; if any exist, continue
+  // from just past the highest one. Stop when an entire window comes back empty.
+  // Returns the highest build number found, or null.
+  async function scanUp(start){
+    let best=null, n=Math.max(FLOOR,start);
+    while(n<=CEIL){
+      const cands=[];
+      for(let i=0;i<WINDOW && n+i<=CEIL;i++) cands.push(n+i);
+      if(!cands.length) break;
+      MSG.textContent='probing '+cands[0]+'–'+cands[cands.length-1]+'…';
+      const res=await Promise.all(cands.map(buildExists));
+      let hit=null;
+      for(let i=cands.length-1;i>=0;i--){ if(res[i]){ hit=cands[i]; break; } }
+      if(hit==null) break;          // full window of misses → nothing higher exists
+      best=hit; n=hit+1;            // jump past the highest hit, keep climbing
+    }
+    return best;
+  }
+
+  async function findBuild(){
+    // OAuth return: reuse the exact build that began the flow (matching sessionStorage/PKCE).
+    if(new URLSearchParams(location.search).has('code')){
+      const stored=sessionStorage.getItem(KEY);
+      if(stored && await buildExists(+stored)) return +stored;
+    }
+    // Warm path: cached build still present → only look for something NEWER (1 window).
+    const cached=parseInt(localStorage.getItem(CACHE)||'',10);
+    if(cached>=FLOOR && await buildExists(cached)){
+      const higher=await scanUp(cached+1);
+      const best=(higher!=null)?higher:cached;
+      localStorage.setItem(CACHE,String(best));
+      return best;
+    }
+    // Cold path, or the cached build was deleted / cache is bogus: full scan from floor.
+    localStorage.removeItem(CACHE);
+    const found=await scanUp(FLOOR);
+    if(found!=null) localStorage.setItem(CACHE,String(found));
+    return found;
+  }
+
+  // Re-execute a script node (innerHTML scripts don't run; must recreate).
+  function runScript(oldEl){
+    return new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      for(const a of oldEl.attributes) s.setAttribute(a.name,a.value);
+      if(oldEl.src){ s.onload=resolve; s.onerror=reject; s.src=oldEl.src; document.head.appendChild(s); }
+      else { s.textContent=oldEl.textContent; document.head.appendChild(s); resolve(); }
+    });
+  }
+
+  async function inject(n){
+    MSG.textContent='loading build '+n+'…';
+    const html=await (await fetch(url(n),{cache:'no-store'})).text();
+    sessionStorage.setItem(KEY,String(n));
+
+    const doc=new DOMParser().parseFromString(html,'text/html');
+
+    // 1. pull in the build's <head> styles/meta (skip its <title>, keep ours minimal)
+    for(const el of doc.head.querySelectorAll('style,link[rel="stylesheet"]')){
+      document.head.appendChild(el.cloneNode(true));
+    }
+
+    // 2. move build <body> content into ours (minus scripts, added next in order)
+    const bodyScripts=[];
+    for(const node of Array.from(doc.body.childNodes)){
+      if(node.tagName==='SCRIPT'){ bodyScripts.push(node); }
+      else { document.body.appendChild(document.importNode(node,true)); }
+    }
+
+    // 3. run head scripts first (build keys/redirect live here), then body scripts, IN ORDER
+    const headScripts=Array.from(doc.head.querySelectorAll('script'));
+    for(const s of headScripts) await runScript(s);
+    for(const s of bodyScripts) await runScript(s);
+
+    // 4. the build registers many DOMContentLoaded handlers; that event already fired in
+    //    the shell, so re-dispatch it now that the build's scripts are attached.
+    document.dispatchEvent(new Event('DOMContentLoaded',{bubbles:true,cancelable:false}));
+    window.dispatchEvent(new Event('load'));
+
+    // 5. remove boot overlay
+    const boot=document.getElementById('boot'); if(boot) boot.remove();
+  }
+
+  (async function(){
+    try{
+      const n=await findBuild();
+      if(n==null){ MSG.innerHTML='No build files found in <code>'+BUILDS+'</code>.<br><small>This loader runs on GitHub Pages. In the Claude preview, open the standalone <code>app-NNN.html</code> instead.</small>'; return; }
+      await inject(n);
+    }catch(e){
+      MSG.textContent='load failed: '+e.message;
+      console.error('[loader]',e);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
