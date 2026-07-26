@@ -34,7 +34,7 @@
 // window; any gap smaller than WINDOW is tolerated, forever.
 (function(){
   const MSG=document.getElementById('bootMsg');
-  const FLOOR=700;              // scan floor - builds start at 700; nothing older is needed
+  const FLOOR=700;              // lowest build number ever published
   const CEIL=999;               // upper sanity bound
   const WINDOW=10;              // consecutive misses required to declare "no more builds"
   const BUILDS='builds/';       // folder holding app-<N>.html
@@ -105,6 +105,12 @@
     sessionStorage.setItem(KEY,String(n));
 
     const doc=new DOMParser().parseFromString(html,'text/html');
+
+    // v2 FIX: clear the loader's own boot overlay BEFORE injecting, so the build doesn't render
+    //   underneath the shell's "IMPROVS2" screen (which caused the doubled title + ghost text).
+    var _boot=document.getElementById('boot'); if(_boot) _boot.remove();
+    // also strip anything else left in our body (defensive - the shell body should be just #boot)
+    Array.from(document.body.childNodes).forEach(function(n){ try{ document.body.removeChild(n); }catch(e){} });
 
     // 1. pull in the build's <head> styles/meta (skip its <title>, keep ours minimal)
     for(const el of doc.head.querySelectorAll('style,link[rel="stylesheet"]')){
