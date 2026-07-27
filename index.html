@@ -1,8 +1,10 @@
 <script>
 (function(){
-  var MSG = document.getElementById('bootMsg');
+  var MSG=document.getElementById('bootMsg');
 
-  MSG.textContent = 'opening latest build…';
+  if(MSG){
+    MSG.textContent='opening latest build…';
+  }
 
   setTimeout(function(){
     location.replace(
