@@ -1,27 +1,15 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-...
-</head>
-<body>
-<div id="boot">
-  <h1>IMPROVS2</h1>
-  <div class="bar"><div class="fill"></div></div>
-  <small id="bootMsg">loading latest build…</small>
-</div>
-
 <script>
 (function(){
-  var MSG=document.getElementById('bootMsg');
-  MSG.textContent='opening latest build…';
+  var MSG = document.getElementById('bootMsg');
 
-  location.replace(
-    'builds/app-latest.html' +
-    location.search +
-    location.hash
-  );
+  MSG.textContent = 'opening latest build…';
+
+  setTimeout(function(){
+    location.replace(
+      'builds/app-latest.html' +
+      location.search +
+      location.hash
+    );
+  }, 500);
 })();
 </script>
-
-</body>
-</html>
