@@ -1,3 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IMPROVS2</title>
+<style>
+  html,body{margin:0;padding:0;background:#0a0a0f;color:#cbd5e1;font-family:system-ui,sans-serif;}
+  #boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;}
+  #boot h1{font-size:2em;letter-spacing:2px;color:#a78bfa;margin:0;}
+  #boot .bar{width:180px;height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden;}
+  #boot .fill{height:100%;width:30%;background:linear-gradient(90deg,#38bdf8,#a78bfa);animation:slide 1s ease-in-out infinite;}
+  @keyframes slide{0%{margin-left:-30%;}100%{margin-left:100%;}}
+  #boot small{color:#556;font-size:0.8em;}
+</style>
+</head>
+<body>
+<div id="boot">
+  <h1>IMPROVS2</h1>
+  <div class="bar"><div class="fill"></div></div>
+  <small id="bootMsg">loading latest build…</small>
+</div>
 <script>
 (function(){
   var MSG=document.getElementById('bootMsg');
@@ -15,3 +37,5 @@
   }, 500);
 })();
 </script>
+</body>
+</html>
