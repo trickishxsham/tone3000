@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite3';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite4';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -7903,8 +7903,15 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
     if(!btn || btn.__rigWired) return;
     btn.__rigWired = true;
     btn.addEventListener('click', function(ev){
-      // After module is loaded it owns the click handler — don't double-toggle
-      if(window.__MODULES && window.__MODULES.rig && !window.__MODULES.rig.isStub) return;
+      // Module already booted: toggle panel open/closed
+      if(window.__MODULES && window.__MODULES.rig && !window.__MODULES.rig.isStub){
+        if(panel){
+          var open = panel.style.display==='flex';
+          panel.style.display = open ? 'none' : 'flex';
+          try{ btn.classList.toggle('open', !open); }catch(e){}
+        }
+        return;
+      }
       ev.stopImmediatePropagation();
       btn.disabled = true;
       var prev = btn.textContent;
@@ -7912,7 +7919,7 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
       window.__ensureRig().then(function(){
         btn.disabled = false;
         btn.textContent = prev;
-        if(panel) panel.style.display = 'flex';
+        if(panel){ panel.style.display = 'flex'; try{ btn.classList.add('open'); }catch(e){} }
       }).catch(function(e){
         btn.disabled = false;
         btn.textContent = prev;
@@ -10528,6 +10535,28 @@ window.__ensureScoring = function(){
   if(window.__MODULES && window.__MODULES.scoring && !window.__MODULES.scoring.isStub) return Promise.resolve(window.__MODULES.scoring);
   return window.loadModule('scoring');
 };
+// v861-lite: BT panel lives in scoring module; wire a shell fallback so first tap works even if module loads after DOMContentLoaded
+(function(){
+  function wire(){
+    var btn=document.getElementById('btToggle'), panel=document.getElementById('btPanel');
+    if(!btn||!panel||btn.__btShellWired) return;
+    btn.__btShellWired=true;
+    btn.addEventListener('click', function(){
+      window.__ensureScoring().then(function(){
+        // Module's own handler may also fire; if panel still closed, open it
+        setTimeout(function(){
+          if(panel.style.display==='none'||panel.style.display===''){
+            panel.style.display='block';
+            try{ if(window.BackingTracks&&window.BackingTracks.render) window.BackingTracks.render(); }catch(e){}
+          }
+        }, 50);
+      }).catch(function(e){ console.warn('[bt] scoring load failed', e); });
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+})();
+
 // Preload scoring after first paint (used during jam grade) — optional soft load
 if(typeof requestIdleCallback === 'function'){
   requestIdleCallback(function(){ try{ window.__ensureScoring(); }catch(e){} });
