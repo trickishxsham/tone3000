@@ -3,7 +3,7 @@
 // SampleStore (IndexedDB) + sample pack library UI.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.860';
+var MODULE_VERSION = '4.9.8.861';
 
 const SampleStore=(function(){
   let db=null;
@@ -237,6 +237,27 @@ async function renderPackList(){
   }));
 }
 window.renderSamplePackList=renderPackList;   // external packs call this on register to refresh the list
+// v861: packs may have registered before this module loaded — paint list now
+try{ renderPackList(); }catch(e){}
+// If CDN packs not yet fetched (shell loader may have run), re-pull manifest once
+(function refreshPacksOnBoot(){
+  try{
+    if(window.__SAMPLE_PACKS && window.__SAMPLE_PACKS.length) return;
+    var MANIFEST='https://raw.githubusercontent.com/trickishxsham/samplepacks/main/packs.json';
+    var CDN='https://cdn.jsdelivr.net/gh/trickishxsham/samplepacks@main/';
+    fetch(MANIFEST).then(function(r){ return r.json(); }).then(function(j){
+      ((j&&j.packs)||[]).forEach(function(p){
+        if(!p||!p.file) return;
+        if(document.querySelector('script[data-pack="'+p.id+'"]')) return;
+        var s=document.createElement('script');
+        s.src=CDN+p.file;
+        s.setAttribute('data-pack', p.id||'');
+        s.onload=function(){ try{ renderPackList(); }catch(e){} };
+        document.head.appendChild(s);
+      });
+    }).catch(function(){});
+  }catch(e){}
+})();
 
 
 window.registerModule('sampler', {
