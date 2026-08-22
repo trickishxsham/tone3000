@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.860';
+var MODULE_VERSION = '4.9.8.861';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -1820,22 +1820,22 @@ const BackingTracks = (function(){
 })();
 window.BackingTracks=BackingTracks;
 
-document.addEventListener('DOMContentLoaded',()=>{
+function __wireBtToggle(){
   const btn=document.getElementById('btToggle'), panel=document.getElementById('btPanel');
-  if(btn&&panel){
-    btn.addEventListener('click',()=>{
-      const show=panel.style.display==='none';
-      panel.style.display=show?'block':'none';
-      if(show){ BackingTracks.render(); try{TrackPacks.refresh();}catch(e){}
-        // Remote backing-track store: pull the GitHub manifest once, then merge. Streams MP3s
-        //   from the CDN via the existing audioUrl engine. Silent + offline-safe (synth fallback).
-        try{ if(!window.__remoteTracksTried){ window.__remoteTracksTried=true;
-          TrackPacks.loadFromURL('https://raw.githubusercontent.com/trickishxsham/backingtracks/main/tracks.json?t='+Date.now())
-            .then(function(ok){ if(ok) try{TrackPacks.refresh();}catch(e){} }); } }catch(e){}
-        try{AdManager.onFeatureOpen('backing-tracks');}catch(e){} }
-    });
-  }
-});
+  if(!btn||!panel||btn.__btWired) return;
+  btn.__btWired=true;
+  btn.addEventListener('click',()=>{
+    const show=panel.style.display==='none' || panel.style.display==='';
+    panel.style.display=show?'block':'none';
+    if(show){ BackingTracks.render(); try{TrackPacks.refresh();}catch(e){}
+      try{ if(!window.__remoteTracksTried){ window.__remoteTracksTried=true;
+        TrackPacks.loadFromURL('https://raw.githubusercontent.com/trickishxsham/backingtracks/main/tracks.json?t='+Date.now())
+          .then(function(ok){ if(ok) try{TrackPacks.refresh();}catch(e){} }); } }catch(e){}
+      try{AdManager.onFeatureOpen('backing-tracks');}catch(e){} }
+  });
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', __wireBtToggle);
+else __wireBtToggle();
 
 
 
