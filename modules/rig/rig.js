@@ -5,7 +5,7 @@
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.860';
+var MODULE_VERSION = '4.9.8.861';
 
 function boot(){
 // ─── REALTIME NAM v2 (build 588) — WaveNet compiled to WASM on the MAIN thread, shipped
@@ -670,7 +670,7 @@ window.T3K=T3K;
   function toggleBtn(slot){ btnRig.classList.toggle('active', NAMRealtime.pedalOn||NAMRealtime.ampOn||NAMRealtime.irOn); }
   function reroute(){ return NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();}); }
 
-  btnRig&&btnRig.addEventListener('click',()=>{ panel.style.display = panel.style.display==='flex'?'none':'flex'; });
+  // v861-lite6: shell wireRig owns open/close (capture phase). Avoid double-toggle.
 
   // slot button clicks (delegated)
   panel&&panel.addEventListener('click',(e)=>{
