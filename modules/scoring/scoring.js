@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861';
+var MODULE_VERSION = '4.9.8.861b';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -1824,14 +1824,23 @@ function __wireBtToggle(){
   const btn=document.getElementById('btToggle'), panel=document.getElementById('btPanel');
   if(!btn||!panel||btn.__btWired) return;
   btn.__btWired=true;
-  btn.addEventListener('click',()=>{
-    const show=panel.style.display==='none' || panel.style.display==='';
-    panel.style.display=show?'block':'none';
-    if(show){ BackingTracks.render(); try{TrackPacks.refresh();}catch(e){}
-      try{ if(!window.__remoteTracksTried){ window.__remoteTracksTried=true;
-        TrackPacks.loadFromURL('https://raw.githubusercontent.com/trickishxsham/backingtracks/main/tracks.json?t='+Date.now())
-          .then(function(ok){ if(ok) try{TrackPacks.refresh();}catch(e){} }); } }catch(e){}
-      try{AdManager.onFeatureOpen('backing-tracks');}catch(e){} }
+  btn.addEventListener('click',function(ev){
+    // Single owner of BT open/close — stop shell fallback from also acting
+    ev.stopImmediatePropagation();
+    var open = panel.style.display==='block';
+    if(open){
+      panel.style.display='none';
+      try{ btn.classList.remove('active'); }catch(e){}
+      return;
+    }
+    panel.style.display='block';
+    try{ btn.classList.add('active'); }catch(e){}
+    try{ BackingTracks.render(); }catch(e){}
+    try{ TrackPacks.refresh(); }catch(e){}
+    try{ if(!window.__remoteTracksTried){ window.__remoteTracksTried=true;
+      TrackPacks.loadFromURL('https://raw.githubusercontent.com/trickishxsham/backingtracks/main/tracks.json?t='+Date.now())
+        .then(function(ok){ if(ok) try{TrackPacks.refresh();}catch(e){} }); } }catch(e){}
+    try{ AdManager.onFeatureOpen('backing-tracks'); }catch(e){}
   });
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', __wireBtToggle);
