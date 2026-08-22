@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite4';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite5';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -14016,12 +14016,15 @@ window.BkTrkLib=(function(){
     }
     return tryNext();
   }
+  // v861-lite4: public CORS proxies rot constantly. Prefer gateways that still
+  //   reach live http://dreamlo.com (SSL not enabled on this board — must use HTTP
+  //   via a server-side proxy). Direct `u` last for Capacitor/native only.
   var DL_PROXIES=[
+    function(u){return 'https://proxy.cors.sh/'+u;},
     function(u){return 'https://api.allorigins.win/raw?url='+encodeURIComponent(u);},
-    function(u){return 'https://corsproxy.io/?url='+encodeURIComponent(u);},
+    function(u){return 'https://corsproxy.io/?'+encodeURIComponent(u);},
     function(u){return 'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u);},
-    function(u){return 'https://thingproxy.freeboard.io/fetch/'+u;},
-    function(u){return u;}   // last resort: direct (works in Capacitor/native shells)
+    function(u){return u;}   // last resort: direct (Capacitor / http pages)
   ];
   function dlFetch(path){
     var bust=path+(path.indexOf('?')>=0?'&':'?')+'ts='+Date.now();   // defeat proxy/CDN caching of stale results
@@ -14045,7 +14048,15 @@ window.BkTrkLib=(function(){
       }).then(function(t){
         clearTimeout(to); t=(t||'').trim();
         if(!t || (t[0]!=='{' && t[0]!=='[')) throw new Error('non-JSON');
-        return JSON.parse(t);
+        var j=JSON.parse(t);
+        // unwrap allorigins-style { contents: "{...}" }
+        if(j && typeof j.contents==='string'){
+          var inner=(j.contents||'').trim();
+          if(!inner || (inner[0]!=='{' && inner[0]!=='[')) throw new Error('wrapped non-JSON');
+          j=JSON.parse(inner);
+        }
+        if(!j || !j.dreamlo) throw new Error('non-dreamlo JSON');
+        return j;
       }, function(e){ clearTimeout(to); throw e; });
     }
     function raceAll(){
