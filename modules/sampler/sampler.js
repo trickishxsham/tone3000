@@ -3,7 +3,7 @@
 // SampleStore (IndexedDB) + sample pack library UI.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861';
+var MODULE_VERSION = '4.9.8.861b';
 
 const SampleStore=(function(){
   let db=null;
@@ -242,20 +242,29 @@ try{ renderPackList(); }catch(e){}
 // If CDN packs not yet fetched (shell loader may have run), re-pull manifest once
 (function refreshPacksOnBoot(){
   try{
-    if(window.__SAMPLE_PACKS && window.__SAMPLE_PACKS.length) return;
     var MANIFEST='https://raw.githubusercontent.com/trickishxsham/samplepacks/main/packs.json';
     var CDN='https://cdn.jsdelivr.net/gh/trickishxsham/samplepacks@main/';
+    function injectPack(p){
+      if(!p||!p.file) return;
+      var id=p.id||p.file;
+      if(document.querySelector('script[data-pack="'+id+'"]')) return;
+      // already registered?
+      if(window.__SAMPLE_PACKS && window.__SAMPLE_PACKS.some(function(x){return x.id===id;})) return;
+      var s=document.createElement('script');
+      s.src=CDN+p.file;
+      s.setAttribute('data-pack', id);
+      s.onload=function(){ try{ setTimeout(function(){ renderPackList(); }, 400); }catch(e){} };
+      s.onerror=function(){ console.warn('[sampler] pack script failed', id); };
+      document.head.appendChild(s);
+    }
+    // Always ensure legendary.bloomfield is requested (main DLC pack)
+    injectPack({ id:'legendary.bloomfield', file:'packs/legendary.bloomfield.pack.js' });
     fetch(MANIFEST).then(function(r){ return r.json(); }).then(function(j){
-      ((j&&j.packs)||[]).forEach(function(p){
-        if(!p||!p.file) return;
-        if(document.querySelector('script[data-pack="'+p.id+'"]')) return;
-        var s=document.createElement('script');
-        s.src=CDN+p.file;
-        s.setAttribute('data-pack', p.id||'');
-        s.onload=function(){ try{ renderPackList(); }catch(e){} };
-        document.head.appendChild(s);
-      });
-    }).catch(function(){});
+      ((j&&j.packs)||[]).forEach(injectPack);
+      setTimeout(function(){ try{ renderPackList(); }catch(e){} }, 800);
+    }).catch(function(){
+      setTimeout(function(){ try{ renderPackList(); }catch(e){} }, 800);
+    });
   }catch(e){}
 })();
 
