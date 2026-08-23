@@ -237,13 +237,14 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite6';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite8';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
 </script>
 <title>IMPROVS2 v4.9.8.860</title>
-  <style id="bangers-embed">@font-face{font-family:'Bangers';font-style:normal;font-weight:400;font-display:swap;src:url('../assets/fonts/Bangers-Regular.ttf') format('truetype');}</style>
+  <link rel="preload" href="../assets/fonts/Bangers-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <style id="bangers-embed">@font-face{font-family:'Bangers';font-style:normal;font-weight:400;font-display:block;src:url('../assets/fonts/Bangers-Regular.ttf') format('truetype');}</style>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;}
 html{background:#000;overscroll-behavior:none;position:relative;}
@@ -2933,6 +2934,8 @@ function romanHTML(lbl){
 let _SAMP_BUF=null;       // decoded AudioBuffer of the loaded file
 let _SAMP_BYTES=null;     // raw bytes of the working sample (to save as a pack)
 let _SAMP_PACKID=null;    // currently loaded saved pack id, if any
+try{ window._SAMP_PACKID=null; window._SAMP_BUF=null; window._SAMP_BYTES=null; window._SAMP_MAP=[]; window._SAMP_ATK=0.03; window._SAMP_AUTOCUT=null; window._SAMP_PRESLICED=false; }catch(e){}
+// Keep window mirrors in sync whenever pack UI module reads them (v861-lite7)
 let _SAMP_MAP=[];         // [{rootMidi,start,end,loop}] sorted by rootMidi
 // Pick-attack lead (seconds): how much EARLIER a picked/tapped note begins, to include the
 //   attack transient. Slides don't use this (they retrigger the soft cut). This is what gives
@@ -7907,9 +7910,17 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
       ev.stopImmediatePropagation();
       if(window.__MODULES && window.__MODULES.rig && !window.__MODULES.rig.isStub){
         if(panel){
-          var open = panel.style.display==='flex';
-          panel.style.display = open ? 'none' : 'flex';
-          try{ btn.classList.toggle('open', !open); }catch(e){}
+          // Use data-open as source of truth (inline display can lag / be stale)
+          var open = panel.getAttribute('data-open')==='1' || panel.style.display==='flex';
+          if(open){
+            panel.style.display='none';
+            panel.setAttribute('data-open','0');
+            try{ btn.classList.remove('open'); }catch(e){}
+          } else {
+            panel.style.display='flex';
+            panel.setAttribute('data-open','1');
+            try{ btn.classList.add('open'); }catch(e){}
+          }
         }
         return;
       }
@@ -7919,7 +7930,7 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
       window.__ensureRig().then(function(){
         btn.disabled = false;
         btn.textContent = prev;
-        if(panel){ panel.style.display = 'flex'; try{ btn.classList.add('open'); }catch(e){} }
+        if(panel){ panel.style.display = 'flex'; panel.setAttribute('data-open','1'); try{ btn.classList.add('open'); }catch(e){} }
       }).catch(function(e){
         btn.disabled = false;
         btn.textContent = prev;
@@ -10478,6 +10489,29 @@ window.Spectator = Spectator;
 // §INTEGRITY ── startup self-check: confirms the core engine survived the last edit. Catches a
 //   deleted declaration (the v328 "_AC is not defined" bug) at LOAD instead of silently killing
 //   audio — watch the console for [INTEGRITY]. The build-time gate is verify.js.
+
+// v861-lite7: mirror sample state onto window for modules/sampler
+(function(){
+  function sync(){
+    try{
+      if(typeof _SAMP_PACKID!=='undefined') window._SAMP_PACKID=_SAMP_PACKID;
+      if(typeof _SAMP_BUF!=='undefined') window._SAMP_BUF=_SAMP_BUF;
+      if(typeof _SAMP_BYTES!=='undefined') window._SAMP_BYTES=_SAMP_BYTES;
+      if(typeof _SAMP_MAP!=='undefined') window._SAMP_MAP=_SAMP_MAP;
+      if(typeof _SAMP_ATK!=='undefined') window._SAMP_ATK=_SAMP_ATK;
+      if(typeof _SAMP_AUTOCUT!=='undefined') window._SAMP_AUTOCUT=_SAMP_AUTOCUT;
+      if(typeof _AC!=='undefined') window._AC=_AC;
+      // reverse: module may set window._SAMP_*; push back into shell lets when possible
+      if(window._SAMP_PACKID!==undefined && typeof _SAMP_PACKID!=='undefined') _SAMP_PACKID=window._SAMP_PACKID;
+      if(window._SAMP_BUF!==undefined && typeof _SAMP_BUF!=='undefined') _SAMP_BUF=window._SAMP_BUF;
+      if(window._SAMP_BYTES!==undefined && typeof _SAMP_BYTES!=='undefined') _SAMP_BYTES=window._SAMP_BYTES;
+      if(window._SAMP_MAP!==undefined && typeof _SAMP_MAP!=='undefined') _SAMP_MAP=window._SAMP_MAP;
+    }catch(e){}
+  }
+  setInterval(sync, 400);
+  sync();
+})();
+
 (function integrityCheck(){
   try{
     var miss=[];
