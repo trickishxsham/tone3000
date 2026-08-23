@@ -3,7 +3,10 @@
 // SampleStore (IndexedDB) + sample pack library UI.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861b';
+var MODULE_VERSION = '4.9.8.861c';
+// Shell keeps sample state in an IIFE (let _SAMP_*). Bridge via window so this module can read/write.
+function _sampGet(k, d){ try{ return (window[k]!==undefined)?window[k]:d; }catch(e){ return d; } }
+function _sampSet(k, v){ try{ window[k]=v; }catch(e){} }
 
 const SampleStore=(function(){
   let db=null;
@@ -87,20 +90,20 @@ window.SampleStore=SampleStore;
     const lastId=localStorage.getItem('improvs2_lastpack');
     if(lastId){
       const p=await SampleStore.getPack(lastId);
-      if(p && p.bytes){ ensureAudio(); try{ if(_AC.state==='suspended') await _AC.resume(); }catch(_){}
+      if(p && p.bytes){ ensureAudio(); try{ if(window._AC.state==='suspended') await window._AC.resume(); }catch(_){}
         const ab=await toAB(p.bytes);
         const st=document.getElementById('sampStatus');
         if(!ab || ab.byteLength<64){ if(st) st.textContent='last pack "'+(p.name||'').slice(0,20)+'" has no usable audio — pick a pack below or load a file'; }
         else {
-          _SAMP_BUF=await _AC.decodeAudioData(ab.slice(0));
-          _SAMP_BYTES=ab.slice(0); _SAMP_PACKID=p.id;
-          _SAMP_MAP=sampNormalizeMap(p.map||[]);   // v848: drop bad slices (dead notes)
+          window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+          window._SAMP_BYTES=ab.slice(0); window._SAMP_PACKID=p.id;
+          window._SAMP_MAP=sampNormalizeMap(p.map||[]);   // v848: drop bad slices (dead notes)
       if(p.settings){ try{
-        if(p.settings.pickAttack!=null){ _SAMP_ATK=Math.max(0,Math.min(0.4,(+p.settings.pickAttack||0)/1000)); localStorage.setItem('improvs2_sampatk',String(_SAMP_ATK)); const _pa=document.getElementById('sampPickAtk'); if(_pa) _pa.value=Math.round(_SAMP_ATK*1000); }
+        if(p.settings.pickAttack!=null){ window._SAMP_ATK=Math.max(0,Math.min(0.4,(+p.settings.pickAttack||0)/1000)); localStorage.setItem('improvs2_sampatk',String(window._SAMP_ATK)); const _pa=document.getElementById('sampPickAtk'); if(_pa) _pa.value=Math.round(window._SAMP_ATK*1000); }
         if(p.settings.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=p.settings.aRef;
-        if(p.settings.autocut){ _SAMP_AUTOCUT=p.settings.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(_SAMP_AUTOCUT)); }catch(_){} }
+        if(p.settings.autocut){ window._SAMP_AUTOCUT=p.settings.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){} }
       }catch(_){} }
-          if(st) st.textContent=`✓ pack "${(p.name||'').slice(0,24)}" restored (${_SAMP_BUF.duration.toFixed(1)}s, ${_SAMP_MAP.length} notes)`;
+          if(st) st.textContent=`✓ pack "${(p.name||'').slice(0,24)}" restored (${window._SAMP_BUF.duration.toFixed(1)}s, ${window._SAMP_MAP.length} notes)`;
           if(window.renderRows) window.renderRows();
         }
         if(typeof renderPackList==='function') renderPackList();
@@ -108,13 +111,13 @@ window.SampleStore=SampleStore;
       }
     }
     const rec=await SampleStore.load(); if(!rec||!rec.bytes) return;
-    ensureAudio(); try{ if(_AC.state==='suspended') await _AC.resume(); }catch(_){}
+    ensureAudio(); try{ if(window._AC.state==='suspended') await window._AC.resume(); }catch(_){}
     const ab=await toAB(rec.bytes); if(!ab || ab.byteLength<64) return;
-    _SAMP_BUF=await _AC.decodeAudioData(ab.slice(0));
-    _SAMP_BYTES=ab.slice(0);
+    window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+    window._SAMP_BYTES=ab.slice(0);
     const st=document.getElementById('sampStatus');
-    if(st) st.textContent=`✓ ${(rec.name||'sample').slice(0,30)} (restored, ${_SAMP_BUF.duration.toFixed(1)}s)`;
-    try{ const d=localStorage.getItem('improvs2_sampmap'); if(d){_SAMP_MAP=JSON.parse(d); if(window.renderRows) window.renderRows();} }catch(_){}
+    if(st) st.textContent=`✓ ${(rec.name||'sample').slice(0,30)} (restored, ${window._SAMP_BUF.duration.toFixed(1)}s)`;
+    try{ const d=localStorage.getItem('improvs2_sampmap'); if(d){window._SAMP_MAP=JSON.parse(d); if(window.renderRows) window.renderRows();} }catch(_){}
     if(typeof renderPackList==='function') renderPackList();
   }catch(e){ const st=document.getElementById('sampStatus'); if(st) st.textContent='startup pack restore failed — '+(e&&e.message||'').slice(0,40); }
 })();
@@ -135,7 +138,7 @@ async function renderPackList(){
   host.innerHTML='';
   if(!packs.length){ host.innerHTML='<div style="color:#6b7280;font-size:0.72em;">No saved packs. Load a sample, set its map, then 💾 Save as Pack.</div>'; return; }
   packs.forEach(p=>{
-    const cur=(p.id===_SAMP_PACKID);
+    const cur=(p.id===window._SAMP_PACKID);
     // a store pack is locked until bought with a token or instant-buy; user-made packs are open
     let owned=true;
     if(p.locked){ try{ owned=(JSON.parse(localStorage.getItem('improvs2_unlocks')||'[]')).includes(p.id); }catch(e){ owned=false; } }
@@ -164,7 +167,7 @@ async function renderPackList(){
   host.querySelectorAll('[data-tokpack]').forEach(b=>b.addEventListener('click',async()=>{
     const p=packs.find(x=>x.id===b.dataset.tokpack); const cost=(p&&p.cost)||1;
     if(Tokens.spend(cost)){ try{ const u=JSON.parse(localStorage.getItem('improvs2_unlocks')||'[]'); if(!u.includes(b.dataset.tokpack)){u.push(b.dataset.tokpack);localStorage.setItem('improvs2_unlocks',JSON.stringify(u));} }catch(e){} renderPackList(); }
-    else alert('Not enough tokens. You have '+Tokens.balance+' 🎟, this pack needs '+cost+'.\nLevel up your aura to earn tokens, or use ⚡ Buy.');
+    else { var _tb=(typeof Tokens.balance==='function')?Tokens.balance():Tokens.balance; alert('Not enough tokens. You have '+_tb+' 🎟, this pack needs '+cost+'.\nLevel up your aura to earn tokens, or use ⚡ Buy.'); }
   }));
   // instant-buy a store pack
   host.querySelectorAll('[data-buypack]').forEach(b=>b.addEventListener('click',()=>{
@@ -178,25 +181,25 @@ async function renderPackList(){
       p=await SampleStore.getPack(b.dataset.loadpack);
       if(!p){ if(st) st.textContent='pack load failed — record not found'; return; }
       if(!p.bytes){ if(st) st.textContent='pack load failed — no audio in this pack (its bytes were lost, likely an old backup). Re-save it from a working copy.'; return; }
-      ensureAudio(); try{ if(_AC.state==='suspended') await _AC.resume(); }catch(_){}
+      ensureAudio(); try{ if(window._AC.state==='suspended') await window._AC.resume(); }catch(_){}
       const ab = (p.bytes instanceof ArrayBuffer) ? p.bytes.slice(0)
                : (p.bytes && p.bytes.buffer instanceof ArrayBuffer) ? p.bytes.buffer.slice(0)
                : (p.bytes && typeof p.bytes.arrayBuffer==='function') ? await p.bytes.arrayBuffer()  // Blob
                : (p.bytes && p.bytes.b64 && (p.bytes.__ab||p.bytes.__blob)) ? (function(){ const bin=atob(p.bytes.b64),u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); return u.buffer; })()  // recover serialized
                : null;
       if(!ab || ab.byteLength<64){ if(st) st.textContent='pack load failed — audio is empty/corrupt ('+(ab?ab.byteLength:0)+' bytes). Re-save from a working copy.'; return; }
-      _SAMP_BUF=await _AC.decodeAudioData(ab.slice(0));
-      _SAMP_BYTES=ab.slice(0); _SAMP_PACKID=p.id;
-      _SAMP_MAP=sampNormalizeMap(p.map||[]);   // v848: no zero-length slices
+      window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+      window._SAMP_BYTES=ab.slice(0); window._SAMP_PACKID=p.id;
+      window._SAMP_MAP=sampNormalizeMap(p.map||[]);   // v848: no zero-length slices
       if(p.settings){ try{
-        if(p.settings.pickAttack!=null){ _SAMP_ATK=Math.max(0,Math.min(0.4,(+p.settings.pickAttack||0)/1000)); localStorage.setItem('improvs2_sampatk',String(_SAMP_ATK)); const _pa=document.getElementById('sampPickAtk'); if(_pa) _pa.value=Math.round(_SAMP_ATK*1000); }
+        if(p.settings.pickAttack!=null){ window._SAMP_ATK=Math.max(0,Math.min(0.4,(+p.settings.pickAttack||0)/1000)); localStorage.setItem('improvs2_sampatk',String(window._SAMP_ATK)); const _pa=document.getElementById('sampPickAtk'); if(_pa) _pa.value=Math.round(window._SAMP_ATK*1000); }
         if(p.settings.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=p.settings.aRef;
-        if(p.settings.autocut){ _SAMP_AUTOCUT=p.settings.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(_SAMP_AUTOCUT)); }catch(_){} }
+        if(p.settings.autocut){ window._SAMP_AUTOCUT=p.settings.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){} }
       }catch(_){} }
       localStorage.setItem('improvs2_lastpack', p.id);
       if(window.renderRows) window.renderRows();
       renderPackList();
-      if(st) st.textContent=`✓ pack "${(p.name||'').slice(0,24)}" (${_SAMP_BUF.duration.toFixed(1)}s, ${_SAMP_MAP.length} notes)`;
+      if(st) st.textContent=`✓ pack "${(p.name||'').slice(0,24)}" (${window._SAMP_BUF.duration.toFixed(1)}s, ${window._SAMP_MAP.length} notes)`;
     }catch(e){
       const sz = p&&p.bytes ? (p.bytes.byteLength!=null?p.bytes.byteLength:(p.bytes.size!=null?p.bytes.size:'?')) : 'none';
       const ty = p&&p.bytes&&p.bytes.constructor ? p.bytes.constructor.name : typeof (p&&p.bytes);
@@ -215,24 +218,24 @@ async function renderPackList(){
       if(ep.audioB64){ const bin=atob(ep.audioB64),len=bin.length,u=new Uint8Array(len); for(let i=0;i<len;i++)u[i]=bin.charCodeAt(i); ab=u.buffer; }
       else if(ep.wavUrl){ const r=await fetch(ep.wavUrl); ab=await r.arrayBuffer(); }
       else throw new Error('no audio in pack');
-      _SAMP_BUF=await _AC.decodeAudioData(ab.slice(0));
-      _SAMP_BYTES=ab.slice(0); _SAMP_PACKID=ep.id;
-      _SAMP_MAP=sampNormalizeMap(ep.map||[]);   // v848
+      window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+      window._SAMP_BYTES=ab.slice(0); window._SAMP_PACKID=ep.id;
+      window._SAMP_MAP=sampNormalizeMap(ep.map||[]);   // v848
       if(ep.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=ep.aRef;
-      if(ep.autocut){ _SAMP_AUTOCUT=ep.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(_SAMP_AUTOCUT)); }catch(_){} }
-      if(ep.pickAttack!=null){ _SAMP_ATK=Math.max(0,Math.min(0.4,(+ep.pickAttack||0)/1000));
-        try{ localStorage.setItem('improvs2_sampatk', String(_SAMP_ATK)); }catch(_){}
-        const pa=document.getElementById('sampPickAtk'); if(pa) pa.value=Math.round(_SAMP_ATK*1000); }
-      try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(_SAMP_MAP)); }catch(_){}
+      if(ep.autocut){ window._SAMP_AUTOCUT=ep.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){} }
+      if(ep.pickAttack!=null){ window._SAMP_ATK=Math.max(0,Math.min(0.4,(+ep.pickAttack||0)/1000));
+        try{ localStorage.setItem('improvs2_sampatk', String(window._SAMP_ATK)); }catch(_){}
+        const pa=document.getElementById('sampPickAtk'); if(pa) pa.value=Math.round(window._SAMP_ATK*1000); }
+      try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){}
       if(window.renderRows) window.renderRows();
       renderPackList();
-      if(st) st.textContent='📁 pack "'+((ep.name||'').slice(0,24))+'" ('+_SAMP_BUF.duration.toFixed(1)+'s, '+_SAMP_MAP.length+' notes)';
+      if(st) st.textContent='📁 pack "'+((ep.name||'').slice(0,24))+'" ('+window._SAMP_BUF.duration.toFixed(1)+'s, '+window._SAMP_MAP.length+' notes)';
     }catch(e){ if(st) st.textContent='folder pack load failed: '+(e&&e.message||'').slice(0,30)+(ep.wavUrl&&!ep.audioB64?' (file:// can\'t fetch .wav — use a base64 .pack.js)':''); }
   }));
   host.querySelectorAll('[data-delpack]').forEach(b=>b.addEventListener('click',async()=>{
     if(!confirm('Delete this pack?')) return;
     await SampleStore.delPack(b.dataset.delpack);
-    if(_SAMP_PACKID===b.dataset.delpack){ _SAMP_PACKID=null; localStorage.removeItem('improvs2_lastpack'); }
+    if(window._SAMP_PACKID===b.dataset.delpack){ window._SAMP_PACKID=null; localStorage.removeItem('improvs2_lastpack'); }
     renderPackList();
   }));
 }
@@ -261,10 +264,15 @@ try{ renderPackList(); }catch(e){}
     injectPack({ id:'legendary.bloomfield', file:'packs/legendary.bloomfield.pack.js' });
     fetch(MANIFEST).then(function(r){ return r.json(); }).then(function(j){
       ((j&&j.packs)||[]).forEach(injectPack);
-      setTimeout(function(){ try{ renderPackList(); }catch(e){} }, 800);
-    }).catch(function(){
-      setTimeout(function(){ try{ renderPackList(); }catch(e){} }, 800);
-    });
+    }).catch(function(){});
+    // pack.js registerLightweight is async (fetches 45 WAV headers) — poll for it
+    var _tries=0;
+    var _poll=setInterval(function(){
+      _tries++;
+      try{ renderPackList(); }catch(e){}
+      var has=window.__SAMPLE_PACKS && window.__SAMPLE_PACKS.some(function(x){ return x.id==='legendary.bloomfield'; });
+      if(has || _tries>40) clearInterval(_poll);  // ~20s at 500ms
+    }, 500);
   }catch(e){}
 })();
 
