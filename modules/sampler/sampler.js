@@ -3,7 +3,7 @@
 // SampleStore (IndexedDB) + sample pack library UI.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861d';
+var MODULE_VERSION = '4.9.8.861e';
 // Shell keeps sample state in an IIFE (let _SAMP_*). Bridge via window so this module can read/write.
 function _sampGet(k, d){ try{ return (window[k]!==undefined)?window[k]:d; }catch(e){ return d; } }
 function _sampSet(k, v){ try{ window[k]=v; }catch(e){} }
@@ -210,6 +210,7 @@ async function renderPackList(){
         if(p.settings.autocut){ window._SAMP_AUTOCUT=p.settings.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){} }
       }catch(_){} }
       localStorage.setItem('improvs2_lastpack', p.id);
+      try{ if(window.__syncSampFromWindow) window.__syncSampFromWindow(); }catch(e){}
       if(window.renderRows) window.renderRows();
       renderPackList();
       if(st) st.textContent=`✓ pack "${(p.name||'').slice(0,24)}" (${window._SAMP_BUF.duration.toFixed(1)}s, ${window._SAMP_MAP.length} notes)`;
@@ -243,6 +244,7 @@ async function renderPackList(){
         try{ localStorage.setItem('improvs2_sampatk', String(window._SAMP_ATK)); }catch(_){}
         const pa=document.getElementById('sampPickAtk'); if(pa) pa.value=Math.round(window._SAMP_ATK*1000); }
       try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){}
+      try{ if(window.__syncSampFromWindow) window.__syncSampFromWindow(); }catch(e){}
       if(window.renderRows) window.renderRows();
       renderPackList();
       if(st) st.textContent='📁 pack "'+((ep.name||'').slice(0,24))+'" ('+window._SAMP_BUF.duration.toFixed(1)+'s, '+window._SAMP_MAP.length+' notes)';
