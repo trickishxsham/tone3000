@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite9';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite10';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1042,7 +1042,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <span class="rec-lbl">REC</span>
   <label id="recPostFxWrap" class="expert-only" data-tip-title="POST-FX MIX" data-tip="ON = export the real post-rig sound as heard (pedal/amp/cab, drive, wet reverb) with the backing track mixed in. OFF = re-synthesize dry notes only — no rig, no backing." title="post-FX mix (rig + backing)" style="display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;margin-right:5px;cursor:pointer;line-height:1;white-space:nowrap;">
     <input type="checkbox" id="recPostFx" checked style="width:12px;height:12px;accent-color:#4aa3ff;margin:0;cursor:pointer;flex-shrink:0;"><span style="font-size:0.5em;color:#4aa3ff;letter-spacing:0.5px;font-family:'Bangers',cursive;">POST-FX</span></label>
-  <button id="btnRig" data-tip-title="RIG" data-tip="Load amp, pedal, and cab tones (from file or TONE3000). Chain: pedal → amp → cab.">RIG ▾</button>
+  <button id="btnRig" data-tip-title="RIG" data-tip="Load amp, pedal, and cab tones (from file or TONE3000). Chain: pedal → amp → cab." onclick="try{if(window.__MODULES&&window.__MODULES.rig&&!window.__MODULES.rig.isStub){window.__toggleRig();event&&event.stopPropagation();}}catch(e){}">RIG ▾</button>
   <div class="rec-seg" id="recSeg">
     <button id="recDot" data-tip-title="REC" data-tip="Record your playing — captures the full post-rig sound (pedal/amp/cab, drive, reverb) plus the backing track, exactly as heard, alongside your note data. Play 20 seconds or more for an accurate grade." title="record">&#9679;</button>
     <button id="recPlay" data-tip-title="PLAY REC" data-tip="Play back your recorded audio." title="play">&#9654;</button>
@@ -7854,17 +7854,29 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
     };
   }
   if(!window.KSEngine){
-    var _ksPending = [];
     window.KSEngine = {
       ensure: function(ctx, dest){
         return window.loadModule('ks').then(function(){
           return window.KSEngine.ensure(ctx, dest);
         });
       },
-      pluck: function(){ console.warn('[ks] module not loaded yet'); return { release:function(){}, retune:function(){}, kill:function(){} }; },
+      pluck: function(freq, vel, voice){
+        // Queue is inside real module after load; until then no-op with warn
+        console.warn('[ks] module not loaded yet — select GTR/ELEC again after load');
+        return { release:function(){}, retune:function(){}, kill:function(){} };
+      },
       get ready(){ return false; }
     };
   }
+  // Preload KS when user picks GTR or ELEC so first pluck is real KS
+  document.addEventListener('click', function(ev){
+    var t=ev.target && ev.target.closest && ev.target.closest('[data-inst]');
+    if(!t) return;
+    var inst=t.getAttribute('data-inst');
+    if(inst==='guitar' || inst==='electric'){
+      try{ window.loadModule('ks'); }catch(e){}
+    }
+  }, true);
   if(!window.NAMRealtime){
     window.NAMRealtime = {
       pedalOn: false, ampOn: false, irOn: false,
@@ -7901,37 +7913,46 @@ function renderVoiceOffline(ctx,dest,midi,vel,startSec,durSec,inst){
   };
 
   // RIG button: load module then toggle panel
+  window.__toggleRig = function(force){
+    var btn = document.getElementById('btnRig');
+    var panel = document.getElementById('rigPanel');
+    if(!panel) return;
+    var open = panel.getAttribute('data-open')==='1' || panel.style.display==='flex' || getComputedStyle(panel).display==='flex';
+    if(force==='open') open=false;
+    if(force==='close') open=true;
+    if(open){
+      panel.style.setProperty('display','none','important');
+      panel.setAttribute('data-open','0');
+      if(btn) try{ btn.classList.remove('open'); }catch(e){}
+    } else {
+      panel.style.setProperty('display','flex','important');
+      panel.setAttribute('data-open','1');
+      if(btn) try{ btn.classList.add('open'); }catch(e){}
+    }
+  };
   function wireRig(){
     var btn = document.getElementById('btnRig');
     var panel = document.getElementById('rigPanel');
     if(!btn || btn.__rigWired) return;
     btn.__rigWired = true;
     btn.addEventListener('click', function(ev){
-      // Always own the click in capture so module bubble handler cannot double-toggle
+      ev.preventDefault();
       ev.stopImmediatePropagation();
+      // Module already up → just toggle
       if(window.__MODULES && window.__MODULES.rig && !window.__MODULES.rig.isStub){
-        if(panel){
-          // Use data-open as source of truth (inline display can lag / be stale)
-          var open = panel.getAttribute('data-open')==='1' || panel.style.display==='flex';
-          if(open){
-            panel.style.display='none';
-            panel.setAttribute('data-open','0');
-            try{ btn.classList.remove('open'); }catch(e){}
-          } else {
-            panel.style.display='flex';
-            panel.setAttribute('data-open','1');
-            try{ btn.classList.add('open'); }catch(e){}
-          }
-        }
+        window.__toggleRig();
         return;
       }
+      // First open: load module then open
+      var wasOpen = panel && (panel.getAttribute('data-open')==='1' || panel.style.display==='flex');
+      if(wasOpen){ window.__toggleRig('close'); return; }
       btn.disabled = true;
       var prev = btn.textContent;
       btn.textContent = '…';
       window.__ensureRig().then(function(){
         btn.disabled = false;
         btn.textContent = prev;
-        if(panel){ panel.style.display = 'flex'; panel.setAttribute('data-open','1'); try{ btn.classList.add('open'); }catch(e){} }
+        window.__toggleRig('open');
       }).catch(function(e){
         btn.disabled = false;
         btn.textContent = prev;
