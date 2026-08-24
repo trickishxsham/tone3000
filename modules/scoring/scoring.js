@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861b';
+var MODULE_VERSION = '4.9.8.861fb';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -552,7 +552,9 @@ const TrackPacks = (function(){
     if(buyWrap){
       if(canPlay(pack,t)){
         const cur=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
-        const playing=cur&&cur.id===t.id;
+        // v861-lite17: only show STOP when audio/walk is actually running
+        const playing=!!(window.BackingTracks&&window.BackingTracks.isPlaying&&window.BackingTracks.isPlaying(t.id))
+          || !!(window.__bkLoaded && cur && cur.id===t.id);
         buyWrap.innerHTML=
           prevBtnHtml
           +'<button id="hexpackPlay" style="padding:8px 18px;background:'+(playing?'#dc2626':'linear-gradient(135deg,#0e7490,#155e75)')+';color:#fff;border:1px solid '+(playing?'#f87171':'#22d3ee')+';border-radius:8px;font-family:Bangers,cursive;font-size:0.84em;letter-spacing:1px;cursor:pointer;">'+(playing?'■ STOP':'▶ LOAD TO FRETBOARD')+'</button>'
@@ -606,12 +608,17 @@ const TrackPacks = (function(){
     let started=false;
     try{
       const cur=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
-      if(cur&&cur.id===t.id){
-        // v774: STOP must kill track + metronome/walk (was leaving click running)
+      // v861-lite17: STOP if this track is actively playing (not merely "last loaded")
+      var actively = !!(window.BackingTracks.isPlaying && window.BackingTracks.isPlaying(t.id));
+      if(!actively && window.__bkLoaded && cur && cur.id===t.id) actively=true;
+      if(actively || (cur&&cur.id===t.id && window.__bkLoaded)){
+        // STOP must kill track audio + metronome/walk + 20s preview
         try{ window.BackingTracks.stopTrack(); }catch(e){}
-        try{ if(typeof metStop==='function') metStop(); }catch(e){}
-        try{ if(typeof stopBkTrkAudio==='function') stopBkTrkAudio(); }catch(e){}
+        try{ if(window.metStop) window.metStop(); }catch(e){}
+        try{ if(window.metStopClickOnly) window.metStopClickOnly(); }catch(e){}
+        try{ if(window.stopBkTrkAudio) window.stopBkTrkAudio(); }catch(e){}
         try{ stopPreview(); }catch(e){}
+        try{ window.__bkLoaded=false; }catch(e){}
         updateSel();
         return;
       }
@@ -1793,6 +1800,8 @@ const BackingTracks = (function(){
   function stopTrack(){
     _tk.timers.forEach(clearTimeout); _tk.timers=[];
     stopComp(); stopTrackAudio(); _tk.playing=false; _tk.useAudio=false;
+    try{ window.__bkLoaded=false; }catch(e){}
+    try{ if(window.stopBkTrkAudio) window.stopBkTrkAudio(); }catch(e){}
     try{ const rd=document.getElementById('recDot'); if(rd) rd.dataset.tip='Record audio from your microphone.'; }catch(e){}
     _tk.id=null;
     updateNowPlaying(null);
@@ -1809,7 +1818,13 @@ const BackingTracks = (function(){
     return trackName(t);
   };
   window.btRefresh=render;
-  return { render, startTrack, stopTrack, getCurrentTrack:function(){
+  return { render, startTrack, stopTrack,
+    isPlaying:function(id){
+      if(!_tk.playing) return false;
+      if(id==null) return true;
+      return _tk.id===id || (window.__lastBkTrack && window.__lastBkTrack.id===id && !!window.__bkLoaded);
+    },
+    getCurrentTrack:function(){
     // v744: prefer the actively-playing track; otherwise the last one the user started
     //   (so "PROPOSE MY LOADED TRACK" works after STOP, or before re-pressing JAM).
     if(_tk.playing && _tk.id!=null){
