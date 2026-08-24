@@ -3,10 +3,23 @@
 // SampleStore (IndexedDB) + sample pack library UI.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861c';
+var MODULE_VERSION = '4.9.8.861d';
 // Shell keeps sample state in an IIFE (let _SAMP_*). Bridge via window so this module can read/write.
 function _sampGet(k, d){ try{ return (window[k]!==undefined)?window[k]:d; }catch(e){ return d; } }
 function _sampSet(k, v){ try{ window[k]=v; }catch(e){} }
+
+function sampNormalizeMap(map){
+  // v848: coerce + drop invalid slices (zero/negative length = dead notes)
+  return (map||[]).map(function(m){
+    return {rootMidi:+m.rootMidi, start:+m.start, end:+m.end, loop:!!m.loop,
+      _buf:m._buf||null, _bufFull:m._bufFull||null, _bufFullLead:m._bufFullLead};
+  }).filter(function(s){
+    return isFinite(s.rootMidi) && isFinite(s.start) && isFinite(s.end) && s.end>s.start+0.008;
+  }).sort(function(a,b){ return a.rootMidi-b.rootMidi; });
+}
+function ensureAudio(){
+  if(typeof window.ensureAudio==='function') return window.ensureAudio();
+}
 
 const SampleStore=(function(){
   let db=null;
@@ -213,11 +226,14 @@ async function renderPackList(){
     const st=document.getElementById('sampStatus'); if(st) st.textContent='loading folder pack…';
     const ep=(window.__SAMPLE_PACKS||[]).find(x=>x.id===b.dataset.loadext); if(!ep){ if(st)st.textContent='pack not found'; return; }
     try{
-      ensureAudio();
+      if(typeof window.ensureAudio==='function') window.ensureAudio();
+      else ensureAudio();
+      if(!window._AC && window.getAC) window._AC=window.getAC();
+      if(!window._AC) throw new Error('audio context not ready');
       let ab=null;
       if(ep.audioB64){ const bin=atob(ep.audioB64),len=bin.length,u=new Uint8Array(len); for(let i=0;i<len;i++)u[i]=bin.charCodeAt(i); ab=u.buffer; }
-      else if(ep.wavUrl){ const r=await fetch(ep.wavUrl); ab=await r.arrayBuffer(); }
-      else throw new Error('no audio in pack');
+      else if(ep.wavUrl){ const r=await fetch(ep.wavUrl); if(!r.ok) throw new Error('wav fetch HTTP '+r.status); ab=await r.arrayBuffer(); }
+      else throw new Error('no audio yet — wait for pack build or use LOAD again');
       window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
       window._SAMP_BYTES=ab.slice(0); window._SAMP_PACKID=ep.id;
       window._SAMP_MAP=sampNormalizeMap(ep.map||[]);   // v848
