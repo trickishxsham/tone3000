@@ -3,7 +3,7 @@
 // Karplus-Strong guitar engine (AudioWorklet)
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.860';
+var MODULE_VERSION = '4.9.8.861';
 
 // ─── KS GUITAR ENGINE — Karplus-Strong string synthesis in an AudioWorklet ──────────
 //   Native DelayNode feedback loops sound metallic (wrong interpolation). This runs the
@@ -100,14 +100,23 @@ registerProcessor('ks-processor', KSProcessor);
     if(_ensuring) return _ensuring;
     _ensuring=(async()=>{
       ac=context;
-      // Both KS + NAM processors live in ONE module (window._namLoadModule loads it once).
-      // Two separate data: worklet modules fail under content:// — sharing one avoids that.
-      try{ if(window._namLoadModule) await window._namLoadModule(context); else throw new Error('_namLoadModule missing'); }
-      catch(e){
-        // v578: the module never registered — creating the node would only throw a
-        //   misleading "'ks-processor' is not defined". Bail out and let the next
-        //   pluck retry, keeping the real reason on screen.
-        console.error('[KS] shared module load failed:',e.message);
+      // Prefer shared NAM+KS worklet loader (RIG module). If RIG not loaded yet,
+      // register KS processor alone via Blob — required for GTR/ELEC without opening RIG.
+      try{
+        if(window._namLoadModule){
+          await window._namLoadModule(context);
+        } else {
+          var blob=new Blob([SRC],{type:'application/javascript'});
+          var url=URL.createObjectURL(blob);
+          try{
+            await context.audioWorklet.addModule(url);
+          } finally {
+            try{ URL.revokeObjectURL(url); }catch(e){}
+          }
+        }
+        window._ksFailed=null;
+      }catch(e){
+        console.error('[KS] worklet load failed:',e.message);
         window._ksFailed=e.message; _ensuring=null; return null;
       }
       try{
