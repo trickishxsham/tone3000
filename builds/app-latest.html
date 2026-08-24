@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite17';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite18';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -7139,7 +7139,17 @@ document.getElementById('metInst').querySelectorAll('[data-inst]').forEach(b=>{
     // update sampler hint
     const hint=document.getElementById('sampActiveNote');
     if(hint) hint.style.background = instrument==='samp' ? '#064e3b' : '#1f2937';
-    if(hint && instrument==='samp') hint.innerHTML='<strong style="color:#6ee7b7">SAMP is active</strong> — play fretboard to trigger samples. '+(_SAMP_BUF?'File loaded ✓':'⚠ No file loaded — use Choose File above.');
+    if(hint && instrument==='samp') hint.innerHTML='<strong style="color:#6ee7b7">SAMP is active</strong> — play fretboard to trigger samples. '+((window._SAMP_BUF||_SAMP_BUF)?'File loaded ✓':'loading Legendary Bloomfield…');
+    // v861-lite18: selecting SAMP auto-loads Legendary Bloomfield in background if nothing loaded
+    if(instrument==='samp'){
+      try{
+        // ensure sampler module is present, then load default pack
+        var go=function(){ try{ if(window.__ensureDefaultSampPack) window.__ensureDefaultSampPack(); }catch(e){} };
+        if(window.__ensureDefaultSampPack) go();
+        else if(window.loadModule){ window.loadModule('sampler').then(go).catch(go); }
+        else setTimeout(go, 400);
+      }catch(e){}
+    }
     // Strat pickup selector: only for ELEC
     const pkBar=document.getElementById('pickupBar');
     if(pkBar) pkBar.style.display = (instrument==='electric') ? 'flex' : 'none';
