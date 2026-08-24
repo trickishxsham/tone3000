@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite15';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite16';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -10158,6 +10158,10 @@ document.addEventListener('DOMContentLoaded',()=>{
     window.ringId = ringId;
     window.ringIdStr = ringIdStr;
     window.ringHex = ringHex;
+    window.csColourToScale = csColourToScale;
+    window.MODE_FULL = MODE_FULL;
+    window.MODE_INT_NAMES = MODE_INT_NAMES;
+    try{ window.ALT_DATA = ALT_DATA; }catch(_e){}
     window.ringIdToPcs = ringIdToPcs;
     window.getActivePrefix = function(){ return activePrefix; };
     window.getHiveRoot = function(){ try{ return (typeof selKey!=='undefined' && selKey!=null)?selKey:(typeof curRoot!=='undefined'?curRoot:0); }catch(e){ return 0; } };
@@ -14663,11 +14667,12 @@ window.GlobalBoard={
 
 <script>
 // ══════════════════════════════════════════════════════════════
-//  PAGE READER  v4.9.8.860 — Colour Scale "spiral reading"
+//  PAGE READER  v4.9.8.861-lite16 — Colour Scale "spiral reading"
 //  Samples the loaded photo as a coarse grid, maps each cell's average
-//  colour to its nearest semitone colour, then reads outward in an
-//  expanding square spiral from the CENTRE cell — each step SETS THE
-//  APP'S KEY (current mode kept) silently, no note is sounded per step.
+//  RGB to the closest named scale via csColourToScale / SCALE_SIGS
+//  (RGB distance to each scale's mix colour), then reads outward in an
+//  expanding square spiral from the CENTRE cell — each step SETS KEY+MODE+ALT
+//  (or COLOUR for novel shapes) silently, no note is sounded per step.
 //  Cells use the hexagon selector's aspect ratio (width × √3/2) so the
 //  centre "seed" cell matches the hex tool's proportions.
 // ══════════════════════════════════════════════════════════════
@@ -14681,6 +14686,66 @@ window.GlobalBoard={
       var d=(r-c[0])*(r-c[0])+(g-c[1])*(g-c[1])+(b-c[2])*(b-c[2]);
       if(d<bd){bd=d;best=i;}}
     return best;
+  }
+  // Apply a csColourToScale result onto the active instrument (same rules as → FRETBOARD)
+  function applyScaleResult(sc){
+    if(!sc) return;
+    var NOTESA=window.NOTES||['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    var p=window.getActivePrefix&&window.getActivePrefix();
+    var inst=p&&window.INST&&window.INST[p];
+    if(!inst||!inst.setScale) return;
+    var rootName=NOTESA[sc.root]||NOTESA[0];
+    var mode=sc.mode||'IONIAN';
+    var alt=sc.alt||'NA';
+    var MODE_SEMITONES=window.MODE_SEMITONES;
+    var ALT_DATA=window.ALT_DATA;
+    var altOK = alt && alt!=='NA' && ALT_DATA && ALT_DATA[mode] && ALT_DATA[mode][alt];
+    if(mode && mode!=='COLOUR' && MODE_SEMITONES && MODE_SEMITONES[mode] && (alt==='NA' || altOK)){
+      inst.setScale(rootName, mode, alt);
+    } else {
+      // novel / colour signature scale
+      var offsets=sc.pcs ? sc.pcs.map(function(pc){ return ((pc-sc.root)%12+12)%12; }).sort(function(a,b){return a-b;}) : null;
+      if(!offsets && sc.steps){
+        offsets=[0]; var acc=0;
+        for(var i=0;i<sc.N-1;i++){ acc+=sc.steps[i]; offsets.push(acc); }
+      }
+      if(offsets && MODE_SEMITONES){
+        MODE_SEMITONES['COLOUR']=offsets;
+        if(window.MODE_INT_NAMES && window.CI_INT)
+          window.MODE_INT_NAMES['COLOUR']=offsets.map(function(o){ return window.CI_INT[o%12]; });
+        if(window.MODE_FULL)
+          window.MODE_FULL['COLOUR']=sc.name || sc.sigHex || (rootName+' Colour');
+      }
+      inst.setScale(rootName,'COLOUR','NA');
+    }
+  }
+  function scaleFromCellRgb(r,g,b){
+    // Prefer the real Colour Scale matcher (closest named scale by mix-colour distance)
+    if(typeof window.csColourToScale==='function'){
+      try{ return window.csColourToScale(r,g,b); }catch(e){}
+    }
+    // Fallback: nearest SCALE_SIGS entry by RGB
+    var sigs=window.SCALE_SIGS;
+    if(sigs && sigs.length){
+      var bestD=1e12, best=null;
+      for(var i=0;i<sigs.length;i++){
+        var s=sigs[i];
+        var d=(s.r-r)*(s.r-r)+(s.g-g)*(s.g-g)+(s.b-b)*(s.b-b);
+        if(d<bestD){ bestD=d; best=s; }
+      }
+      if(best){
+        var root=best.root, semis=best.semis, N=semis.length;
+        var pcs=semis.map(function(x){ return (root+x)%12; });
+        var steps=[];
+        for(var j=0;j<N;j++){
+          var next=j<N-1?semis[j+1]:12+semis[0];
+          steps.push(next-semis[j]);
+        }
+        return {root:root, N:N, steps:steps, pcs:pcs, mode:best.mode, alt:best.alt, name:best.name, sigHex:best.mixHex};
+      }
+    }
+    // Last resort: nearest note colour as key, keep Ionian (old behaviour)
+    return {root:nearestPc(r,g,b), N:7, steps:[2,2,1,2,2,2,1], pcs:null, mode:'IONIAN', alt:'NA', name:null};
   }
   // v826: expanding square spiral, centre-out. Standard turning-spiral walk —
   // segment length grows by 1 every 2 turns (right→up→left→down→right(+1)...).
@@ -14734,23 +14799,21 @@ window.GlobalBoard={
           for(var x=Math.floor(cxi*cw);x<Math.floor((cxi+1)*cw);x+=4){
             var o=(y*cv.width+x)*4;r+=img.data[o];g+=img.data[o+1];b+=img.data[o+2];n++;
           }
-        cellsGrid[ry][cxi]=n?nearestPc(r/n,g/n,b/n):0;
+        // Keep average RGB — scale chosen by colour distance, not pitch-class alone
+        cellsGrid[ry][cxi]=n?{r:r/n,g:g/n,b:b/n}: {r:128,g:128,b:128};
       }
     }
     var order=spiralOrder(cols, rows);
     if(!order.length)return;
     reading=true;btn.textContent='■ STOP ('+order.length+' scales)';
-    var NOTESA=window.NOTES||['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
     var STEP=700;   // ms per step — silent, so a brisker spiral tempo reads well
     order.forEach(function(pos,i){
       timers.push(setTimeout(function(){
         if(!reading)return;
         try{
-          var pc=cellsGrid[pos[1]][pos[0]];
-          var p=window.getActivePrefix&&window.getActivePrefix();
-          var inst=p&&window.INST&&window.INST[p];
-          var mode=inst&&inst.getScale?inst.getScale().mode:'IONIAN';
-          if(inst&&inst.setScale)inst.setScale(NOTESA[pc],mode,'NA');   // key changes silently, no note sounded
+          var cell=cellsGrid[pos[1]][pos[0]];
+          var sc=scaleFromCellRgb(cell.r, cell.g, cell.b);
+          applyScaleResult(sc);
         }catch(e){}
         if(i===order.length-1)setTimeout(stop,STEP);
       },i*STEP));
