@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite10';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite11';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -2966,6 +2966,7 @@ function sampNormalizeMap(map){
 }
 window.sampNormalizeMap=sampNormalizeMap;
 function sampFindNearest(midi){
+  try{ if(window._SAMP_MAP && window._SAMP_MAP.length) _SAMP_MAP=window._SAMP_MAP; if(window._SAMP_BUF) _SAMP_BUF=window._SAMP_BUF; }catch(e){}
   if(!_SAMP_MAP.length) return null;
   let best=null, bestD=999;
   for(const s of _SAMP_MAP){
@@ -8509,7 +8510,14 @@ updateKeySigDisplay();
   }
 
   function renderRows(){
-    const tbody=document.getElementById('sampRows'); tbody.innerHTML='';
+    // v861-lite11: module load writes window._SAMP_*; pull into shell lets before paint
+    try{
+      if(window._SAMP_MAP && window._SAMP_MAP.length) _SAMP_MAP=window._SAMP_MAP;
+      if(window._SAMP_BUF) _SAMP_BUF=window._SAMP_BUF;
+      if(window._SAMP_BYTES) _SAMP_BYTES=window._SAMP_BYTES;
+      if(window._SAMP_PACKID!=null) _SAMP_PACKID=window._SAMP_PACKID;
+    }catch(e){}
+    const tbody=document.getElementById('sampRows'); if(!tbody) return; tbody.innerHTML='';
     // find duplicate rootMidi values
     const midiCount={};
     _SAMP_MAP.forEach(s=>{ midiCount[s.rootMidi]=(midiCount[s.rootMidi]||0)+1; });
@@ -10512,9 +10520,20 @@ window.Spectator = Spectator;
 //   deleted declaration (the v328 "_AC is not defined" bug) at LOAD instead of silently killing
 //   audio — watch the console for [INTEGRITY]. The build-time gate is verify.js.
 
-// v861-lite7: mirror sample state onto window for modules/sampler
+// v861-lite11: bidirectional sample-state bridge (shell IIFE lets ↔ window for modules)
 (function(){
-  function sync(){
+  function syncFromWindow(){
+    try{
+      if(window._SAMP_MAP && window._SAMP_MAP.length) _SAMP_MAP=window._SAMP_MAP;
+      if(window._SAMP_BUF) _SAMP_BUF=window._SAMP_BUF;
+      if(window._SAMP_BYTES) _SAMP_BYTES=window._SAMP_BYTES;
+      if(window._SAMP_PACKID!=null) _SAMP_PACKID=window._SAMP_PACKID;
+      if(window._SAMP_ATK!=null) _SAMP_ATK=window._SAMP_ATK;
+      if(window._SAMP_AUTOCUT!=null) _SAMP_AUTOCUT=window._SAMP_AUTOCUT;
+      if(window._AC) _AC=window._AC;
+    }catch(e){}
+  }
+  function syncToWindow(){
     try{
       if(typeof _SAMP_PACKID!=='undefined') window._SAMP_PACKID=_SAMP_PACKID;
       if(typeof _SAMP_BUF!=='undefined') window._SAMP_BUF=_SAMP_BUF;
@@ -10523,13 +10542,11 @@ window.Spectator = Spectator;
       if(typeof _SAMP_ATK!=='undefined') window._SAMP_ATK=_SAMP_ATK;
       if(typeof _SAMP_AUTOCUT!=='undefined') window._SAMP_AUTOCUT=_SAMP_AUTOCUT;
       if(typeof _AC!=='undefined') window._AC=_AC;
-      // reverse: module may set window._SAMP_*; push back into shell lets when possible
-      if(window._SAMP_PACKID!==undefined && typeof _SAMP_PACKID!=='undefined') _SAMP_PACKID=window._SAMP_PACKID;
-      if(window._SAMP_BUF!==undefined && typeof _SAMP_BUF!=='undefined') _SAMP_BUF=window._SAMP_BUF;
-      if(window._SAMP_BYTES!==undefined && typeof _SAMP_BYTES!=='undefined') _SAMP_BYTES=window._SAMP_BYTES;
-      if(window._SAMP_MAP!==undefined && typeof _SAMP_MAP!=='undefined') _SAMP_MAP=window._SAMP_MAP;
     }catch(e){}
   }
+  function sync(){ syncFromWindow(); syncToWindow(); }
+  window.__syncSampFromWindow=syncFromWindow;
+  window.__syncSampToWindow=syncToWindow;
   setInterval(sync, 400);
   sync();
 })();
