@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite12';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite13';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3274,7 +3274,7 @@ function ensureAudio(){
       h.oscs.forEach(function(o){ try{ o.stop(now+0.07); }catch(e){} });
     }catch(e){}
   };
-  // v847/v860: natural harmonics — subtle but audible (was too quiet after v847)
+  // v861-lite13: natural harmonics — longer sustain, lower peak (high nodes were piercing)
   window.playHarmonicChime=function(midi, vel, str){
     try{
       if(!_AC||!_MASTER) return;
@@ -3283,25 +3283,41 @@ function ensureAudio(){
             window.Jam.onLocalHarm(midi, vel, str); }catch(e){}
       const sustain = (str!=null && isFinite(str));
       if(sustain) window.__killHarm(str);
-      const RING = sustain ? 9.0 : 2.3;
+      // Natural: longer ring (was 9s peaky). Pinch: keep short chime.
+      const RING = sustain ? 12.5 : 2.3;
       const f=440*Math.pow(2,(midi-69)/12), t=_AC.currentTime;
-      const base=Math.max(0.05, Math.min(0.62, vel||0.40));
-      const V=sustain ? base*0.62 : base*0.82;
+      const base=Math.max(0.05, Math.min(0.55, vel||0.40));
+      // High MIDI harmonics get quieter (piercing range) — soft knee above ~C6
+      const hi=Math.max(0, (midi-84)/24);           // 0 at C6, ~1 at C8
+      const hiAtten=1/(1+hi*hi*3.2);                // strong roll-off up high
+      const V=(sustain ? base*0.38 : base*0.72) * hiAtten;
       const g=_AC.createGain();
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.linearRampToValueAtTime(V,t+0.010);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+RING);
+      g.gain.linearRampToValueAtTime(V,t+0.018);   // slightly softer attack
+      // gentler decay curve: hold a low plateau then fade (less "spike")
+      if(sustain){
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, V*0.22), t+0.35);
+        g.gain.exponentialRampToValueAtTime(0.0001, t+RING);
+      } else {
+        g.gain.exponentialRampToValueAtTime(0.0001,t+RING);
+      }
+      // Soft lowpass — tames ice-pick highs without killing the bell
+      const lp=_AC.createBiquadFilter();
+      lp.type='lowpass';
+      lp.frequency.value=sustain ? Math.min(4200, f*3.2) : Math.min(6000, f*4.5);
+      lp.Q.value=0.7;
       const oscs=[];
-      [[1,1.0],[2,0.16],[3,0.06]].forEach(function(pr){
+      // Quieter upper partials (2nd/3rd were adding edge on high nodes)
+      [[1,1.0],[2,0.10],[3,0.03]].forEach(function(pr){
         const o=_AC.createOscillator(); o.type='sine'; o.frequency.value=f*pr[0];
         const pg=_AC.createGain(); pg.gain.value=pr[1];
-        o.connect(pg); pg.connect(g); o.start(t); o.stop(t+RING+0.2);
+        o.connect(pg); pg.connect(lp); o.start(t); o.stop(t+RING+0.25);
         oscs.push(o);
       });
+      lp.connect(g);
       g.connect(_MASTER);
-      // less reverb send so harmonics don't bloom louder than notes
       if(_REV){
-        const hs=_AC.createGain(); hs.gain.value=sustain?0.48:0.60;
+        const hs=_AC.createGain(); hs.gain.value=sustain?0.32:0.50;
         g.connect(hs); hs.connect(_REV);
       }
       if(sustain){
