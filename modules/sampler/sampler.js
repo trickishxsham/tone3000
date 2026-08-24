@@ -257,6 +257,87 @@ async function renderPackList(){
     renderPackList();
   }));
 }
+
+// v861-lite18: programmatic pack load (SAMP instrument default = Legendary Bloomfield)
+window.__loadSamplePackById=async function(id){
+  try{
+    id=id||'legendary.bloomfield';
+    // already loaded?
+    if(window._SAMP_PACKID===id && window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length){
+      return true;
+    }
+    if(window._SAMP_MAP && window._SAMP_MAP.length && window._SAMP_BUF && window._SAMP_PACKID){
+      return true; // another pack already active — do not clobber
+    }
+    var ep=(window.__SAMPLE_PACKS||[]).find(function(x){ return x.id===id || (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0); });
+    if(!ep){
+      // try inject pack script then wait briefly
+      var CDN='https://cdn.jsdelivr.net/gh/trickishxsham/samplepacks@main/';
+      var file='packs/legendary.bloomfield.pack.js';
+      if(!document.querySelector('script[data-pack="legendary.bloomfield"]')){
+        var s=document.createElement('script');
+        s.src=CDN+file; s.setAttribute('data-pack','legendary.bloomfield');
+        document.head.appendChild(s);
+      }
+      // wait up to ~4s for registerSamplePack
+      for(var i=0;i<20;i++){
+        await new Promise(function(r){ setTimeout(r,200); });
+        ep=(window.__SAMPLE_PACKS||[]).find(function(x){ return x.id===id || x.id==='legendary.bloomfield' || (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0); });
+        if(ep) break;
+      }
+    }
+    if(!ep){ console.warn('[sampler] default pack not registered yet'); return false; }
+    if(typeof window.ensureAudio==='function') window.ensureAudio();
+    if(!window._AC && window.getAC) window._AC=window.getAC();
+    if(!window._AC) throw new Error('audio context not ready');
+    var st=document.getElementById('sampStatus');
+    if(st) st.textContent='loading default pack…';
+    var ab=null;
+    if(ep.audioB64){
+      var bin=atob(ep.audioB64),len=bin.length,u=new Uint8Array(len);
+      for(var j=0;j<len;j++) u[j]=bin.charCodeAt(j);
+      ab=u.buffer;
+    } else if(ep.wavUrl){
+      var r=await fetch(ep.wavUrl);
+      if(!r.ok) throw new Error('wav fetch HTTP '+r.status);
+      ab=await r.arrayBuffer();
+    } else {
+      throw new Error('pack has no audio yet');
+    }
+    window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+    window._SAMP_BYTES=ab.slice(0);
+    window._SAMP_PACKID=ep.id;
+    var norm=typeof window.sampNormalizeMap==='function'?window.sampNormalizeMap:(typeof sampNormalizeMap==='function'?sampNormalizeMap:function(m){return m||[];});
+    window._SAMP_MAP=norm(ep.map||[]);
+    if(ep.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=ep.aRef;
+    if(ep.autocut){ window._SAMP_AUTOCUT=ep.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){ } }
+    if(ep.pickAttack!=null){
+      window._SAMP_ATK=Math.max(0,Math.min(0.4,(+ep.pickAttack||0)/1000));
+      try{ localStorage.setItem('improvs2_sampatk', String(window._SAMP_ATK)); }catch(_){ }
+      var pa=document.getElementById('sampPickAtk'); if(pa) pa.value=Math.round(window._SAMP_ATK*1000);
+    }
+    try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){ }
+    try{ localStorage.setItem('improvs2_lastpack', ep.id); }catch(_){ }
+    try{ if(window.__syncSampFromWindow) window.__syncSampFromWindow(); }catch(e){}
+    if(window.renderRows) window.renderRows();
+    try{ if(typeof renderPackList==='function') renderPackList(); }catch(e){}
+    if(st) st.textContent='📁 pack "'+((ep.name||'').slice(0,24))+'" ('+window._SAMP_BUF.duration.toFixed(1)+'s, '+window._SAMP_MAP.length+' notes)';
+    return true;
+  }catch(e){
+    console.warn('[sampler] default pack load failed', e&&e.message);
+    var st2=document.getElementById('sampStatus');
+    if(st2) st2.textContent='default pack load failed: '+((e&&e.message)||'').slice(0,40);
+    return false;
+  }
+};
+window.__ensureDefaultSampPack=function(){
+  // background, non-blocking
+  try{
+    if(window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length) return;
+    window.__loadSamplePackById('legendary.bloomfield');
+  }catch(e){}
+};
+
 window.renderSamplePackList=renderPackList;   // external packs call this on register to refresh the list
 // v861: packs may have registered before this module loaded — paint list now
 try{ renderPackList(); }catch(e){}
