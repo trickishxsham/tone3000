@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite11';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite12';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3823,12 +3823,26 @@ function createInstance(prefix, chordsAlwaysOn){
       arpNote=midi; arpTime=now;
       let playMidi=midi;
       if(tapStage>0){
+        // v861-lite12: stack REAL triad/7th intervals present in the scale (maj/min/dim/aug),
+        //   not every-other scale degree. Every-other fails on pentatonics:
+        //   G maj penta [G A B D E] — old [0,2,4] hit E(6) instead of D(5).
         const sc=buildScale(), pc=((midi%12)+12)%12;
         const i=sc.findIndex(e=>e.absSemi===pc), N=sc.length;
-        if(i>=0 && N>=5){
+        if(i>=0 && N>=3){
           const r=sc[i].absSemi;
-          const deg=[0,2,4,6][tapStage];                 // root · 3rd · 5th · 7th
-          playMidi = midi+((sc[(i+deg)%N].absSemi-r+12)%12);
+          const ivs=sc.map(e=>((e.absSemi-r+12)%12));
+          let third=null, fifth=null, seventh=null;
+          for(const iv of ivs){
+            if(third==null && (iv===3||iv===4)) third=iv;           // m3 / M3
+            if(fifth==null && (iv===6||iv===7||iv===8)) fifth=iv;    // dim5 / P5 / aug5
+            if(seventh==null && (iv===9||iv===10||iv===11)) seventh=iv; // 6/m7/M7 as 7th-ish
+          }
+          // fallback for exotic scales: skip-one scale steps (works for 7-note modes)
+          if(third==null) third=((sc[(i+2)%N].absSemi-r+12)%12);
+          if(fifth==null) fifth=((sc[(i+4)%N].absSemi-r+12)%12);
+          if(seventh==null && N>=7) seventh=((sc[(i+6)%N].absSemi-r+12)%12);
+          const chord=[0, third|0, fifth|0, (seventh!=null?seventh:fifth)|0];
+          playMidi = midi + (chord[Math.min(tapStage, chord.length-1)]||0);
         }
       }
       const v=makeVoice(playMidi+octPedal, vel, 1, cellPlayMeta(c,'fret'));      // v763: unique cell
