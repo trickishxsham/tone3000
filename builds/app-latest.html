@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite13';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite15';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3839,26 +3839,27 @@ function createInstance(prefix, chordsAlwaysOn){
       arpNote=midi; arpTime=now;
       let playMidi=midi;
       if(tapStage>0){
-        // v861-lite12: stack REAL triad/7th intervals present in the scale (maj/min/dim/aug),
-        //   not every-other scale degree. Every-other fails on pentatonics:
-        //   G maj penta [G A B D E] — old [0,2,4] hit E(6) instead of D(5).
+        // v861-lite15: diatonic chord of THIS scale degree (same stack as chordRoman).
+        //   3-string: root → 3rd → 5th
+        //   4-string: root → 3rd → 5th → 7th  (m7 / 7 / maj7 / m7b5 / dim7 / +7 … via i+6)
+        //   Never tonic-triad inversions. Always intervals ABOVE fretted pitch.
         const sc=buildScale(), pc=((midi%12)+12)%12;
         const i=sc.findIndex(e=>e.absSemi===pc), N=sc.length;
         if(i>=0 && N>=3){
           const r=sc[i].absSemi;
-          const ivs=sc.map(e=>((e.absSemi-r+12)%12));
-          let third=null, fifth=null, seventh=null;
-          for(const iv of ivs){
-            if(third==null && (iv===3||iv===4)) third=iv;           // m3 / M3
-            if(fifth==null && (iv===6||iv===7||iv===8)) fifth=iv;    // dim5 / P5 / aug5
-            if(seventh==null && (iv===9||iv===10||iv===11)) seventh=iv; // 6/m7/M7 as 7th-ish
+          const ivStep=function(step){ return ((sc[(i+step)%N].absSemi-r)%12+12)%12; };
+          // Tertian stack — identical to chordRoman (i+2, i+4, i+6)
+          let third=ivStep(2), fifth=ivStep(4), seventh=(N>=7)?ivStep(6):null;
+          // Pentatonic / gapped scales: repair 3rd/5th if skip-stack missed chord-tone class
+          if(!(third===3||third===4)){
+            for(let k=1;k<N;k++){ const x=ivStep(k); if(x===3||x===4){ third=x; break; } }
           }
-          // fallback for exotic scales: skip-one scale steps (works for 7-note modes)
-          if(third==null) third=((sc[(i+2)%N].absSemi-r+12)%12);
-          if(fifth==null) fifth=((sc[(i+4)%N].absSemi-r+12)%12);
-          if(seventh==null && N>=7) seventh=((sc[(i+6)%N].absSemi-r+12)%12);
-          const chord=[0, third|0, fifth|0, (seventh!=null?seventh:fifth)|0];
-          playMidi = midi + (chord[Math.min(tapStage, chord.length-1)]||0);
+          if(!(fifth===6||fifth===7||fifth===8)){
+            for(let k=1;k<N;k++){ const x=ivStep(k); if(x===6||x===7||x===8){ fifth=x; break; } }
+          }
+          // 7th: keep tertian i+6 (dim7=9, m7/dom7=10, maj7=11). No substitute from random scale degree.
+          const chord=[0, third, fifth, (seventh!=null?seventh:fifth)];
+          playMidi = midi + (chord[Math.min(tapStage, stages-1)]||0);
         }
       }
       const v=makeVoice(playMidi+octPedal, vel, 1, cellPlayMeta(c,'fret'));      // v763: unique cell
