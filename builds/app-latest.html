@@ -237,7 +237,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite16';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite17';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -7007,6 +7007,10 @@ function metStop(){
   stopBkTrkAudio();
   try{ window.BackingTracks&&window.BackingTracks.stopTrack&&window.BackingTracks.stopTrack(); }catch(e){}   // stop the JAM/pack backing too
 }
+// v861-lite17: modules (hexpack STOP) need these — shell lets are not visible outside this scope
+window.metStop=metStop;
+window.metStopClickOnly=metStopClickOnly;
+window.stopBkTrkAudio=stopBkTrkAudio;
 metPlayEl.addEventListener('click',()=>{
   // v670: after STOP, PLAY starts the same backing track again from the top
   function _restartBk(){
