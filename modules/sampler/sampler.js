@@ -258,40 +258,53 @@ async function renderPackList(){
   }));
 }
 
-// v861-lite18: programmatic pack load (SAMP instrument default = Legendary Bloomfield)
+// v861-lite19: programmatic pack load (SAMP default = Legendary Bloomfield)
+// Bloomfield registers map-only; audio is 45 WAVs merged on first LOAD. Auto-load
+// must build that merge itself (cannot rely on the LOAD-button intercept alone).
 window.__loadSamplePackById=async function(id){
   try{
     id=id||'legendary.bloomfield';
-    // already loaded?
-    if(window._SAMP_PACKID===id && window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length){
+    if(window._SAMP_PACKID===id && window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length)
       return true;
-    }
-    if(window._SAMP_MAP && window._SAMP_MAP.length && window._SAMP_BUF && window._SAMP_PACKID){
-      return true; // another pack already active — do not clobber
-    }
-    var ep=(window.__SAMPLE_PACKS||[]).find(function(x){ return x.id===id || (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0); });
+    if(window._SAMP_MAP && window._SAMP_MAP.length && window._SAMP_BUF && window._SAMP_PACKID)
+      return true; // another pack active — do not clobber
+
+    var st=document.getElementById('sampStatus');
+    if(st) st.textContent='loading default pack…';
+
+    // Ensure pack script is registered
+    var ep=(window.__SAMPLE_PACKS||[]).find(function(x){
+      return x.id===id || x.id==='legendary.bloomfield' ||
+        (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0);
+    });
     if(!ep){
-      // try inject pack script then wait briefly
       var CDN='https://cdn.jsdelivr.net/gh/trickishxsham/samplepacks@main/';
-      var file='packs/legendary.bloomfield.pack.js';
       if(!document.querySelector('script[data-pack="legendary.bloomfield"]')){
-        var s=document.createElement('script');
-        s.src=CDN+file; s.setAttribute('data-pack','legendary.bloomfield');
-        document.head.appendChild(s);
+        await new Promise(function(resolve){
+          var s=document.createElement('script');
+          s.src=CDN+'packs/legendary.bloomfield.pack.js';
+          s.setAttribute('data-pack','legendary.bloomfield');
+          s.onload=function(){ resolve(); };
+          s.onerror=function(){ resolve(); };
+          document.head.appendChild(s);
+        });
       }
-      // wait up to ~4s for registerSamplePack
-      for(var i=0;i<20;i++){
+      for(var i=0;i<30;i++){
         await new Promise(function(r){ setTimeout(r,200); });
-        ep=(window.__SAMPLE_PACKS||[]).find(function(x){ return x.id===id || x.id==='legendary.bloomfield' || (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0); });
+        ep=(window.__SAMPLE_PACKS||[]).find(function(x){
+          return x.id===id || x.id==='legendary.bloomfield' ||
+            (x.name&&x.name.toLowerCase().indexOf('bloomfield')>=0);
+        });
         if(ep) break;
       }
     }
-    if(!ep){ console.warn('[sampler] default pack not registered yet'); return false; }
+    if(!ep){ console.warn('[sampler] bloomfield not registered'); if(st) st.textContent='default pack not found'; return false; }
+
     if(typeof window.ensureAudio==='function') window.ensureAudio();
     if(!window._AC && window.getAC) window._AC=window.getAC();
     if(!window._AC) throw new Error('audio context not ready');
-    var st=document.getElementById('sampStatus');
-    if(st) st.textContent='loading default pack…';
+    var ac=window._AC;
+
     var ab=null;
     if(ep.audioB64){
       var bin=atob(ep.audioB64),len=bin.length,u=new Uint8Array(len);
@@ -301,23 +314,74 @@ window.__loadSamplePackById=async function(id){
       var r=await fetch(ep.wavUrl);
       if(!r.ok) throw new Error('wav fetch HTTP '+r.status);
       ab=await r.arrayBuffer();
+    } else if(ep.id==='legendary.bloomfield' || (ep.name&&ep.name.toLowerCase().indexOf('bloomfield')>=0)){
+      // Build merged buffer from 45 individual WAVs (same design as pack.js)
+      var BASE='https://cdn.jsdelivr.net/gh/trickishxsham/samplepacks@main/legendary.bloomfield/';
+      var COUNT=45, BASE_MIDI=40, PACK_ID='legendary.bloomfield';
+      function pad3(n){ return String(n).padStart(3,'0'); }
+      var durations=[], numChan=1, sampleRate=44100;
+      var decoded=[];
+      for(var n=1;n<=COUNT;n++){
+        if(st) st.textContent='building Bloomfield… '+n+'/'+COUNT;
+        try{
+          var resp=await fetch(BASE+PACK_ID+'.'+pad3(n)+'.wav');
+          if(!resp.ok) throw new Error('HTTP '+resp.status);
+          var bytes=await resp.arrayBuffer();
+          var buf=await ac.decodeAudioData(bytes.slice(0));
+          decoded.push(buf);
+          durations.push(buf.duration);
+          numChan=Math.max(numChan, buf.numberOfChannels);
+          sampleRate=buf.sampleRate;
+        }catch(e){
+          decoded.push(null);
+          durations.push(0);
+        }
+      }
+      var total=durations.reduce(function(a,b){return a+b;},0);
+      if(total<0.05) throw new Error('no bloomfield wavs fetched');
+      var merged=ac.createBuffer(numChan, Math.ceil(total*sampleRate), sampleRate);
+      var writeOffset=0;
+      var map=[], t0=0;
+      for(var n=0;n<COUNT;n++){
+        var buf2=decoded[n];
+        if(buf2){
+          for(var c=0;c<numChan;c++){
+            var src=buf2.getChannelData(Math.min(c, buf2.numberOfChannels-1));
+            merged.getChannelData(c).set(src, writeOffset);
+          }
+          map.push({ rootMidi: BASE_MIDI+n, start:+t0.toFixed(3), end:+(t0+buf2.duration).toFixed(3), loop:false });
+          writeOffset+=buf2.length;
+          t0+=buf2.duration;
+        }
+        decoded[n]=null; // free
+      }
+      // Use decoded buffer directly — no need to re-encode WAV
+      window._SAMP_BUF=merged;
+      window._SAMP_BYTES=null;
+      window._SAMP_PACKID=ep.id;
+      var norm=typeof window.sampNormalizeMap==='function'?window.sampNormalizeMap:function(m){return (m||[]).slice();};
+      window._SAMP_MAP=norm(map.length?map:(ep.map||[]));
+      try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){}
+      try{ localStorage.setItem('improvs2_lastpack', ep.id); }catch(_){}
+      try{ if(window.__syncSampFromWindow) window.__syncSampFromWindow(); }catch(e){}
+      if(window.renderRows) window.renderRows();
+      try{ if(typeof renderPackList==='function') renderPackList(); }catch(e){}
+      if(st) st.textContent='📁 pack "'+((ep.name||'Bloomfield').slice(0,24))+'" ('+window._SAMP_BUF.duration.toFixed(1)+'s, '+window._SAMP_MAP.length+' notes)';
+      console.log('[sampler] Bloomfield auto-loaded', window._SAMP_MAP.length, 'notes');
+      return true;
     } else {
       throw new Error('pack has no audio yet');
     }
-    window._SAMP_BUF=await window._AC.decodeAudioData(ab.slice(0));
+
+    // Single-buffer path (audioB64 / wavUrl)
+    window._SAMP_BUF=await ac.decodeAudioData(ab.slice(0));
     window._SAMP_BYTES=ab.slice(0);
     window._SAMP_PACKID=ep.id;
-    var norm=typeof window.sampNormalizeMap==='function'?window.sampNormalizeMap:(typeof sampNormalizeMap==='function'?sampNormalizeMap:function(m){return m||[];});
-    window._SAMP_MAP=norm(ep.map||[]);
+    var norm2=typeof window.sampNormalizeMap==='function'?window.sampNormalizeMap:function(m){return (m||[]).slice();};
+    window._SAMP_MAP=norm2(ep.map||[]);
     if(ep.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=ep.aRef;
-    if(ep.autocut){ window._SAMP_AUTOCUT=ep.autocut; try{ localStorage.setItem('improvs2_autocut', JSON.stringify(window._SAMP_AUTOCUT)); }catch(_){ } }
-    if(ep.pickAttack!=null){
-      window._SAMP_ATK=Math.max(0,Math.min(0.4,(+ep.pickAttack||0)/1000));
-      try{ localStorage.setItem('improvs2_sampatk', String(window._SAMP_ATK)); }catch(_){ }
-      var pa=document.getElementById('sampPickAtk'); if(pa) pa.value=Math.round(window._SAMP_ATK*1000);
-    }
-    try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){ }
-    try{ localStorage.setItem('improvs2_lastpack', ep.id); }catch(_){ }
+    try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(window._SAMP_MAP)); }catch(_){}
+    try{ localStorage.setItem('improvs2_lastpack', ep.id); }catch(_){}
     try{ if(window.__syncSampFromWindow) window.__syncSampFromWindow(); }catch(e){}
     if(window.renderRows) window.renderRows();
     try{ if(typeof renderPackList==='function') renderPackList(); }catch(e){}
@@ -326,16 +390,15 @@ window.__loadSamplePackById=async function(id){
   }catch(e){
     console.warn('[sampler] default pack load failed', e&&e.message);
     var st2=document.getElementById('sampStatus');
-    if(st2) st2.textContent='default pack load failed: '+((e&&e.message)||'').slice(0,40);
+    if(st2) st2.textContent='default pack load failed: '+((e&&e.message)||'').slice(0,48);
     return false;
   }
 };
 window.__ensureDefaultSampPack=function(){
-  // background, non-blocking
   try{
-    if(window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length) return;
-    window.__loadSamplePackById('legendary.bloomfield');
-  }catch(e){}
+    if(window._SAMP_BUF && window._SAMP_MAP && window._SAMP_MAP.length) return Promise.resolve(true);
+    return window.__loadSamplePackById('legendary.bloomfield');
+  }catch(e){ return Promise.resolve(false); }
 };
 
 window.renderSamplePackList=renderPackList;   // external packs call this on register to refresh the list
