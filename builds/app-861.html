@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite21';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite22';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -353,8 +353,19 @@ h1,h2,h3,#auraWord,#auraLevelLbl,#specName{font-family:'Bangers',cursive!importa
 /* simple tier hides WAV/CAP/LIB+ — round the button that is then visually last */
 body.tier-simple .rec-bar .rec-seg #recClear{border-top-right-radius:5px;border-bottom-right-radius:5px;}
 .rec-bar button#keySigToggle{width:auto;height:auto;white-space:nowrap;background:#1a1a2e;color:#ffd700;border:1px solid #ffd70066;}
-#recDot{color:#F0483A;}
+#recDot{color:#F0483A;position:relative;overflow:hidden;}
 #recDot.on{background:#F0483A;color:#fff;border-color:#ff7a6e;animation:recpulse 1s infinite;}
+/* v861-lite22: sparkle when a backing track is loaded — cue that REC will count-in + start the track */
+@keyframes recTrackGlow{0%,100%{box-shadow:0 0 5px rgba(240,72,58,0.45);}
+  50%{box-shadow:0 0 16px rgba(240,72,58,0.95),0 0 28px rgba(255,122,110,0.55);}}
+@keyframes recTrackShine{0%{left:-140%;}55%{left:140%;}100%{left:140%;}}
+#recDot.has-track:not(.on){
+  border-color:#ff7a6e!important;color:#ffb4ac!important;
+  background:linear-gradient(#5a1210,#2a0806)!important;
+  animation:recTrackGlow 2.4s ease-in-out infinite;}
+#recDot.has-track:not(.on)::after{content:'';position:absolute;top:0;bottom:0;left:-140%;width:55%;pointer-events:none;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,0.5),transparent);
+  animation:recTrackShine 3.6s ease-in-out infinite;}
 #recPlay.on{border-color:#00CC66;color:#00CC66;}
 #recWav{font-size:0.5em;color:#4aa3ff;border-color:#4aa3ff;}
 #recCap{font-size:0.5em;color:#f0a;border-color:#f0a;}
@@ -7489,6 +7500,23 @@ document.getElementById('metWalk').querySelectorAll('[data-walk]').forEach(b=>{
 renderCustomBar();
 
 // ── Record / Play of everything tapped on the fretboard & scale row ──
+
+// v861-lite22: REC sparkles when a backing track is loaded (ready for count-in + start)
+window.__updateRecDotTrackCue=function(){
+  try{
+    var rd=document.getElementById('recDot'); if(!rd) return;
+    var bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
+    var hasBuf=!!(window.__getBkBuf&&window.__getBkBuf());
+    var loaded=!!(bt||hasBuf||window.__lastBkTrack);
+    if(rd.classList.contains('on')) rd.classList.remove('has-track');
+    else rd.classList.toggle('has-track', loaded);
+    if(loaded && bt){
+      try{ rd.dataset.tip=(bt.title||'Track')+' loaded — tap ● to count-in & record with backing'; }catch(e){}
+    }
+  }catch(e){}
+};
+setInterval(function(){ try{ window.__updateRecDotTrackCue(); }catch(e){} }, 1200);
+
 function recStatus(){
   const el=document.getElementById('recStat');
   if(recOn)           el.textContent='\u25cf rec '+recArr.length;
@@ -7528,9 +7556,47 @@ document.getElementById('recDot').addEventListener('click',function(){
   if(recPlaying) return;
   if(!recOn){
     const bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
+    const hasBuf=!!(window.__getBkBuf&&window.__getBkBuf());
     const lbl=bt?(bt.title+' · '+bt.key+(bt.min?'m':'')+' · '+bt.bpm+' BPM'):(function(){try{const s=INST[activePrefix].getScale();return s.key+' '+(s.mode||'');}catch(e){return '';}})();
-    function doStart(){recOn=true;recArr=[];recT0=performance.now();window._takeBendErrs=[];try{recFourStr=(window.__fourStrGet&&window.__fourStrGet[activePrefix])?window.__fourStrGet[activePrefix]():false;}catch(e){}try{const _bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;window.__lastRecTrackId=_bt?_bt.id:null;}catch(e){window.__lastRecTrackId=null;}document.getElementById('recDot').classList.add('on');recStatus();if(!mPlaying)metStart();startPostRigRec();}
-    if(bt) showCountIn(mBpm,4,lbl,doStart);
+    function doStart(){
+      recOn=true;recArr=[];recT0=performance.now();window._takeBendErrs=[];
+      try{recFourStr=(window.__fourStrGet&&window.__fourStrGet[activePrefix])?window.__fourStrGet[activePrefix]():false;}catch(e){}
+      try{const _bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;window.__lastRecTrackId=_bt?_bt.id:null;}catch(e){window.__lastRecTrackId=null;}
+      document.getElementById('recDot').classList.add('on');
+      try{document.getElementById('recDot').classList.remove('has-track');}catch(e){}
+      recStatus();
+      // v861-lite22: after visual count-in, start transport + loaded backing on the GO beat.
+      //   Do NOT call metStart() again (that was a second full-bar count-in before the track).
+      if(!mPlaying){
+        if(bt || hasBuf){
+          try{ if(typeof _metStartReal==='function') _metStartReal(); else metStart(); }catch(e){ try{metStart();}catch(e2){} }
+          try{
+            if(bt && window.BackingTracks && window.BackingTracks.startTrack){
+              // pack/library track owns its audio — restart from top on GO
+              try{ if(window.BackingTracks.stopTrack) window.BackingTracks.stopTrack(); }catch(e){}
+              window.BackingTracks.startTrack(bt.id||bt);
+            } else if(hasBuf){
+              try{ if(typeof window.__setBkAudioActive==='function') window.__setBkAudioActive(true); }catch(e){}
+              try{ if(typeof startBkTrkAudio==='function') startBkTrkAudio(0); }catch(e){}
+            }
+          }catch(e){ console.warn('[rec] start backing', e); }
+        } else {
+          metStart();
+        }
+      } else if(bt || hasBuf){
+        try{
+          if(bt && window.BackingTracks && window.BackingTracks.startTrack){
+            var already=window.BackingTracks.isPlaying&&window.BackingTracks.isPlaying(bt.id);
+            if(!already){ window.BackingTracks.startTrack(bt.id||bt); }
+          } else if(hasBuf){
+            try{ if(typeof window.__setBkAudioActive==='function') window.__setBkAudioActive(true); }catch(e){}
+            try{ if(typeof startBkTrkAudio==='function') startBkTrkAudio(0); }catch(e){}
+          }
+        }catch(e){}
+      }
+      startPostRigRec();
+    }
+    if(bt || hasBuf) showCountIn(mBpm,4,lbl||'BACKING TRACK',doStart);
     else doStart();
     return;
   }
