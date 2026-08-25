@@ -5,7 +5,7 @@
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861h-lite20';
+var MODULE_VERSION = '4.9.8.861j-lite21';
 var _booted=false;
 var _uiBound=false;
 
@@ -126,13 +126,31 @@ const NAMRealtime = (function(){
   // Chain: INSTVOL -> [pedal] -> [ampIn gain -> amp] -> [cab] -> dest. Each stage optional.
   let _pedalOn=false, _ampOn=false, _irOn=false, _ctx=null, srcNode=null, dstNode=null;
   async function route(pedalOn, ampOn, irOn){
-    _ctx=_ctx||(window.getAC&&window.getAC());
-    const ac2=_ctx; if(!ac2) return;
+    // v861-lite20b: commit desired on-state FIRST so OFF/ON UI never sticks if graph throws.
+    _pedalOn=!!pedalOn; _ampOn=!!ampOn; _irOn=!!irOn; active=_pedalOn||_ampOn||_irOn;
+    try{ if(typeof window.ensureAudio==='function') window.ensureAudio(); }catch(e){}
+    _ctx=_ctx||(window.getAC&&window.getAC())||window._AC||null;
+    const ac2=_ctx;
+    if(!ac2){
+      console.warn('[rig] route: no AudioContext — state set, graph deferred');
+      return;
+    }
+    try{ if(ac2.state==='suspended') await ac2.resume(); }catch(e){}
     buildFx(ac2);
-    const src=window._namMasterNode, dst=(window._MASTERCLIP||ac2.destination);
+    const src=window._namMasterNode||window._INSTVOL||null;
+    const dst=(window._MASTERCLIP||ac2.destination);
     const cab=window._IRCAB, comp=window._COMP_NODE;
-    if(pedalOn) await ensurePedal(ac2);
-    if(ampOn) await ensureAmp(ac2);
+    if(!src){
+      console.warn('[rig] route: no _namMasterNode yet — state set, graph deferred');
+      return;
+    }
+    try{
+      if(_pedalOn) await ensurePedal(ac2);
+      if(_ampOn) await ensureAmp(ac2);
+    }catch(e){
+      console.warn('[rig] ensurePedal/Amp failed', e&&e.message||e);
+      // keep on-state so UI reflects intent; audio may be dry until retry
+    }
     // tear down every node's outputs
     try{ src.disconnect(); }catch(e){}
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(!f)continue;
@@ -143,11 +161,12 @@ const NAMRealtime = (function(){
     try{ if(_rigVerb) _rigVerb.disconnect(); }catch(e){}
     try{ if(_rigVerbSum) _rigVerbSum.disconnect(); }catch(e){}
     // wetSend feeds the shared reverb (re-established after teardown)
-    for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(f&&_rigVerb) f.wetSend.connect(_rigVerb); }
-    if(_rigVerb) _rigVerb.connect(_rigVerbSum);
+    for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(f&&_rigVerb) try{ f.wetSend.connect(_rigVerb); }catch(e){} }
+    if(_rigVerb && _rigVerbSum) try{ _rigVerb.connect(_rigVerbSum); }catch(e){}
     // helper: wire one slot's fx around a processing node. Returns tail.
     // chain: prev -> inGain -> drive -> [gate] -> node -> [bass->mid->treble] -> outGain (+wet send)
     function wireSlot(prev, f, node){
+      if(!prev || !f) return prev;
       prev.connect(f.inGain);
       f.inGain.connect(f.drive);
       let t=f.drive;
@@ -158,13 +177,19 @@ const NAMRealtime = (function(){
       f.outGain.connect(f.wetSend);   // parallel wet send (dry level unchanged)
       return f.outGain;
     }
-    let tail=src;
-    if(pedalOn){ tail=wireSlot(tail, fx.pedal, nodePedal); }
-    if(ampOn){ tail=wireSlot(tail, fx.amp, nodeAmp); }
-    if(irOn && cab){ tail=wireSlot(tail, fx.cab, cab); }
-    if(pedalOn||ampOn||irOn){ tail.connect(dst); if(_rigVerbSum) _rigVerbSum.connect(dst); }
-    else { if(comp){ src.connect(comp); } else { src.connect(dst); } }
-    _pedalOn=pedalOn; _ampOn=ampOn; _irOn=irOn; active=pedalOn||ampOn||irOn;
+    try{
+      let tail=src;
+      if(_pedalOn){ tail=wireSlot(tail, fx.pedal, nodePedal); }
+      if(_ampOn){ tail=wireSlot(tail, fx.amp, nodeAmp); }
+      if(_irOn && cab){ tail=wireSlot(tail, fx.cab, cab); }
+      if(_pedalOn||_ampOn||_irOn){ tail.connect(dst); if(_rigVerbSum) try{ _rigVerbSum.connect(dst); }catch(e){} }
+      else { if(comp){ src.connect(comp); } else { src.connect(dst); } }
+    }catch(e){
+      console.warn('[rig] graph wire failed', e&&e.message||e);
+      // restore dry path so audio isn't silent
+      try{ src.disconnect(); }catch(e2){}
+      try{ if(comp) src.connect(comp); else src.connect(dst); }catch(e2){}
+    }
     srcNode=src; dstNode=dst;
   }
   // parameter setters per slot
@@ -686,10 +711,20 @@ window.T3K=T3K;
     if(slotDiv){
       const slot=slotDiv.getAttribute('data-slot');
       if(btn.classList.contains('rigToggle')){
+        // Optimistic flip so OFF never looks stuck; route commits state first, then wires.
         try{ window.ensureAudio&&window.ensureAudio(); }catch(err){}
-        if(slot==='pedal') NAMRealtime.route(!NAMRealtime.pedalOn, NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
-        else if(slot==='amp') NAMRealtime.route(NAMRealtime.pedalOn, !NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
-        else NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, !NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
+        var wantPedal=NAMRealtime.pedalOn, wantAmp=NAMRealtime.ampOn, wantIr=NAMRealtime.irOn;
+        if(slot==='pedal') wantPedal=!wantPedal;
+        else if(slot==='amp') wantAmp=!wantAmp;
+        else wantIr=!wantIr;
+        // Immediate paint from desired flags (route sets them at entry)
+        NAMRealtime.route(wantPedal, wantAmp, wantIr).then(function(){
+          paint(); toggleBtn();
+        }).catch(function(err){
+          console.warn('[rig] toggle route failed', err);
+          paint(); toggleBtn();
+          setStat('toggle failed: '+(err&&err.message||err));
+        });
       } else if(btn.classList.contains('rigFile')){
         fileTargetSlot=slot;
         try{
