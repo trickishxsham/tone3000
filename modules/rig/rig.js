@@ -5,9 +5,12 @@
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861';
+var MODULE_VERSION = '4.9.8.861h-lite20';
+var _booted=false;
+var _uiBound=false;
 
 function boot(){
+if(_booted) return; _booted=true;
 // ─── REALTIME NAM v2 (build 588) — WaveNet compiled to WASM on the MAIN thread, shipped
 //   into the AudioWorklet as a precompiled WebAssembly.Module. Three fixes vs v1:
 //   1) FULL CHAIN — every layer-array is emitted and chained inside one WASM function.
@@ -656,43 +659,64 @@ window.T3K=T3K;
   const S={ pedal:{loaded:false,json:null}, amp:{loaded:false,json:null}, cab:{loaded:false} };
   let fileTargetSlot=null, t3kTargetSlot=null;
   function setStat(t){ if(rigStat) rigStat.textContent=t||''; }
-  function slotEl(slot){ return panel.querySelector('.rigSlot[data-slot="'+slot+'"]'); }
+  function slotEl(slot){ return panel && panel.querySelector('.rigSlot[data-slot="'+slot+'"]'); }
   function paint(){
+    if(!panel) return;
     ['pedal','amp','cab'].forEach(slot=>{
       const el=slotEl(slot); if(!el) return;
       const on = slot==='pedal'?NAMRealtime.pedalOn : slot==='amp'?NAMRealtime.ampOn : NAMRealtime.irOn;
       const tog=el.querySelector('.rigToggle');
-      tog.textContent=on?'ON':'OFF';
-      tog.style.color=on?'#6ee7b7':'#889'; tog.style.borderColor=on?'#10b981':'#444';
-      el.querySelector('.rigClear').style.display=S[slot].loaded?'inline':'none';
+      if(tog){ tog.textContent=on?'ON':'OFF';
+        tog.style.color=on?'#6ee7b7':'#889'; tog.style.borderColor=on?'#10b981':'#444'; }
+      const clr=el.querySelector('.rigClear');
+      if(clr) clr.style.display=S[slot].loaded?'inline':'none';
     });
   }
-  function toggleBtn(slot){ btnRig.classList.toggle('active', NAMRealtime.pedalOn||NAMRealtime.ampOn||NAMRealtime.irOn); }
+  function toggleBtn(){ if(btnRig) btnRig.classList.toggle('active', !!(NAMRealtime.pedalOn||NAMRealtime.ampOn||NAMRealtime.irOn)); }
   function reroute(){ return NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();}); }
 
-  // v861-lite6: shell wireRig owns open/close (capture phase). Avoid double-toggle.
-
-  // slot button clicks (delegated)
-  panel&&panel.addEventListener('click',(e)=>{
-    const slotDiv=e.target.closest('.rigSlot'); if(!slotDiv) return;
-    const slot=slotDiv.getAttribute('data-slot');
-    if(e.target.classList.contains('rigToggle')){
-      window.ensureAudio&&window.ensureAudio();
-      if(slot==='pedal') NAMRealtime.route(!NAMRealtime.pedalOn, NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
-      else if(slot==='amp') NAMRealtime.route(NAMRealtime.pedalOn, !NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
-      else NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, !NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
-    } else if(e.target.classList.contains('rigFile')){
-      fileTargetSlot=slot;
-      if(slot==='cab') fileIr.value='', fileIr.click(); else fileNam.value='', fileNam.click();
-    } else if(e.target.classList.contains('rigT3k')){
-      openT3k(slot);
-    } else if(e.target.classList.contains('rigClear')){
-      clearSlot(slot);
-    } else if(e.target.classList.contains('rigFx')){
-      const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]');
-      if(fp) fp.style.display = fp.style.display==='block'?'none':'block';
+  // v861-lite20: shell owns open/close. Panel handlers are idempotent via _uiBound.
+  function onPanelClick(e){
+    if(!panel) return;
+    const btn=e.target.closest && e.target.closest('button');
+    if(!btn || !panel.contains(btn)) return;
+    // SNAP handled by dedicated listeners
+    if(btn.classList.contains('rigSnap') || btn.classList.contains('rigSnapSave')) return;
+    const slotDiv=btn.closest('.rigSlot');
+    if(slotDiv){
+      const slot=slotDiv.getAttribute('data-slot');
+      if(btn.classList.contains('rigToggle')){
+        try{ window.ensureAudio&&window.ensureAudio(); }catch(err){}
+        if(slot==='pedal') NAMRealtime.route(!NAMRealtime.pedalOn, NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
+        else if(slot==='amp') NAMRealtime.route(NAMRealtime.pedalOn, !NAMRealtime.ampOn, NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
+        else NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, !NAMRealtime.irOn).then(()=>{paint();toggleBtn();});
+      } else if(btn.classList.contains('rigFile')){
+        fileTargetSlot=slot;
+        try{
+          if(slot==='cab'){ if(fileIr){ fileIr.value=''; fileIr.click(); } }
+          else { if(fileNam){ fileNam.value=''; fileNam.click(); } }
+        }catch(err){ setStat('file picker failed'); }
+      } else if(btn.classList.contains('rigT3k')){
+        openT3k(slot);
+      } else if(btn.classList.contains('rigClear')){
+        clearSlot(slot);
+      } else if(btn.classList.contains('rigFx')){
+        const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]');
+        if(fp) fp.style.display = fp.style.display==='block'?'none':'block';
+      }
     }
-  });
+  }
+  function bindPanelUI(){
+    if(!panel){ console.warn('[rig] rigPanel missing'); return; }
+    if(!_uiBound){
+      panel.addEventListener('click', onPanelClick);
+      _uiBound=true;
+    }
+    paint(); toggleBtn();
+  }
+  // Shell calls this after load / open
+  window.__rigBindUI = bindPanelUI;
+  bindPanelUI();
 
   // Build GATEWAY-style param panel for each slot (Input/Threshold/Bass/Middle/Treble/Output + gate/EQ)
   function buildFxPanel(slot){
@@ -742,13 +766,13 @@ window.T3K=T3K;
   }
   ['pedal','amp','cab'].forEach(buildFxPanel);
 
-  // ── RIG SNAPSHOTS — 4 session presets (A-D). Captures pedal/amp jsons+tiers, IR buffer,
-  //    on/off states, all fx knob values + gate/eq toggles. In-memory only: NAM jsons are
-  //    100KB-2MB so localStorage is not dependable. Cleared on reload by design. ──
-  const SNAPS=[null,null,null,null];
+  // ── RIG SNAPSHOTS — A-G (7 slots). Captures pedal/amp jsons+tiers, IR buffer,
+  //    on/off states, all fx knob values + gate/eq toggles. ──
+  const SNAPS=[null,null,null,null,null,null,null];
+  const SNAP_LABELS='ABCDEFG';
   let snapSaveMode=false;
   const snapStat=document.getElementById('rigSnapStat');
-  function snapBtn(i){ return panel.querySelector('.rigSnap[data-snap="'+i+'"]'); }
+  function snapBtn(i){ return panel && panel.querySelector('.rigSnap[data-snap="'+i+'"]'); }
   function paintSnaps(){
     for(let i=0;i<7;i++){ const b=snapBtn(i); if(!b) continue;      // v681: A-G, seven slots
       const has=!!SNAPS[i];
@@ -825,9 +849,9 @@ window.T3K=T3K;
       if(t.checked!==want){ t.checked=want; NAMRealtime.setFxEnabled(slot,t.dataset.fx,want); } });
   }
   async function snapRecall(i){
-    const sn=SNAPS[i]; if(!sn){ snapStat.textContent='slot '+'ABCD'[i]+' empty — tap SAVE then '+'ABCD'[i]; setTimeout(()=>snapStat.textContent='',2500); return; }
+    const sn=SNAPS[i]; if(!sn){ snapStat.textContent='slot '+(SNAP_LABELS[i]||i)+' empty — tap SAVE then '+(SNAP_LABELS[i]||i); setTimeout(()=>snapStat.textContent='',2500); return; }
     window.ensureAudio&&window.ensureAudio();
-    setStat('recalling '+'ABCD'[i]+'…');
+    setStat('recalling '+(SNAP_LABELS[i]||i)+'…');
     // pedal
     S.pedal.json=sn.pedal.json; S.pedal.loaded=sn.pedal.loaded;
     const pSel=slotEl('pedal').querySelector('.rigTier');
@@ -860,12 +884,12 @@ window.T3K=T3K;
     await NAMRealtime.route(!!(sn.on.pedal&&sn.pedal.loaded), !!(sn.on.amp&&sn.amp.loaded), !!(sn.on.ir&&sn.cab.loaded));
     restoreFx('pedal',sn.pedal.fx); restoreFx('amp',sn.amp.fx); restoreFx('cab',sn.cab.fx);
     paint(); toggleBtn(); setStat('');
-    snapStat.textContent='ABCD'[i]+' ✓'; setTimeout(()=>snapStat.textContent='',1600);
+    snapStat.textContent=(SNAP_LABELS[i]||i)+' ✓'; setTimeout(()=>snapStat.textContent='',1600);
   }
   const snapSaveBtn=panel.querySelector('.rigSnapSave');
   snapSaveBtn&&snapSaveBtn.addEventListener('click',()=>{
     snapSaveMode=!snapSaveMode;
-    snapStat.textContent=snapSaveMode?'tap A-D to save':'';
+    snapStat.textContent=snapSaveMode?'tap A–G to save':'';
     paintSnaps();
   });
   panel.querySelectorAll('.rigSnap').forEach(b=>{
@@ -873,7 +897,7 @@ window.T3K=T3K;
       const i=parseInt(b.dataset.snap);
       if(snapSaveMode){ SNAPS[i]=snapCapture(); snapSaveMode=false;
         persistSnap(i);                                    // v539: survives reload
-        snapStat.textContent='saved → '+'ABCD'[i]; setTimeout(()=>snapStat.textContent='',1600); paintSnaps(); }
+        snapStat.textContent='saved → '+(SNAP_LABELS[i]||i); setTimeout(()=>snapStat.textContent='',1600); paintSnaps(); }
       else snapRecall(i);
     });
   });
@@ -1039,6 +1063,8 @@ window.T3K=T3K;
   window._namRtOnError=function(msg,slot){ setStat((slot||'amp')+' error: '+msg); };
   window._namActive=function(){ return NAMRealtime.ampOn && NAMEngine.loaded; };
 
+})(); // end RIG UI IIFE (was missing — syntax error killed all RIG buttons)
+
 window.registerModule('rig', {
   version: MODULE_VERSION,
   isStub: false,
@@ -1052,14 +1078,12 @@ console.log('[modules] rig v' + MODULE_VERSION);
 function namReady(){
   return window.__MODULES && window.__MODULES.nam && !window.__MODULES.nam.isStub;
 }
-if(namReady()){
-  boot();
-} else if(typeof window.loadModule === 'function'){
-  window.loadModule('nam').then(boot).catch(function(e){
-    console.warn('[rig] nam load failed, booting anyway', e);
-    boot();
+// Boot RIG UI immediately so OFF / File / T3K / SNAP work even while NAM loads.
+// NAMEngine stub already exists in the shell; real nam module upgrades it.
+try { boot(); } catch(e){ console.warn('[rig] boot error', e); }
+if(!namReady() && typeof window.loadModule === 'function'){
+  window.loadModule('nam').catch(function(e){
+    console.warn('[rig] nam load failed', e);
   });
-} else {
-  boot();
 }
 })();
