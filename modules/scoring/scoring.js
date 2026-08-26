@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861fb';
+var MODULE_VERSION = '4.9.8.861m-lite32';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -1338,7 +1338,8 @@ function gradePerformance(metrics,reason){
 }
 // ── REAL SCORER: analyse a recorded take (recArr) into the 7 metrics, then grade ──
 function analyseTake(arr, scaleSemis, scaleRoot){
-  if(!arr || arr.length<3) return null;
+  // v861-lite30: jam takes can be short — analyse from 1 note (was hard-fail <3 → null → F)
+  if(!arr || !arr.length) return null;
   const notes=arr.slice().sort((a,b)=>a.t-b.t);
   const N=notes.length;
   const span=(notes[N-1].t-notes[0].t)/1000 || 1;     // seconds
@@ -1370,10 +1371,15 @@ function analyseTake(arr, scaleSemis, scaleRoot){
   }
   // timing: how evenly notes are spaced (groove) — lower variance of inter-onset = tighter
   const iois=[]; for(let i=1;i<N;i++) iois.push(notes[i].t-notes[i-1].t);
-  const mean=iois.reduce((a,b)=>a+b,0)/iois.length;
-  const varc=iois.reduce((a,b)=>a+(b-mean)*(b-mean),0)/iois.length;
-  const cv=Math.sqrt(varc)/(mean||1);                  // coefficient of variation
-  const timing=Math.max(0,Math.min(1, 1 - Math.abs(cv-0.5)));   // some variation good, chaos bad
+  let timing=0.55; // neutral default for single-note / sparse takes
+  if(iois.length>=2){
+    const mean=iois.reduce((a,b)=>a+b,0)/iois.length;
+    const varc=iois.reduce((a,b)=>a+(b-mean)*(b-mean),0)/iois.length;
+    const cv=Math.sqrt(varc)/(mean||1);
+    timing=Math.max(0,Math.min(1, 1 - Math.abs(cv-0.5)));
+  } else if(iois.length===1){
+    timing=0.6;
+  }
   // space: note density — sweet spot widened (~1.5–6 notes/sec all sound musical)
   const density=N/span;
   const space=Math.max(0,Math.min(1, 1 - Math.abs(density-3)/5));
@@ -1409,10 +1415,27 @@ function analyseTake(arr, scaleSemis, scaleRoot){
 }
 function scoreCurrentTake(reason){
   const as = window.ACTIVE_SCALE || {semis:[0,2,4,5,7,9,11], root:0};
-  const m=analyseTake(window.getRecArr(), as.semis, as.root);
+  let arr=null;
+  try{ arr=(window.getRecArr&&window.getRecArr())||null; }catch(e){ arr=null; }
+  if((!arr || !arr.length) && window.__lastJamTake && window.__lastJamTake.length){
+    arr=window.__lastJamTake;
+  }
+  const m=analyseTake(arr, as.semis, as.root);
   if(!m){ return null; }
-  return gradePerformance(m, reason||'take');
+  const g=gradePerformance(m, reason||'take');
+  // jam floor: if real notes were played, never report empty-F
+  try{
+    if(g && arr && arr.length>=1){
+      g.vsEmpty=false;
+      if((g.score|0)<20 && arr.length>=3){ g.score=Math.max(g.score|0, 20+Math.min(30,arr.length)); }
+      if((g.score|0)<50 && arr.length>=8){ g.score=Math.max(g.score|0, 50); g.grade=(window.JudgeWeights&&window.JudgeWeights.letter)?window.JudgeWeights.letter(g.score):'C'; }
+    }
+  }catch(e){}
+  return g;
 }
+try{ window.scoreCurrentTake=scoreCurrentTake; }catch(e){}
+try{ window.analyseTake=analyseTake; }catch(e){}
+try{ window.gradePerformance=gradePerformance; }catch(e){}
 
 
 // ─── BACKING TRACKS ────────────────────────────────────────────
