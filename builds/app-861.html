@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite22';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite24';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -359,13 +359,16 @@ body.tier-simple .rec-bar .rec-seg #recClear{border-top-right-radius:5px;border-
 @keyframes recTrackGlow{0%,100%{box-shadow:0 0 5px rgba(240,72,58,0.45);}
   50%{box-shadow:0 0 16px rgba(240,72,58,0.95),0 0 28px rgba(255,122,110,0.55);}}
 @keyframes recTrackShine{0%{left:-140%;}55%{left:140%;}100%{left:140%;}}
-#recDot.has-track:not(.on){
+#recDot.has-track:not(.on),
+.switch-dock-rec .dock-rec-dot.has-track:not(.on){
   border-color:#ff7a6e!important;color:#ffb4ac!important;
   background:linear-gradient(#5a1210,#2a0806)!important;
   animation:recTrackGlow 2.4s ease-in-out infinite;}
-#recDot.has-track:not(.on)::after{content:'';position:absolute;top:0;bottom:0;left:-140%;width:55%;pointer-events:none;
+#recDot.has-track:not(.on)::after,
+.switch-dock-rec .dock-rec-dot.has-track:not(.on)::after{content:'';position:absolute;top:0;bottom:0;left:-140%;width:55%;pointer-events:none;
   background:linear-gradient(100deg,transparent,rgba(255,255,255,0.5),transparent);
   animation:recTrackShine 3.6s ease-in-out infinite;}
+.switch-dock-rec .dock-rec-dot{position:relative;overflow:hidden;}
 #recPlay.on{border-color:#00CC66;color:#00CC66;}
 #recWav{font-size:0.5em;color:#4aa3ff;border-color:#4aa3ff;}
 #recCap{font-size:0.5em;color:#f0a;border-color:#f0a;}
@@ -4081,16 +4084,21 @@ function createInstance(prefix, chordsAlwaysOn){
           }catch(x){}
         }
         // v607: LIGHT TAP on a sparkly node fret (12/7/5) -> natural harmonic of the OPEN string.
-        //   Tight window (<=130ms, <10px) so it does NOT eat normal quick notes on those frets.
+        // v861-lite24: grazing only — <=90ms and <=12px move. Was 180ms and stole 3-tap triads on 5/7/12.
         // v687: what matters is how fast you LEFT the node, not whether you slid onto it.
-        if(!hung && bendSemis<0.15 && _nhDownCell && (performance.now()-_nhDownT)<=180){
-          const _st=parseInt(_nhDownCell.dataset.str,10), _mi=parseInt(_nhDownCell.dataset.midi,10);
-          const _fr=_mi-STRING_MIDI[_st], _pt={12:12,7:19,5:24}[_fr];
-          if(_pt!=null && STRING_MIDI[_st]!=null){
-            held.forEach(v=>{ try{ v.release(true); }catch(x){} }); held=[];   // v632: hard-mute so the note TRANSFORMS to the harmonic (one sound, not two)
-            try{ window.playHarmonicChime(STRING_MIDI[_st]+_pt+octPedal, 0.40, _st); }catch(x){}   // v847: softer natural harmonic
-            try{ if(recOn && !recPlaying) recArr.push({m:STRING_MIDI[_st]+_pt+octPedal, t:performance.now()-recT0, dur:400, vel:0.28, harm:'nat'}); }catch(x){}
-            try{ haptic([10,40]); }catch(x){}
+        if(!hung && bendSemis<0.15 && _nhDownCell){
+          const _nhDt=performance.now()-_nhDownT;
+          const _nhMove=(e&&e.clientX!=null&&_nhDownX!=null)
+            ? Math.hypot(e.clientX-_nhDownX, e.clientY-_nhDownY) : 0;
+          if(_nhDt<=90 && _nhMove<=12){
+            const _st=parseInt(_nhDownCell.dataset.str,10), _mi=parseInt(_nhDownCell.dataset.midi,10);
+            const _fr=_mi-STRING_MIDI[_st], _pt={12:12,7:19,5:24}[_fr];
+            if(_pt!=null && STRING_MIDI[_st]!=null){
+              held.forEach(v=>{ try{ v.release(true); }catch(x){} }); held=[];   // v632: hard-mute so the note TRANSFORMS to the harmonic (one sound, not two)
+              try{ window.playHarmonicChime(STRING_MIDI[_st]+_pt+octPedal, 0.40, _st); }catch(x){}   // v847: softer natural harmonic
+              try{ if(recOn && !recPlaying) recArr.push({m:STRING_MIDI[_st]+_pt+octPedal, t:performance.now()-recT0, dur:400, vel:0.28, harm:'nat'}); }catch(x){}
+              try{ haptic([10,40]); }catch(x){}
+            }
           }
         }
         // v607: PINCH (artificial) harmonic - bend to FULL, pull off quickly (<=400ms). Sparse-bell squeal.
@@ -6602,7 +6610,10 @@ const metStopEl =document.getElementById('metStop');
       const rd=document.getElementById('recDot');
       const rp=document.getElementById('recPlay');
       document.querySelectorAll('.dock-rec-dot').forEach(function(b){
-        if(rd){ b.classList.toggle('on', rd.classList.contains('on')); }
+        if(rd){
+          b.classList.toggle('on', rd.classList.contains('on'));
+          b.classList.toggle('has-track', rd.classList.contains('has-track'));
+        }
       });
       document.querySelectorAll('.dock-rec-play').forEach(function(b){
         if(rp){ b.classList.toggle('on', rp.classList.contains('on')); }
@@ -7504,18 +7515,27 @@ renderCustomBar();
 // v861-lite22: REC sparkles when a backing track is loaded (ready for count-in + start)
 window.__updateRecDotTrackCue=function(){
   try{
-    var rd=document.getElementById('recDot'); if(!rd) return;
     var bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
     var hasBuf=!!(window.__getBkBuf&&window.__getBkBuf());
-    var loaded=!!(bt||hasBuf||window.__lastBkTrack);
-    if(rd.classList.contains('on')) rd.classList.remove('has-track');
-    else rd.classList.toggle('has-track', loaded);
+    var loaded=!!(bt||hasBuf||window.__lastBkTrack||window.__bkLoaded);
+    var recOn=false;
+    try{ var rd0=document.getElementById('recDot'); recOn=!!(rd0&&rd0.classList.contains('on')); }catch(e){}
+    var nodes=[];
+    try{ var rd=document.getElementById('recDot'); if(rd) nodes.push(rd); }catch(e){}
+    try{ document.querySelectorAll('.dock-rec-dot').forEach(function(b){ nodes.push(b); }); }catch(e){}
+    nodes.forEach(function(el){
+      if(recOn || el.classList.contains('on')) el.classList.remove('has-track');
+      else el.classList.toggle('has-track', loaded);
+    });
     if(loaded && bt){
-      try{ rd.dataset.tip=(bt.title||'Track')+' loaded — tap ● to count-in & record with backing'; }catch(e){}
+      try{
+        var tip=(bt.title||'Track')+' loaded — tap ● to count-in & record with backing';
+        nodes.forEach(function(el){ try{ el.dataset.tip=tip; }catch(e){} });
+      }catch(e){}
     }
   }catch(e){}
 };
-setInterval(function(){ try{ window.__updateRecDotTrackCue(); }catch(e){} }, 1200);
+setInterval(function(){ try{ window.__updateRecDotTrackCue(); }catch(e){} }, 800);
 
 function recStatus(){
   const el=document.getElementById('recStat');
@@ -7561,42 +7581,51 @@ document.getElementById('recDot').addEventListener('click',function(){
     function doStart(){
       recOn=true;recArr=[];recT0=performance.now();window._takeBendErrs=[];
       try{recFourStr=(window.__fourStrGet&&window.__fourStrGet[activePrefix])?window.__fourStrGet[activePrefix]():false;}catch(e){}
-      try{const _bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;window.__lastRecTrackId=_bt?_bt.id:null;}catch(e){window.__lastRecTrackId=null;}
-      document.getElementById('recDot').classList.add('on');
+      try{
+        var _bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack?window.BackingTracks.getCurrentTrack():null;
+        if(!_bt) _bt=window.__lastBkTrack||null;
+        window.__lastRecTrackId=_bt?(_bt.id||null):null;
+      }catch(e){window.__lastRecTrackId=null;}
+      try{document.getElementById('recDot').classList.add('on');}catch(e){}
+      try{document.querySelectorAll('.dock-rec-dot').forEach(function(b){b.classList.add('on');b.classList.remove('has-track');});}catch(e){}
       try{document.getElementById('recDot').classList.remove('has-track');}catch(e){}
       recStatus();
-      // v861-lite22: after visual count-in, start transport + loaded backing on the GO beat.
-      //   Do NOT call metStart() again (that was a second full-bar count-in before the track).
-      if(!mPlaying){
-        if(bt || hasBuf){
-          try{ if(typeof _metStartReal==='function') _metStartReal(); else metStart(); }catch(e){ try{metStart();}catch(e2){} }
-          try{
-            if(bt && window.BackingTracks && window.BackingTracks.startTrack){
-              // pack/library track owns its audio — restart from top on GO
-              try{ if(window.BackingTracks.stopTrack) window.BackingTracks.stopTrack(); }catch(e){}
-              window.BackingTracks.startTrack(bt.id||bt);
-            } else if(hasBuf){
-              try{ if(typeof window.__setBkAudioActive==='function') window.__setBkAudioActive(true); }catch(e){}
-              try{ if(typeof startBkTrkAudio==='function') startBkTrkAudio(0); }catch(e){}
-            }
-          }catch(e){ console.warn('[rec] start backing', e); }
-        } else {
-          metStart();
-        }
-      } else if(bt || hasBuf){
+      // v861-lite23: mirror PLAY path — __restartBkTrack starts pack/library audio.
+      //   Never pass bt.id alone (pack tracks are not in TRACKS; object required).
+      //   Visual count-in already done → _metStartReal (no second count-in).
+      var trackObj=null;
+      try{ trackObj=bt||window.__lastBkTrack||null; }catch(e){}
+      var hasBuf2=false;
+      try{ hasBuf2=!!(window.__getBkBuf&&window.__getBkBuf()); }catch(e){}
+      function _kickBacking(){
         try{
-          if(bt && window.BackingTracks && window.BackingTracks.startTrack){
-            var already=window.BackingTracks.isPlaying&&window.BackingTracks.isPlaying(bt.id);
-            if(!already){ window.BackingTracks.startTrack(bt.id||bt); }
-          } else if(hasBuf){
+          if(trackObj){
+            if(typeof window.__restartBkTrack==='function'){
+              window.__restartBkTrack();
+            } else if(window.BackingTracks&&window.BackingTracks.startTrack){
+              window.BackingTracks.startTrack(trackObj);
+            }
+          } else if(hasBuf2){
             try{ if(typeof window.__setBkAudioActive==='function') window.__setBkAudioActive(true); }catch(e){}
             try{ if(typeof startBkTrkAudio==='function') startBkTrkAudio(0); }catch(e){}
           }
-        }catch(e){}
+        }catch(e){ console.warn('[rec] kick backing', e); }
+      }
+      if(!mPlaying){
+        if(trackObj||hasBuf2){
+          _kickBacking();
+          try{ if(typeof _metStartReal==='function') _metStartReal(); else metStart(); }catch(e){ try{metStart();}catch(e2){} }
+        } else {
+          metStart();
+        }
+      } else {
+        // transport already running — still ensure backing is audible from the top
+        _kickBacking();
       }
       startPostRigRec();
     }
-    if(bt || hasBuf) showCountIn(mBpm,4,lbl||'BACKING TRACK',doStart);
+    var _loadedBk=!!(bt||hasBuf||window.__lastBkTrack||window.__bkLoaded);
+    if(_loadedBk) showCountIn(mBpm,4,lbl||'BACKING TRACK',doStart);
     else doStart();
     return;
   }
