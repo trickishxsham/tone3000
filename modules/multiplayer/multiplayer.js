@@ -4,7 +4,7 @@
 // Extracted from app-860 lineage. Requires peerjs + mqtt scripts already on page.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.860';
+var MODULE_VERSION = '4.9.8.861m-lite32';
 
 // Complements PeerJS seat-id races + dreamlo with a real-time pub/sub channel.
 // Uses a public MQTT broker over WebSockets. Retain messages give us durable
@@ -1783,12 +1783,21 @@ var MODULE_VERSION = '4.9.8.860';
         const t=document.getElementById('gradeToast');
         if(t && t._g && !t._g.vsEmpty) g=t._g;
       }catch(e){}
-      // v839: always read the real take via getRecArr (script-local array)
+      // v861-lite30: read take + jam snapshot (recArr can look empty after stop races)
       var take=[];
       try{ take=(window.getRecArr&&window.getRecArr())||[]; }catch(e){ take=[]; }
+      if((!take || !take.length) && window.__lastJamTake && window.__lastJamTake.length){
+        take=window.__lastJamTake.slice();
+      }
       if(!g && take.length>=1){
-        try{ g=scoreCurrentTake('recording'); }catch(e){}
-        try{ if(g) showGradeToast(g); }catch(e){}
+        try{
+          if(typeof window.__gradeTake==='function') g=window.__gradeTake('recording');
+          else {
+            const fn=window.scoreCurrentTake;
+            if(fn) g=fn('recording');
+          }
+        }catch(e){ console.warn('[JAM] grade', e); }
+        try{ if(g){ g.vsEmpty=false; showGradeToast(g); } }catch(e){}
       }
       let score=0, grade='F';
       if(g && !g.vsEmpty){
@@ -1796,10 +1805,12 @@ var MODULE_VERSION = '4.9.8.860';
           ?window.JudgeWeights.blend(g._raw).score : g.score)|0;
         grade=(typeof _finalGrade==='function')?_finalGrade(g):(g.grade||'F');
       } else if(take.length>=1){
-        score=Math.min(40, 5+take.length);
-        grade='D';
+        // real notes played — never F/empty
+        score=Math.min(72, 28+take.length*2);
+        grade=score>=50?'C':(score>=35?'D':'D');
       }
       if(!take.length){ score=0; grade='F'; }
+      else if(score<15){ score=Math.max(score, 15+Math.min(20,take.length)); grade=grade==='F'?'D':grade; }
       let rep='EMPTY';
       try{
         if(window.Replays && take.length){
@@ -1941,18 +1952,32 @@ var MODULE_VERSION = '4.9.8.860';
     try{ window.__jamPlayOnce=false; }catch(e){}
     try{ if(window.BackingTracks&&window.BackingTracks.stopTrack) window.BackingTracks.stopTrack(); }catch(e){}
     // stop rec without count-in path, then grade locally for BOTH host and joiner
+    // snapshot notes BEFORE stop (some paths clear/race the live array)
+    try{
+      var _pre=[];
+      try{ _pre=(window.getRecArr&&window.getRecArr())||[]; }catch(e){}
+      if(_pre && _pre.length) window.__lastJamTake=_pre.slice();
+    }catch(e){}
     try{ jamStopRecordNow(); }catch(e){}
     try{
       let g=null;
-      var take=[];
-      try{ take=(window.getRecArr&&window.getRecArr())||[]; }catch(e){}
-      try{ window.jamHud&&window.jamHud('track end notes='+take.length); }catch(e){}
-      if(take.length>=1){
-        try{ g=scoreCurrentTake('recording'); }catch(e){}
+      try{
+        if(typeof window.__gradeTake==='function') g=window.__gradeTake('recording');
+      }catch(e){ console.warn('[JAM] __gradeTake', e); }
+      if(!g){
+        var take=[];
+        try{ take=(window.getRecArr&&window.getRecArr())||[]; }catch(e){}
+        if((!take||!take.length) && window.__lastJamTake) take=window.__lastJamTake||[];
+        try{ window.jamHud&&window.jamHud('track end notes='+take.length); }catch(e){}
+        if(take.length>=1){
+          try{ const fn=window.scoreCurrentTake; if(fn) g=fn('recording'); }catch(e){}
+        }
+        if(!g && take.length>=1) g={grade:'D', score:Math.min(72,28+take.length*2), aura:1, _raw:{}, vsEmpty:false};
+        if(!g) g={grade:'F', score:0, aura:0, _raw:{}, vsEmpty:true};
+        else g.vsEmpty=false;
+        try{ showGradeToast(g); }catch(e){}
+        try{ if(window.JudgePanel && !g.vsEmpty) window.JudgePanel.show(g); }catch(e){}
       }
-      if(!g) g={grade:'F', score:0, aura:0, _raw:{}, vsEmpty:true};
-      try{ showGradeToast(g); }catch(e){}
-      try{ if(window.JudgePanel) window.JudgePanel.show(g); }catch(e){}
     }catch(e){}
     // allow judging panel + toast to be seen, then both sides submit their own score
     // (was 1200ms — too short; panel never visibly appeared before jamSplashWinner)
@@ -1995,7 +2020,18 @@ var MODULE_VERSION = '4.9.8.860';
           if(window.__armFreePack) window.__armFreePack();
         }
       }catch(e){}
-      try{ if(track.bpm && window.__syncBpmAndStart) window.__syncBpmAndStart(track.bpm); }catch(e){}
+      // v861-lite31: BOTH clients start met on the SHARED epoch — no second local count-in
+      //   (jam 3-2-1 overlay already aligned; metStart() alone desynced host vs joiner)
+      try{
+        // re-assert epoch for audio loader (startTrack may consume it asynchronously)
+        if(startAtEpoch) window._jamSyncEpoch=startAtEpoch;
+        if(track.bpm && window.__syncBpmAndStart){
+          window.__syncBpmAndStart(track.bpm, { skipCountIn:true, atEpoch:startAtEpoch||null });
+        } else if(window.__startMetNow){
+          const d=Math.max(0, (startAtEpoch||Date.now())-Date.now());
+          setTimeout(function(){ try{ window.__startMetNow(); }catch(e){} }, d);
+        }
+      }catch(e){ console.warn('[JAM] met sync', e); }
       // re-arm after startTrack (stopTrack can clear state)
       try{ jamArmRecordNow(); }catch(e){}
       setStatus('● REC — live take, grades lock when track ends');
@@ -2014,11 +2050,17 @@ var MODULE_VERSION = '4.9.8.860';
         });
       }catch(e){}
     };
-    if(wait>2200){
-      // long wait: countdown nearer to start
-      setTimeout(function(){ jamCountInOverlay(3, go); }, Math.max(0, wait-2100));
-    } else {
+    // v861-lite31: 3-2-1 ends on the shared epoch so both phones hit GO together
+    //   overlay ≈ 3×700ms = 2100ms; schedule so last beat lands at startAtEpoch
+    const COUNT_MS=2100;
+    if(wait > COUNT_MS + 50){
+      setTimeout(function(){ jamCountInOverlay(3, go); }, Math.max(0, wait - COUNT_MS));
+    } else if(wait > 400){
+      // short handshake: still show count-in, go() will wait on atEpoch for met/audio
       jamCountInOverlay(3, go);
+    } else {
+      // epoch already here / overdue — start immediately
+      go();
     }
   }
   function voteOnTrack(accept){
@@ -2955,20 +2997,29 @@ var MODULE_VERSION = '4.9.8.860';
   if(_jvs) _jvs.addEventListener('click', function(){
     try{
       // v762: score + replay mandatory. No notes → 0 / F + EMPTY replay (backing only).
+      var _take=[];
+      try{ _take=(window.getRecArr&&window.getRecArr())||[]; }catch(e){}
+      if((!_take||!_take.length) && window.__lastJamTake) _take=window.__lastJamTake||[];
       const t=document.getElementById('gradeToast');
-      const g=t&&t._g;
+      let g=t&&t._g;
+      // re-score from real take if toast was false-empty
+      if((!g || g.vsEmpty) && _take && _take.length>=1){
+        try{ const fn=window.scoreCurrentTake; if(fn) g=fn('recording'); }catch(e){}
+      }
       let score=0, grade='F';
-      if(g){
+      if(g && !g.vsEmpty){
         score=((window.JudgeWeights&&window.JudgeWeights.blend&&g._raw&&Object.keys(g._raw).length)
           ?window.JudgeWeights.blend(g._raw).score : g.score)|0;
         grade=(typeof _finalGrade==='function')?_finalGrade(g):(g.grade||'F');
-        if(g.vsEmpty){ score=0; grade='F'; }
+      } else if(_take && _take.length>=1){
+        score=Math.min(72, 28+_take.length*2);
+        grade=score>=50?'C':'D';
       }
-      if(typeof recArr!=='undefined' && (!recArr || !recArr.length)){ score=0; grade='F'; }
+      if(!_take || !_take.length){ score=0; grade='F'; }
       let rep='EMPTY';
       try{
-        if(window.Replays && typeof recArr!=='undefined' && recArr && recArr.length){
-          const enc=window.Replays.encode(recArr);
+        if(window.Replays && _take && _take.length){
+          const enc=window.Replays.encode(_take);
           if(enc) rep=enc;
         }
       }catch(e){}
