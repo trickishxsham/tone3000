@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite26';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite28';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1152,14 +1152,17 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
-  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Start listening to detect key + tempo (~9s to lock). Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
+  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Listen continuously. Each bar picks a matching scale (neighbor modes, penta/hexa, one-note alts). SPICE = strict→loose. BPM updates live. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
   <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;">
     <option value="internal">Internal Audio</option>
     <option value="mic">Mic Input</option>
     <option value="both">Both</option>
     <option value="capture">Capture Stream</option>
   </select>
-  <span id="keyResult" style="margin-left:1em; font-weight:bold; color:#4ade80; min-width:100px; display:inline-block;">—</span>
+  <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on, each bar applies the best-matching scale to the fretboard (does not lock forever).">
+    <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
+  </label>
+  <span id="keyResult" style="margin-left:0.4em; font-weight:bold; color:#4ade80; min-width:120px; display:inline-block;">—</span>
 </div>
 
 <!-- Colour Scale Generator -->
@@ -8536,47 +8539,186 @@ updateKeySigDisplay();
     if(energyHistory.length>2000){ energyHistory.shift(); }   // ~40s cap at 20ms
   }
 
-  // Tempo: onset detection on energy envelope -> inter-onset interval -> BPM
-  const ENERGY_DT=20;   // ms between energy samples (finer = better tempo resolution)
+  // Tempo: onset flux autocorr — multi-peak + EMA for stabler BPM (lite27)
+  const ENERGY_DT=20;
+  let _bpmEma=null;
   function estimateTempo(){
-    if(energyHistory.length<200) return null;     // ~4s minimum
+    if(energyHistory.length<100) return null;     // ~2s provisional
     const E=energyHistory.map(x=>x.e);
-    // onset-strength envelope = half-wave-rectified energy flux, mean-removed
     const flux=[];
     for(let i=1;i<E.length;i++) flux.push(Math.max(0, E[i]-E[i-1]));
+    if(flux.length<40) return null;
     const fm=flux.reduce((a,b)=>a+b,0)/flux.length;
     const f=flux.map(x=>x-fm);
-    const minLag=Math.max(2, Math.floor(60000/(210*ENERGY_DT)));   // 210 BPM
-    const maxLag=Math.min(f.length-2, Math.ceil(60000/(55*ENERGY_DT))); // 55 BPM
+    const minLag=Math.max(2, Math.floor(60000/(210*ENERGY_DT)));
+    const maxLag=Math.min(f.length-2, Math.ceil(60000/(55*ENERGY_DT)));
     const ac=new Array(maxLag+1).fill(0);
     for(let lag=minLag; lag<=maxLag; lag++){
       let sum=0; for(let i=lag;i<f.length;i++) sum+=f[i]*f[i-lag];
       ac[lag]=sum;
     }
-    // perceptual tempo-preference weighting: of the periodicities present (a beat and
-    // its harmonics/subdivisions all show peaks), prefer the octave nearest ~120 BPM —
-    // this is how listeners pick the beat, and it resolves half/double-tempo errors.
-    let bestLag=minLag, bestScore=-Infinity;
-    for(let lag=minLag; lag<=maxLag; lag++){
-      if(ac[lag]<=0) continue;
-      const bpm=60000/(lag*ENERGY_DT);
-      const w=Math.exp(-0.5*Math.pow(Math.log2(bpm/120)/0.9, 2));
-      const sc=ac[lag]*w;
-      if(sc>bestScore){ bestScore=sc; bestLag=lag; }
+    // top local peaks weighted toward ~100–130 BPM
+    const peaks=[];
+    for(let lag=minLag+1; lag<maxLag; lag++){
+      if(ac[lag]>ac[lag-1] && ac[lag]>=ac[lag+1] && ac[lag]>0){
+        const bpm=60000/(lag*ENERGY_DT);
+        const w=Math.exp(-0.5*Math.pow(Math.log2(Math.max(40,bpm)/110)/0.85, 2));
+        peaks.push({lag:lag, sc:ac[lag]*w, bpm:bpm});
+      }
     }
-    if(bestScore<=0) return null;
-    // parabolic interpolation around the peak for sub-sample accuracy
-    let lag=bestLag;
+    peaks.sort((a,b)=>b.sc-a.sc);
+    if(!peaks.length){
+      // fallback: global max
+      let bestLag=minLag, bestScore=-Infinity;
+      for(let lag=minLag; lag<=maxLag; lag++){
+        if(ac[lag]<=0) continue;
+        const bpm=60000/(lag*ENERGY_DT);
+        const w=Math.exp(-0.5*Math.pow(Math.log2(bpm/110)/0.85, 2));
+        const sc=ac[lag]*w;
+        if(sc>bestScore){ bestScore=sc; bestLag=lag; }
+      }
+      if(bestScore<=0) return null;
+      peaks.push({lag:bestLag, sc:bestScore, bpm:60000/(bestLag*ENERGY_DT)});
+    }
+    let lag=peaks[0].lag;
     if(lag>minLag && lag<maxLag){
       const a=ac[lag-1], b=ac[lag], c=ac[lag+1], d=(a-2*b+c);
       if(d!==0){ const off=0.5*(a-c)/d; if(Math.abs(off)<1) lag=lag+off; }
     }
     let bpm=60000/(lag*ENERGY_DT);
-    // the preference weighting already selected the musical octave; only clamp extremes
     while(bpm<55) bpm*=2;
     while(bpm>210) bpm/=2;
-    return Math.round(bpm);
+    // EMA smooth — less flicker, still tracks
+    if(_bpmEma==null) _bpmEma=bpm;
+    else _bpmEma=_bpmEma*0.72+bpm*0.28;
+    return Math.round(_bpmEma);
   }
+
+  // ── lite27: continuous scale matching (not permanent lock) ─────────────
+  // SPICE 0 = strict diatonic neighbors only; high = penta/hexa/one-note alts.
+  function _histFromPitches(pitches){
+    const h=new Array(12).fill(0);
+    pitches.forEach(p=>{ h[midiToPC(p)]++; });
+    return h;
+  }
+  function _pcsFor(root, mode, alt){
+    let semis=(MODE_SEMITONES[mode]||[0,2,4,5,7,9,11]).slice();
+    if(alt && alt!=='NA' && typeof ALT_DATA!=='undefined' && ALT_DATA[mode] && ALT_DATA[mode][alt]){
+      const ad=ALT_DATA[mode][alt];
+      semis=semis.filter(function(x){ return x!==ad.fromSemi; });
+      if(semis.indexOf(ad.toSemi)<0) semis.push(ad.toSemi);
+      semis.sort(function(a,b){ return a-b; });
+    }
+    return semis.map(function(x){ return (x+root)%12; });
+  }
+  function _scorePcs(hist, pcs){
+    const set={}; pcs.forEach(function(p){ set[p]=1; });
+    let inS=0, outS=0, tot=0;
+    for(let i=0;i<12;i++){
+      tot+=hist[i];
+      if(set[i]) inS+=hist[i]; else outS+=hist[i];
+    }
+    if(tot<1) return -1;
+    // coverage of scale tones + penalty for outside notes; density bonus for used degrees
+    let deg=0; pcs.forEach(function(p){ if(hist[p]>0) deg++; });
+    return (inS/tot) - 0.55*(outS/tot) + 0.08*(deg/Math.max(1,pcs.length));
+  }
+  function _buildListenCandidates(spice){
+    // spice 0..0.5
+    const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const out=[];
+    function add(root, mode, alt, tag){
+      out.push({root:root, key:names[root], mode:mode, alt:alt||'NA', tag:tag||'', pcs:_pcsFor(root, mode, alt||'NA')});
+    }
+    // Parallel (same tonic): C Ionian / C Lydian / C Mixolydian, A Aeolian / A Dorian / A Phrygian
+    // Relative neighbors: C Ionian ↔ G Mixo ↔ F Lydian; A Aeolian ↔ E Phrygian ↔ D Dorian
+    for(let R=0;R<12;R++){
+      // same-root major-ish family
+      add(R,'IONIAN','NA','maj-parallel');
+      add(R,'LYDIAN','NA','maj-parallel');
+      add(R,'MIXOLYDIAN','NA','maj-parallel');
+      // same-root minor-ish family
+      add(R,'AEOLIAN','NA','min-parallel');
+      add(R,'DORIAN','NA','min-parallel');
+      add(R,'PHRYGIAN','NA','min-parallel');
+      // relative neighbors (shared pitch collection, different tonic)
+      add((R+7)%12,'MIXOLYDIAN','NA','maj-rel');
+      add((R+5)%12,'LYDIAN','NA','maj-rel');
+      add((R+7)%12,'PHRYGIAN','NA','min-rel');
+      add((R+5)%12,'DORIAN','NA','min-rel');
+    }
+    // one-note alterations of Ionian + Aeolian (all roots) when spice > ~0.12
+    if(spice>0.12){
+      ['HI','HA','Ne','MS','BL','Bh','Ba'].forEach(function(al){
+        for(let R=0;R<12;R++){
+          add(R,'IONIAN',al,'ion-alt');
+          add(R,'AEOLIAN',al,'aeo-alt');
+        }
+      });
+    }
+    // pentatonics / named hexas when spice > ~0.22
+    if(spice>0.22 && typeof PENTA_SCALES!=='undefined'){
+      Object.keys(PENTA_SCALES).forEach(function(nm){
+        const base=PENTA_SCALES[nm];
+        if(!base||!base.length) return;
+        for(let R=0;R<12;R++){
+          out.push({root:R, key:names[R], mode:'COLOUR', alt:'NA', tag:'penta:'+nm,
+            pcs:base.map(function(x){ return (x+R)%12; }), colourSemis:base.slice(), pentaName:nm});
+        }
+      });
+    }
+    if(spice>0.28 && typeof HEX_NAMES!=='undefined' && MODE_SEMITONES){
+      MODE_ORDER.forEach(function(m){
+        for(let ex=0;ex<7;ex++){
+          const semis=MODE_SEMITONES[m].filter(function(_,i){ return i!==ex; });
+          for(let R=0;R<12;R++){
+            const nm=(HEX_NAMES[m]&&HEX_NAMES[m][ex])||(m+' hex');
+            out.push({root:R, key:names[R], mode:'COLOUR', alt:'NA', tag:'hexa:'+nm,
+              pcs:semis.map(function(x){ return (x+R)%12; }), colourSemis:semis.slice(), hexaName:nm});
+          }
+        }
+      });
+    }
+    return out;
+  }
+  function _pickMatchingScale(hist, spice){
+    const cands=_buildListenCandidates(spice);
+    let best=null, bestSc=-Infinity;
+    // slight tonic bias: weight hist[root] in score
+    cands.forEach(function(c){
+      let sc=_scorePcs(hist, c.pcs);
+      sc += 0.12 * ((hist[c.root]||0) / (hist.reduce(function(a,b){return a+b;},0)||1));
+      // strict spice: penalize exotic tags
+      if(spice<0.15 && (c.tag.indexOf('alt')>=0||c.tag.indexOf('penta')>=0||c.tag.indexOf('hexa')>=0)) sc-=0.35;
+      if(spice<0.25 && (c.tag.indexOf('penta')>=0||c.tag.indexOf('hexa')>=0)) sc-=0.2;
+      if(sc>bestSc){ bestSc=sc; best=c; }
+    });
+    if(!best || bestSc<-0.05) return null;
+    best.score=bestSc;
+    return best;
+  }
+  function _applyListenScale(choice){
+    if(!choice) return;
+    try{
+      const inst=INST[activePrefix]; if(!inst) return;
+      if(choice.mode==='COLOUR' && choice.colourSemis){
+        try{ MODE_SEMITONES['COLOUR']=choice.colourSemis.slice(); }catch(e){}
+        inst.setScale(choice.key, 'COLOUR', 'NA');
+      } else {
+        inst.setScale(choice.key, choice.mode, choice.alt||'NA');
+      }
+      try{ if(typeof onInstanceUpdate==='function') onInstanceUpdate(activePrefix); }catch(e){}
+    }catch(e){ console.warn('[listen scale]', e); }
+  }
+  function _recentPitches(ms){
+    const now=Date.now(), out=[];
+    for(let i=pitchTimestamps.length-1;i>=0;i--){
+      if(now-pitchTimestamps[i]>ms) break;
+      out.push(pitchHistory[i]);
+    }
+    return out;
+  }
+  let _barChoice=null, _barUntil=0, _lastFollowKey='';
 
   function collectPitch(analyser){
     const buf=new Float32Array(analyser.fftSize);
@@ -8594,6 +8736,7 @@ updateKeySigDisplay();
     if(btn){ btn.textContent='⏹ STOP'; btn.style.background='#dc2626'; }   // listen state on the in-block button
     keyDetectActive=true; pitchHistory=[]; pitchTimestamps=[];
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
+    _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
     out.textContent='listening...';
     ensureAudio();                                              // creates _AC / _MASTER if needed
     if(_AC && _AC.state==='suspended'){ try{ await _AC.resume(); }catch(e){} }
@@ -8666,28 +8809,39 @@ updateKeySigDisplay();
     keyTimers.push(setInterval(()=>{ if(keyDetectActive) sampleEnergy(); },ENERGY_DT));
     keyTimers.push(setInterval(()=>{
       if(!keyDetectActive) return;
-      const key=estimateKey(pitchHistory), bpm=estimateTempo();
-      // KEY lock: needs real pitch evidence AND 10 identical reads (~5s) before committing.
-      if(key!=='—'){
-        lastKeyReads.push(key); if(lastKeyReads.length>10) lastKeyReads.shift();
-        if(!keyLocked && pitchHistory.length>=120 &&
-           lastKeyReads.length===10 && lastKeyReads.every(k=>k===key)){
-          keyLocked=true; lockedKey=key;
+      if(!out) return;
+      const spice=(typeof _spice==='function')?_spice():(window.__spice!=null?window.__spice:0.18);
+      const bpm=estimateTempo();
+      if(bpm){ lastBpmReads.push(bpm); if(lastBpmReads.length>12) lastBpmReads.shift();
+        if(lastBpmReads.length>=4){
+          const sorted=[...lastBpmReads].sort((a,b)=>a-b);
+          lockedBpm=sorted[Math.floor(sorted.length/2)];
         }
       }
-      // BPM lock: needs ~9s of envelope AND 10 reads within ±3 BPM -> commit to their median.
-      if(bpm){
-        lastBpmReads.push(bpm); if(lastBpmReads.length>10) lastBpmReads.shift();
-        if(!lockedBpm && energyHistory.length>=450 && lastBpmReads.length===10){
-          const mn=Math.min(...lastBpmReads), mx=Math.max(...lastBpmReads);
-          if(mx-mn<=3){ const sorted=[...lastBpmReads].sort((a,b)=>a-b); lockedBpm=sorted[5]; }
+      const barMs=Math.max(1800, Math.min(8000, (60000/(lockedBpm||bpm||100))*4));
+      const windowMs=Math.max(barMs, 2400);
+      const recent=_recentPitches(windowMs);
+      const hist=_histFromPitches(recent.length>=8?recent:pitchHistory);
+      const now=Date.now();
+      if(now>=_barUntil || !_barChoice){
+        const pick=_pickMatchingScale(hist, spice);
+        if(pick){
+          _barChoice=pick;
+          _barUntil=now+barMs;
+          const follow=document.getElementById('keyFollowScale');
+          if(follow && follow.checked) _applyListenScale(pick);
         }
       }
-      const kPart = keyLocked ? '🔒 '+lockedKey : (key+' …');
-      const bPart = lockedBpm ? '  ·  🔒 '+lockedBpm+' BPM'
-                  : (bpm ? '  ·  ~'+bpm+' BPM' : '');
-      out.textContent=kPart+bPart+'  ('+pitchHistory.length+')';
-    },500));
+      const keyPlain=estimateKey(pitchHistory);
+      const ch=_barChoice;
+      const scaleLbl=ch
+        ? (ch.key+' '+(ch.mode==='COLOUR'?(ch.pentaName||ch.hexaName||'COLOUR'):((typeof MODE_SHORT!=='undefined'&&MODE_SHORT[ch.mode])||ch.mode))
+          +(ch.alt&&ch.alt!=='NA'?' '+ch.alt:''))
+        : (keyPlain||'—');
+      const bPart = lockedBpm ? ('  ·  ~'+lockedBpm+' BPM') : (bpm ? ('  ·  ~'+bpm+' BPM') : '');
+      const hold=(_barUntil>now)?(' · bar '+Math.max(0,Math.ceil((_barUntil-now)/1000))+'s'):'';
+      out.textContent=scaleLbl+bPart+hold+'  ('+recent.length+'/'+pitchHistory.length+')';
+    },400));
   }
 
   function stopKeyDetect(){
@@ -8702,8 +8856,12 @@ updateKeySigDisplay();
     if(btn){ btn.textContent='🎵 LISTEN KEY/BPM'; btn.style.background='#16a34a'; }
     const fkey=keyLocked?lockedKey:estimateKey(pitchHistory);
     const fbpm=lockedBpm||estimateTempo();
+    const ch=_barChoice;
+    const scaleLbl=ch
+      ? (ch.key+' '+(ch.mode==='COLOUR'?(ch.pentaName||ch.hexaName||'COLOUR'):(ch.mode))+(ch.alt&&ch.alt!=='NA'?' '+ch.alt:''))
+      : fkey;
     document.getElementById('keyResult').textContent=
-      (keyLocked?'🔒 ':'')+fkey+(fbpm?'  ·  '+(lockedBpm?'🔒 ':'~')+fbpm+' BPM':'');
+      scaleLbl+(fbpm?'  ·  ~'+fbpm+' BPM':'');
   }
 
   // ── SAMPLER UI ────────────────────────────────────────────────────
