@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861m-lite32';
+var MODULE_VERSION = '4.9.8.861-lite36-combined';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -996,6 +996,9 @@ const Loot = (function(){
 
   function showReveal(tier, loot){
     const m=document.getElementById('chestModal'); if(!m) return;
+    m.style.display='flex';
+    m.style.pointerEvents='auto';
+    m.style.zIndex='10000';
     const T=TIERS[tier];
     document.getElementById('chestModalTier').textContent=T.name+' PIÑATA';
     document.getElementById('chestModalTier').style.color=T.colour;
@@ -1090,7 +1093,19 @@ const Loot = (function(){
           const d=document.createElement('div'); d.className='loot-reward'; d.style.opacity='1';
           d.innerHTML='<span style="font-size:1.2em;">'+(l.icon||'✨')+'</span> '+(l.label||'reward'); host.appendChild(d);
         }, 420+idx*240));
-        setTimeout(()=>{ if(btn) btn.style.visibility='visible'; try{ window.__refreshBonusBtn && window.__refreshBonusBtn(); }catch(e){} }, 420+loot.length*240);
+        setTimeout(()=>{ if(btn){
+          btn.style.visibility='visible';
+          btn.style.pointerEvents='auto';
+          btn.style.zIndex='10002';
+          try{ if(typeof window.__chestCollect==='function'){
+            btn.onclick=function(e){ window.__chestCollect(e); };
+            btn.onpointerdown=function(e){ window.__chestCollect(e); };
+          } }catch(e){}
+        }
+        try{ window.__refreshBonusBtn && window.__refreshBonusBtn(); }catch(e){}
+        // ensure modal itself accepts taps
+        try{ const m=document.getElementById('chestModal'); if(m){ m.style.pointerEvents='auto'; m.style.display='flex'; } }catch(e){}
+      }, 420+loot.length*240);
       }
     }
     // pointerdown = instant response (no click delay); busy/done guards absorb ghost clicks
@@ -1222,41 +1237,101 @@ const Aura = (function(){
   function spend(n){ if(total<n) return false; total-=n; save(); render(); return true; }
   return { award, awardRaw, claim, render, spend, get total(){return total;}, get pending(){return pending;} };
 })();
-document.addEventListener('DOMContentLoaded',()=>{
-  const openBtn=document.getElementById('openChestBtn');
-  if(openBtn) openBtn.addEventListener('click',()=>Loot.openPyramid());
-  const rollBtn=document.getElementById('rollLootBtn');
-  if(rollBtn) rollBtn.addEventListener('click',()=>Loot.rollForLoot());
-  const gemChip=document.getElementById('gemChip');
-  if(gemChip) gemChip.addEventListener('click',()=>Gems.openStore());
-  const pc=document.getElementById('pyramidClose'), pyr=document.getElementById('lootPyramid');
-  if(pc) pc.addEventListener('click',()=>{ if(pyr) pyr.style.display='none'; });
-  if(pyr) pyr.addEventListener('click',e=>{ if(e.target===pyr) pyr.style.display='none'; });
-  const mBtn=document.getElementById('chestModalBtn'), modal=document.getElementById('chestModal');
-  let skipCollectAd=false;   // a rewarded BONUS ROLL replaces that cycle's collect interstitial — never both
-  const bBtn=document.getElementById('chestBonusBtn');
-  window.__refreshBonusBtn=function(){
-    if(!bBtn) return;
-    let left=0; try{ left=AdEngine.bonusRollsLeft(); }catch(e){}
-    if(left>0){ bBtn.style.display='inline-block'; bBtn.style.visibility='visible'; bBtn.textContent='\ud83c\udfac BONUS ROLL \u00b7 '+left; }
-    else bBtn.style.display='none';
-  };
-  if(bBtn) bBtn.addEventListener('click',()=>{
+// v861-lite34: wire even when module loads AFTER DOMContentLoaded (modular shell)
+//   was: collect listener never attached → stuck on LEGENDARY PIÑATA screen
+(function wireLootUi(){
+  function closeChestModal(){
     try{
-      AdEngine.rewarded('bonus-roll',{
-        onReward:()=>{
-          try{ AdEngine.bump('bonusroll_redeem'); }catch(e){}
-          skipCollectAd=true;
-          if(modal) modal.style.display='none';
-          try{ window.__lootBonusRoll && window.__lootBonusRoll(); }catch(e){}
-        }
-      });
+      const modal=document.getElementById('chestModal');
+      if(modal){
+        modal.style.display='none';
+        modal.style.pointerEvents='none';
+      }
+      // also clear any leftover jam winner overlay that can block taps
+      try{ const ov=document.getElementById('jamWinnerOv'); if(ov) ov.style.display='none'; }catch(e){}
     }catch(e){}
-  });
-  if(mBtn) mBtn.addEventListener('click',()=>{ if(modal) modal.style.display='none'; if(skipCollectAd){ skipCollectAd=false; } else { try{ AdEngine.interstitial('collect'); }catch(e){} } });
-  if(modal) modal.addEventListener('click',e=>{ if(e.target===modal){ modal.style.display='none'; if(skipCollectAd){ skipCollectAd=false; } else { try{ AdEngine.interstitial('collect'); }catch(e){} } } });
-  Aura.render(); Tokens.render(); Gems.render(); Loot.render();
-});
+  }
+  window.__closeChestModal=closeChestModal;
+  let skipCollectAd=false;
+  window.__skipCollectAd=function(v){ if(v!=null) skipCollectAd=!!v; return skipCollectAd; };
+
+  function onCollect(ev){
+    try{ if(ev){ ev.preventDefault(); ev.stopPropagation(); } }catch(e){}
+    closeChestModal();
+    try{
+      if(skipCollectAd){ skipCollectAd=false; }
+      else {
+        // never block UI if ad layer hangs
+        setTimeout(function(){
+          try{ if(window.AdEngine&&AdEngine.interstitial) AdEngine.interstitial('collect'); }catch(e){}
+        }, 30);
+      }
+    }catch(e){}
+  }
+  window.__chestCollect=onCollect;
+
+  function bindOnce(el, type, fn, key){
+    if(!el) return;
+    try{
+      if(el[key]) return;
+      el[key]=true;
+      el.addEventListener(type, fn, {passive:false});
+    }catch(e){
+      try{ el.addEventListener(type, fn); }catch(e2){}
+    }
+  }
+
+  function wire(){
+    try{
+      const openBtn=document.getElementById('openChestBtn');
+      bindOnce(openBtn, 'click', function(){ try{ Loot.openPyramid(); }catch(e){} }, '__lootWiredOpen');
+      const rollBtn=document.getElementById('rollLootBtn');
+      bindOnce(rollBtn, 'click', function(){ try{ Loot.rollForLoot(); }catch(e){} }, '__lootWiredRoll');
+      const gemChip=document.getElementById('gemChip');
+      bindOnce(gemChip, 'click', function(){ try{ Gems.openStore(); }catch(e){} }, '__lootWiredGem');
+      const pc=document.getElementById('pyramidClose'), pyr=document.getElementById('lootPyramid');
+      bindOnce(pc, 'click', function(){ if(pyr) pyr.style.display='none'; }, '__lootWiredPyrX');
+      bindOnce(pyr, 'click', function(e){ if(e.target===pyr) pyr.style.display='none'; }, '__lootWiredPyrBg');
+
+      const mBtn=document.getElementById('chestModalBtn');
+      const modal=document.getElementById('chestModal');
+      // pointerdown + click — mobile Brave often drops plain click on overlays
+      bindOnce(mBtn, 'pointerdown', onCollect, '__lootWiredCollectPD');
+      bindOnce(mBtn, 'click', onCollect, '__lootWiredCollectCL');
+      bindOnce(modal, 'click', function(e){ if(e.target===modal) onCollect(e); }, '__lootWiredModalBg');
+
+      const bBtn=document.getElementById('chestBonusBtn');
+      window.__refreshBonusBtn=function(){
+        if(!bBtn) return;
+        let left=0; try{ left=AdEngine.bonusRollsLeft(); }catch(e){}
+        if(left>0){ bBtn.style.display='inline-block'; bBtn.style.visibility='visible'; bBtn.textContent='\ud83c\udfac BONUS ROLL \u00b7 '+left; }
+        else bBtn.style.display='none';
+      };
+      bindOnce(bBtn, 'click', function(){
+        try{
+          AdEngine.rewarded('bonus-roll',{
+            onReward:function(){
+              try{ AdEngine.bump('bonusroll_redeem'); }catch(e){}
+              skipCollectAd=true;
+              closeChestModal();
+              try{ window.__lootBonusRoll && window.__lootBonusRoll(); }catch(e){}
+            }
+          });
+        }catch(e){}
+      }, '__lootWiredBonus');
+
+      try{ Aura.render(); }catch(e){}
+      try{ Tokens.render(); }catch(e){}
+      try{ Gems.render(); }catch(e){}
+      try{ Loot.render(); }catch(e){}
+    }catch(e){ console.warn('[LOOT] wire failed', e); }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+  // re-wire shortly in case modal nodes were injected late
+  setTimeout(wire, 0);
+  setTimeout(wire, 500);
+})();
 
 // ─── JUDGE WEIGHTS — each source has an adjustable vote weight (0.25–2.5, step 0.25) ──
 //     The master grade = weighted average of base Scoring + 5 judge scores.
