@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite25';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite26';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3928,9 +3928,18 @@ function createInstance(prefix, chordsAlwaysOn){
       _gestureDown();
       let curCell=null, held=[], curRect=null;
       let _nhDownT=performance.now(), _nhDownX=ev.clientX, _nhDownY=ev.clientY, _nhDownCell=cell;   // v607: tap-vs-hold for naturals
-      // v687: the harmonic window follows the note you are ON. Arriving on a sparkle fret (12/7/5)
-      //   re-arms it, so slide-then-quick-pull-off fires the harmonic, which is how it is played.
-      const _nhArm=function(c){ if(c&&c.classList&&c.classList.contains('nh-node')){ _nhDownCell=c; _nhDownT=performance.now(); } };
+      let _ptrX=ev.clientX, _ptrY=ev.clientY;   // live pointer — arm uses this, not original down
+      // v687/lite26: window follows the note you are ON. Arriving on a sparkle fret (12/7/5)
+      //   re-arms TIME + origin so slide-then-quick-pull-off fires (origin was stuck at first touch).
+      const _nhArm=function(c){
+        if(c&&c.classList&&c.classList.contains('nh-node')){
+          _nhDownCell=c; _nhDownT=performance.now();
+          _nhDownX=_ptrX; _nhDownY=_ptrY;
+        } else {
+          // left a sparkle node without releasing — cancel pending harmonic
+          if(_nhDownCell && c!==_nhDownCell) _nhDownCell=null;
+        }
+      };
       let _pinchFullT=null;   // v607: time bend first hit full, for the pinch pull-off
       let _maxRawBend=0;   // v608: peak raw (pre-snap) bend for accuracy grading
       let octLatch=false;   // v596: 8va fires ONCE per entry onto the button, not every 450ms
@@ -4031,6 +4040,7 @@ function createInstance(prefix, chordsAlwaysOn){
       goTo(cell,false);
       const mv=e=>{
         if(e.pointerId!==pid) return;                 // v544: ignore the other finger's moves
+        if(e.clientX!=null){ _ptrX=e.clientX; _ptrY=e.clientY; }
         // ── Slide to 8va button = octave jump (up or down) ────────────
         const octBtnEl=document.getElementById(prefix+'octBtn');
         if(octBtnEl){
@@ -4112,14 +4122,14 @@ function createInstance(prefix, chordsAlwaysOn){
             }
           }catch(x){}
         }
-        // v607: LIGHT TAP on a sparkly node fret (12/7/5) -> natural harmonic of the OPEN string.
-        // v861-lite24: grazing only — <=90ms and <=12px move. Was 180ms and stole 3-tap triads on 5/7/12.
-        // v687: what matters is how fast you LEFT the node, not whether you slid onto it.
+        // v607: LIGHT TAP / quick pull-off on sparkly node (12/7/5) -> natural harmonic of OPEN string.
+        // v861-lite26: timer+origin reset on ARRIVAL (_nhArm). Slide onto 5/7/12 then lift fast = harmonic.
+        //   Dwell still short (<=110ms from arrival, <=14px from arm point) so 3-tap triads are safe.
         if(!hung && bendSemis<0.15 && _nhDownCell){
           const _nhDt=performance.now()-_nhDownT;
-          const _nhMove=(e&&e.clientX!=null&&_nhDownX!=null)
-            ? Math.hypot(e.clientX-_nhDownX, e.clientY-_nhDownY) : 0;
-          if(_nhDt<=90 && _nhMove<=12){
+          const _ux=(e&&e.clientX!=null)?e.clientX:_ptrX, _uy=(e&&e.clientY!=null)?e.clientY:_ptrY;
+          const _nhMove=(_nhDownX!=null) ? Math.hypot(_ux-_nhDownX, _uy-_nhDownY) : 0;
+          if(_nhDt<=110 && _nhMove<=14){
             const _st=parseInt(_nhDownCell.dataset.str,10), _mi=parseInt(_nhDownCell.dataset.midi,10);
             const _fr=_mi-STRING_MIDI[_st], _pt={12:12,7:19,5:24}[_fr];
             if(_pt!=null && STRING_MIDI[_st]!=null){
