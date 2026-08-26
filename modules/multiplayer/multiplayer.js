@@ -4,7 +4,7 @@
 // Extracted from app-860 lineage. Requires peerjs + mqtt scripts already on page.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861n-lite33';
+var MODULE_VERSION = '4.9.8.861-lite36-combined';
 
 // Complements PeerJS seat-id races + dreamlo with a real-time pub/sub channel.
 // Uses a public MQTT broker over WebSockets. Retain messages give us durable
@@ -1798,23 +1798,71 @@ var MODULE_VERSION = '4.9.8.861n-lite33';
       }catch(e){}
     }catch(e){}
   }
-  function jamCountInOverlay(n, done){
+  // v861-lite35: epoch-locked countdown — rush/drag so late devices catch up
+  function jamEnsureOverlay(){
     let ci=document.getElementById('jamReadyOv');
     if(!ci){
       ci=document.createElement('div'); ci.id='jamReadyOv';
       ci.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(6,6,10,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:Bangers,cursive;';
       document.body.appendChild(ci);
     }
+    return ci;
+  }
+  function jamShowSyncWait(goEpoch){
+    const ci=jamEnsureOverlay();
     ci.style.display='flex';
-    let beat=0;
+    function paint(){
+      const left=Math.max(0, goEpoch - Date.now());
+      const sec=Math.ceil(left/1000);
+      ci.innerHTML='<div style="font-size:1.1em;color:#a78bfa;letter-spacing:0.18em;margin-bottom:10px;">SYNCING</div>'
+        +'<div style="font-size:3.2em;color:#e2e8f0;text-shadow:0 0 24px #7c3aed66;">'+sec+'</div>'
+        +'<div style="color:#64748b;font-size:0.75em;margin-top:12px;letter-spacing:0.12em;">BUFFER · LOADING TRACK</div>';
+    }
+    paint();
+    if(ci._syncTimer) clearInterval(ci._syncTimer);
+    ci._syncTimer=setInterval(paint, 200);
+  }
+  function jamCountInOverlay(n, done, goEpoch){
+    // If goEpoch set: number shown is derived from wall clock (rush if late, wait if early)
+    const ci=jamEnsureOverlay();
+    try{ if(ci._syncTimer){ clearInterval(ci._syncTimer); ci._syncTimer=null; } }catch(e){}
+    ci.style.display='flex';
+    const IV=700;
+    n=n||3;
+    const epoch = (goEpoch!=null) ? (goEpoch|0) : (Date.now() + n*IV);
+    let lastShown=-1;
+    let finished=false;
+    function finish(){
+      if(finished) return;
+      finished=true;
+      try{ if(ci._tickTimer) clearTimeout(ci._tickTimer); }catch(e){}
+      ci.style.display='none';
+      try{ if(done) done(); }catch(e){}
+    }
     function tick(){
-      beat++;
-      const left=n-beat+1;
-      ci.innerHTML='<div style="font-size:5em;color:'+(left<=1?'#22c55e':'#ffd700')+';text-shadow:0 4px 30px rgba(255,255,100,0.35);">'+left+'</div>'
-        +'<div style="color:#9aa;font-size:0.85em;margin-top:12px;letter-spacing:0.14em;">GET READY</div>';
-      try{ if(typeof metClick==='function') metClick(left===n); }catch(e){}
-      if(beat<n) setTimeout(tick, 700);
-      else setTimeout(function(){ ci.style.display='none'; if(done) done(); }, 700);
+      if(finished) return;
+      const now=Date.now();
+      const left=epoch - now;
+      if(left<=40){
+        ci.innerHTML='<div style="font-size:4.2em;color:#22c55e;text-shadow:0 0 28px #22c55e88;">GO</div>';
+        try{ if(typeof metClick==='function') metClick(true); }catch(e){}
+        ci._tickTimer=setTimeout(finish, Math.max(0, left+30));
+        return;
+      }
+      // beats at epoch-n*IV … epoch-IV; number = ceil(left/IV) clamped 1..n
+      var num=Math.ceil(left/IV);
+      if(num>n) num=n;
+      if(num<1) num=1;
+      if(num!==lastShown){
+        lastShown=num;
+        ci.innerHTML='<div style="font-size:5em;color:'+(num<=1?'#22c55e':'#ffd700')+';text-shadow:0 4px 30px rgba(255,255,100,0.35);">'+num+'</div>'
+          +'<div style="color:#9aa;font-size:0.85em;margin-top:12px;letter-spacing:0.14em;">GET READY</div>';
+        try{ if(typeof metClick==='function') metClick(num===n); }catch(e){}
+      }
+      // poll frequently so a lagging device rushes through missed numbers
+      const nextBoundary=epoch - (num-1)*IV;
+      const delay=Math.max(30, Math.min(200, nextBoundary - Date.now()));
+      ci._tickTimer=setTimeout(tick, delay);
     }
     tick();
   }
@@ -2112,16 +2160,27 @@ var MODULE_VERSION = '4.9.8.861n-lite33';
         });
       }catch(e){}
     };
-    // v861-lite31: 3-2-1 ends on the shared epoch so both phones hit GO together
-    //   overlay ≈ 3×700ms = 2100ms; schedule so last beat lands at startAtEpoch
-    const COUNT_MS=2100;
-    if(wait > COUNT_MS + 50){
-      setTimeout(function(){ jamCountInOverlay(3, go); }, Math.max(0, wait - COUNT_MS));
-    } else if(wait > 400){
-      // short handshake: still show count-in, go() will wait on atEpoch for met/audio
-      jamCountInOverlay(3, go);
+    // v861-lite35: 4s BUFFER (load) → then epoch-locked 3-2-1 → GO at startAtEpoch
+    //   late devices RUSH (skip numbers); early devices wait — wall clock is source of truth
+    const COUNT_MS=(typeof COUNTIN_MS==='number'?COUNTIN_MS:2100);
+    const BUFFER_MS=(typeof HANDSHAKE_MS==='number'?HANDSHAKE_MS:4000);
+    let goAt=startAtEpoch|| (Date.now()+BUFFER_MS+COUNT_MS);
+    // if epoch is too soon (clock skew / late message), still use it — countdown will rush
+    window._jamSyncEpoch=goAt;
+    const countStart=goAt - COUNT_MS;
+    const untilCount=countStart - Date.now();
+    function beginCount(){
+      try{ jamCountInOverlay(3, go, goAt); }catch(e){ try{ go(); }catch(e2){} }
+    }
+    if(untilCount > 80){
+      try{ jamShowSyncWait(countStart); }catch(e){}
+      setTimeout(beginCount, untilCount);
+    } else if(goAt - Date.now() > 80){
+      // already in countdown window — rush/drag from current wall time
+      beginCount();
     } else {
-      // epoch already here / overdue — start immediately
+      // GO overdue — start immediately
+      try{ const ci=document.getElementById('jamReadyOv'); if(ci) ci.style.display='none'; }catch(e){}
       go();
     }
   }
