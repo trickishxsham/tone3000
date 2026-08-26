@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite24';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite25';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -407,7 +407,24 @@ body.tier-simple .rec-bar .rec-seg #recClear{border-top-right-radius:5px;border-
 body.tier-simple .expert-only{display:none !important;}
 .ad-slot{display:none;background:#1a1a1f;color:#888;text-align:center;padding:7px 6px;font-size:0.78em;font-family:'Bangers',cursive;letter-spacing:0.08em;border-bottom:1px dashed #444;}
 .tier-simple:not(.unlocked) .ad-slot{display:block;}
-.universe-row{display:flex;align-items:center;gap:5px;padding:5px 8px;background-color:rgba(11,15,26,0.52);border-top:1px solid rgba(59,130,246,0.2);border-bottom:1px solid rgba(59,130,246,0.2);flex-wrap:wrap;}
+.universe-strip{display:flex;align-items:center;gap:6px;padding:4px 8px;background-color:rgba(11,15,26,0.52);border-top:1px solid rgba(59,130,246,0.2);border-bottom:1px solid rgba(59,130,246,0.2);}
+.universe-row{display:flex;align-items:center;gap:5px;padding:0;background:transparent;border:none;flex:1;min-width:0;flex-wrap:wrap;}
+.universe-tools{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto;}
+.universe-tools button{flex-shrink:0;padding:3px 8px;background:#1a1a2e;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;margin:0!important;}
+/* v861-lite25: bend pad claims full row width (8VA/carousel moved off the bar) */
+.bend-bar{gap:6px;padding:2px 8px;}
+.bend-bar .bend-pad{flex:1 1 auto;min-width:0;}
+/* bottom flush — 6·5·4 sits at the viewport bottom */
+.shapes-area{margin-bottom:0!important;padding-bottom:0!important;}
+.shape-box{margin-bottom:4px;}
+.shape-box:last-child{margin-bottom:0!important;}
+.info-bar:empty{display:none!important;height:0;padding:0;margin:0;border:none;}
+.carousel-dots{margin-bottom:0;}
+body.carousel-mode .carousel-dots{margin-bottom:4px;}
+#panelSimple,#panelChords,#panelExpert{padding-bottom:0;}
+/* trim empty bg under last board — no extra body bottom pad */
+body{padding-bottom:0!important;}
+html::before{background-position:center top;background-size:cover;}
 .su-lab{font-family:'Bangers',cursive;color:#a78bfa;font-size:0.72em;font-weight:900;letter-spacing:0.1em;margin-right:4px;}
 .su-btn{padding:4px 8px;border-radius:4px;border:1.5px solid #4a3a7a;background:#16101e;color:#cbb6ff;font-family:'Bangers',cursive;font-weight:900;font-size:0.78em;cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.1;}
 .su-btn:hover{border-color:#a78bfa;}
@@ -539,7 +556,7 @@ body.unlocked .unlocked-badge{display:inline-block;}
 .sw-btn{padding:6px 14px;border-radius:4px;border:2px solid #333;background:#111;color:#ccc;font-family:'Bangers',cursive;font-weight:700;font-size:0.92em;cursor:pointer;letter-spacing:1px;transition:all 0.15s;}
 .sw-btn.active{border-color:#ffd700;background:#111;color:#ffd700;box-shadow:0 0 8px rgba(255,215,0,0.45);}#sampToggle,#csToggle,#hiveToggle,#btToggle,#libToggle,#spectateToggle{font-family:'Bangers',cursive;font-size:1.05em;letter-spacing:0.06em;}
 .bend-marker{position:absolute;width:2px;height:100%;background:#00CC66;opacity:0.6;pointer-events:none;}
-.bend-bar{display:flex;align-items:center;gap:9px;padding:2px 10px;background-color:rgba(12,12,12,0.52);border:1px solid #222;border-radius:7px;margin:0 8px;position:sticky;top:var(--adpad,264px);z-index:90;}
+.bend-bar{display:flex;align-items:center;gap:6px;padding:2px 8px;background-color:rgba(12,12,12,0.52);border:1px solid #222;border-radius:7px;margin:0 6px;position:sticky;top:var(--adpad,264px);z-index:90;}
 .bend-lbl{color:#ffd700;font-weight:900;font-size:0.66em;letter-spacing:2px;font-family:'Bangers',cursive;}.bend-lock{flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;background:none;border:none;cursor:pointer;color:#f0a;font-size:0.74em;padding:0;}.bend-lock .bl-txt{font-family:'Bangers',cursive;font-size:0.72em;letter-spacing:1px;margin-top:1px;}.bend-word{color:#ffd700;opacity:0.85;}
 .bend-pad{position:relative;flex:1;height:30px;background:linear-gradient(180deg,#1a1a1a,#000);border:2px solid #d4af37;border-radius:8px;touch-action:none;cursor:pointer;overflow:hidden;}
 .bend-guide{position:absolute;top:0;width:2px;height:100%;background:#22c55e;box-shadow:0 0 4px #22c55e;opacity:0.85;pointer-events:none;z-index:1;}
@@ -579,6 +596,7 @@ body.unlocked .unlocked-badge{display:inline-block;}
 /* Carousel mode = performance mode: hide all scale-building rows below KEYSIG.
    Keep KEYSIG, the bend bar, scale chords, and the fret-segment carousel. */
 body.carousel-mode #pentaRow,
+body.carousel-mode #universeStrip,
 body.carousel-mode #universeRow,
 body.carousel-mode #hexRow,
 body.carousel-mode #sS_altRowWrap,
@@ -1360,6 +1378,10 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
       <button class="dock-rec-play" data-dock-act="recPlay" data-tip-title="PLAY REC" data-tip="Play back your recorded audio." title="play">&#9654;</button>
       <button class="dock-rec-clear" data-dock-act="recClear" data-tip-title="CLEAR TAKE" data-tip="Discard the current recording." title="clear">&#10005;</button>
     </div>
+    <div class="universe-tools" id="sS_tools" style="margin-left:auto;">
+      <button id="sS_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off → up → down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button>
+      <button id="sS_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button>
+    </div>
   </div>
   <div class="bend-bar" id="bendBar">
     <button class="bend-lock" onclick="window.toggleLockFloat&&window.toggleLockFloat()"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle"><path d="M17 8h-7V6a3 3 0 0 1 5.83-1 1 1 0 0 0 1.9-.63A5 5 0 0 0 8 6v2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2z"/></svg><span class="bl-txt">LOCK</span></button>
@@ -1375,8 +1397,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
       <span class="bend-mark" style="left:67%">FULL</span>
       <span class="bend-mark bend-word" style="left:93%">1½</span>
       <div class="bend-knob"></div>
-    </div>
-  <button id="sS_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;margin-left:6px;order:101;padding:3px 9px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button><button id="sS_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off \u2192 up \u2192 down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;margin-left:8px;order:100;padding:3px 9px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button></div>
+    </div></div>
   <div class="mode-display" id="sS_modeDisplay"></div>
   <div class="fret-nav" style="display:flex;justify-content:flex-start;gap:6px;align-items:center;margin-bottom:4px;">
       <span style="display:inline-flex;gap:3px;"><button class="chords-btn" id="sS_btnScaleChd" data-tip-title="♪ SCALE CHORDS" data-tip="Toggle chord mode for the scale-note row. ON = each note plays its diatonic triad and shows Roman numerals (I, ii, iii, IV, V, vi, viiø). OFF = single notes with interval numbers.">♪ SCALE</button><button class="chords-btn" id="sS_btnFretChd" data-tip-title="▦ FRET CHORDS" data-tip="Toggle chord overlays on the fretboard. ON = pressing a fret plays its full triad. Also enables triple-press: tap same fret repeatedly (within 450ms) to cycle root → 3rd → 5th.">▦ FRET</button></span><span style="display:inline-flex;gap:10px;flex:1;justify-content:stretch;margin:0 8px;"><button class="scale-now" data-pre="sS_" data-tip-title="⚖ NEXT SCALE" data-tip="Switch to the next scale of the walk NOW, instead of waiting for the auto change on the downbeat. Follows whatever walk is selected — it only moves it earlier, so a scale change can land where the backing track feels it." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#ffd700;border:1px solid #ffd700;border-radius:5px;font-family:system-ui,-apple-system,sans-serif;font-weight:900;font-size:1.12em;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;line-height:1;">⚖</button><button class="car-arrow" data-pre="sS_" data-dir="1" data-tip-title="▦ FRET SEGMENT" data-tip="Shows the strings currently in view — 123 / 234 / 456, or 1234 / 2345 / 3456 in 4-string mode. Tap for the next segment (wraps around)." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-weight:900;font-size:1.2em;letter-spacing:1px;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;">123</button></span><span style="display:inline-flex;gap:3px;"><button class="chords-btn" id="sS_btnTrem" data-tip-title="✋ FINGER TREMOLO" data-tip="Continuous fingerstyle tremolo. Tap to cycle: AUTO → ∞20 → LIB (lengths 1–10) → off. Plays a muted ghost pulse until you press a scale chord, then arpeggiates that chord in the finger sequence (p=thumb/bass, i=index, m=middle, a=ring).">✊ PIMA</button><button class="chords-btn" id="sS_btn4Str" data-tip-title="4-STRING PIMA" data-tip="Toggle 4-string view for PIMA arpeggio practice. Groups become 6·5·4·3, 5·4·3·2, 4·3·2·1 — one finger per string (p=lowest, then i, m, a). Tremolo plays the freestroke: m-i · a-m-i · a-m-i-p · a-m-i-p, looping. Tap again for 3-string triad view.">4STR</button></span>
@@ -1413,6 +1434,10 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
       <button class="dock-rec-play" data-dock-act="recPlay" data-tip-title="PLAY REC" data-tip="Play back your recorded audio." title="play">&#9654;</button>
       <button class="dock-rec-clear" data-dock-act="recClear" data-tip-title="CLEAR TAKE" data-tip="Discard the current recording." title="clear">&#10005;</button>
     </div>
+    <div class="universe-tools" id="sC_tools" style="margin-left:auto;">
+      <button id="sC_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off → up → down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button>
+      <button id="sC_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button>
+    </div>
   </div>
   <div class="bend-bar">
     <button class="bend-lock" onclick="window.toggleLockFloat&&window.toggleLockFloat()"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle"><path d="M17 8h-7V6a3 3 0 0 1 5.83-1 1 1 0 0 0 1.9-.63A5 5 0 0 0 8 6v2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2z"/></svg><span class="bl-txt">LOCK</span></button>
@@ -1427,8 +1452,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
       <span class="bend-mark" style="left:67%">FULL</span>
       <span class="bend-mark bend-word" style="left:93%">1½</span>
       <div class="bend-knob"></div>
-    </div>
-  <button id="sC_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;margin-left:6px;order:101;padding:3px 9px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button><button id="sC_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off \u2192 up \u2192 down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;margin-left:8px;order:100;padding:3px 9px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button></div>
+    </div></div>
   <div class="mode-display" id="sC_modeDisplay"></div>
   <div class="fret-nav" style="display:flex;justify-content:flex-start;gap:6px;align-items:center;margin-bottom:4px;">
       <span style="display:inline-flex;gap:3px;"><button class="chords-btn active" id="sC_btnScaleChd" data-tip-title="♪ SCALE CHORDS" data-tip="Toggle chord mode for the scale-note row. ON = each note plays its diatonic triad and shows Roman numerals. OFF = single notes with interval numbers.">♪ SCALE</button><button class="chords-btn active" id="sC_btnFretChd" data-tip-title="▦ FRET CHORDS" data-tip="Toggle chord overlays on the fretboard. ON = pressing a fret plays its triad. Triple-press a fret to cycle root → 3rd → 5th.">▦ FRET</button></span><span style="display:inline-flex;gap:10px;flex:1;justify-content:stretch;margin:0 8px;"><button class="scale-now" data-pre="sC_" data-tip-title="⚖ NEXT SCALE" data-tip="Switch to the next scale of the walk NOW, instead of waiting for the auto change on the downbeat. Follows whatever walk is selected — it only moves it earlier, so a scale change can land where the backing track feels it." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#ffd700;border:1px solid #ffd700;border-radius:5px;font-family:system-ui,-apple-system,sans-serif;font-weight:900;font-size:1.12em;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;line-height:1;">⚖</button><button class="car-arrow" data-pre="sC_" data-dir="1" data-tip-title="▦ FRET SEGMENT" data-tip="Shows the strings currently in view — 123 / 234 / 456, or 1234 / 2345 / 3456 in 4-string mode. Tap for the next segment (wraps around)." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-weight:900;font-size:1.2em;letter-spacing:1px;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;">123</button></span><span style="display:inline-flex;gap:3px;"><button class="chords-btn" id="sC_btnTrem" data-tip-title="✋ FINGER TREMOLO" data-tip="Continuous fingerstyle tremolo. Tap to cycle: AUTO → ∞20 → LIB (lengths 1–10) → off. Plays a muted ghost pulse until you press a scale chord, then arpeggiates that chord in the finger sequence (p=thumb/bass, i=index, m=middle, a=ring).">✊ PIMA</button><button class="chords-btn" id="sC_btn4Str" data-tip-title="4-STRING PIMA" data-tip="Toggle 4-string view for PIMA arpeggio practice. Groups become 6·5·4·3, 5·4·3·2, 4·3·2·1 — one finger per string (p=lowest, then i, m, a). Tremolo plays the freestroke: m-i · a-m-i · a-m-i-p · a-m-i-p, looping. Tap again for 3-string triad view.">4STR</button></span>
@@ -1454,7 +1478,13 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <div class="selector-row" id="sE_modeRowWrap"><span class="row-label">MODE</span><div id="sE_modeRow" style="display:flex;gap:4px;flex-shrink:0;"></div></div>
   <div class="hexa-placeholder-row" id="hexRow"></div>
   <div class="hexa-placeholder-row penta-row" id="pentaRow"></div>
+  <div class="universe-strip" id="universeStrip">
   <div class="universe-row" id="universeRow"></div>
+  <div class="universe-tools" id="universeTools">
+    <button id="sE_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off → up → down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button>
+    <button id="sE_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;padding:3px 8px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button>
+  </div>
+</div>
   <div class="selector-row" id="sE_altRowWrap"><span class="row-label">ALT</span><div id="sE_altRow" style="display:flex;gap:4px;flex-shrink:0;"></div></div>
   <div class="switch-row" id="sE_switchRow">
     <div class="switch-dock-play" id="sE_playDock">
@@ -1482,8 +1512,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
       <span class="bend-mark" style="left:67%">FULL</span>
       <span class="bend-mark bend-word" style="left:93%">1½</span>
       <div class="bend-knob"></div>
-    </div>
-  <button id="sE_carBtn" data-tip-title="SLIDE VIEW" data-tip="Toggle between stacked fret segments and a horizontal swipe carousel. In carousel mode the auto scale-walker slides to the segment closest by fret position." style="flex-shrink:0;margin-left:6px;order:101;padding:3px 9px;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">⇄</button><button id="sE_octBtn" data-tip-title="8VA PEDAL" data-tip="Octave pedal: shifts everything you play on the fretboard up or down an octave. Tap to cycle off \u2192 up \u2192 down, or slide onto it mid-note to shift the ringing note. The shape never moves, so it works from any fret." style="flex-shrink:0;margin-left:8px;order:100;padding:3px 9px;background:#1a1a2e;color:#a78bfa;border:1px solid #a78bfa;border-radius:5px;font-family:'Bangers',cursive;font-size:0.7em;font-weight:900;cursor:pointer;">8VA↑</button></div>
+    </div></div>
   <div class="mode-display" id="sE_modeDisplay"></div>
   <div class="fret-nav" style="display:flex;justify-content:flex-start;gap:6px;align-items:center;margin-bottom:4px;">
       <span style="display:inline-flex;gap:3px;"><button class="chords-btn" id="sE_btnScaleChd" data-tip-title="♪ SCALE CHORDS" data-tip="Toggle chord mode for the scale-note row. ON = each note plays its diatonic triad and shows Roman numerals. OFF = single notes with interval numbers.">♪ SCALE</button><button class="chords-btn" id="sE_btnFretChd" data-tip-title="▦ FRET CHORDS" data-tip="Toggle chord overlays on the fretboard. ON = pressing a fret plays its triad. Triple-press a fret to cycle root → 3rd → 5th.">▦ FRET</button></span><span style="display:inline-flex;gap:10px;flex:1;justify-content:stretch;margin:0 8px;"><button class="scale-now" data-pre="sE_" data-tip-title="⚖ NEXT SCALE" data-tip="Switch to the next scale of the walk NOW, instead of waiting for the auto change on the downbeat. Follows whatever walk is selected — it only moves it earlier, so a scale change can land where the backing track feels it." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#ffd700;border:1px solid #ffd700;border-radius:5px;font-family:system-ui,-apple-system,sans-serif;font-weight:900;font-size:1.12em;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;line-height:1;">⚖</button><button class="car-arrow" data-pre="sE_" data-dir="1" data-tip-title="▦ FRET SEGMENT" data-tip="Shows the strings currently in view — 123 / 234 / 456, or 1234 / 2345 / 3456 in 4-string mode. Tap for the next segment (wraps around)." style="padding:0.3em 0.42em;cursor:pointer;background:#1a1a2e;color:#5eead4;border:1px solid #5eead4;border-radius:5px;font-family:'Bangers',cursive;font-weight:900;font-size:1.2em;letter-spacing:1px;flex:0 1 auto;padding-top:0.5em;padding-bottom:0.5em;">123</button></span><span style="display:inline-flex;gap:3px;"><button class="chords-btn" id="sE_btnTrem" data-tip-title="✋ FINGER TREMOLO" data-tip="Continuous fingerstyle tremolo. Tap to cycle: AUTO → ∞20 → LIB (lengths 1–10) → off. Plays a muted ghost pulse until you press a scale chord, then arpeggiates that chord in the finger sequence (p=thumb/bass, i=index, m=middle, a=ring).">✊ PIMA</button><button class="chords-btn" id="sE_btn4Str" data-tip-title="4-STRING PIMA" data-tip="Toggle 4-string view for PIMA arpeggio practice. Groups become 6·5·4·3, 5·4·3·2, 4·3·2·1 — one finger per string (p=lowest, then i, m, a). Tremolo plays the freestroke: m-i · a-m-i · a-m-i-p · a-m-i-p, looping. Tap again for 3-string triad view.">4STR</button></span>
