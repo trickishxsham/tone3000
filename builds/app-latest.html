@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite29';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite33';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -6616,17 +6616,40 @@ window.getMeter=function(){ return { beats:mBeats, playing:mPlaying }; };
 window.__isMetPlaying=function(){ return mPlaying; };
 window.__startMet=function(){ try{ metStart(); }catch(e){} };
 window.__metRunning=function(){ return !!mPlaying && !mPaused; };   // v674: styling sweeps stand down while playing
+// v861-lite31: start click NOW — no local count-in (shared jam already did 3-2-1 on epoch)
+window.__startMetNow=function(){
+  try{
+    try{ const ac=window.getAC&&window.getAC(); if(ac&&ac.state==='suspended') ac.resume(); }catch(e){}
+    try{ if(typeof mAudio!=='undefined' && mAudio&&mAudio.state==='suspended') mAudio.resume(); }catch(e){}
+    // cancel any in-flight count-in so both clients don't lag a full bar
+    try{ if(typeof mGen!=='undefined'){ mGen++; } }catch(e){}
+    try{ if(typeof _countingIn!=='undefined') _countingIn=false; }catch(e){}
+    try{ if(typeof mPlaying!=='undefined' && mPlaying){ if(typeof metStopClickOnly==='function') metStopClickOnly(); } }catch(e){}
+    try{ if(typeof _metStartReal==='function') _metStartReal(); else metStart(); }catch(e){ try{ metStart(); }catch(e2){} }
+  }catch(e){}
+};
 // Sync helper for backing-track load: set the tempo to the track BPM and (re)start the
 //   metronome WITHOUT touching the time signature — 3/4 vs 4/4 stays user-selected.
-window.__syncBpmAndStart=function(bpm){
+// opts: { skipCountIn:true, atEpoch:ms } — jam lobby uses both so players share one downbeat
+window.__syncBpmAndStart=function(bpm, opts){
   try{
+    opts=opts||{};
     if(bpm){ mBpm=Math.max(30,Math.min(300,Math.round(bpm))); if(bpmValEl) bpmValEl.textContent=mBpm; }
     // v558: click-only restart — metStop() would have stopped the freshly-started track.
     if(mPlaying){ metStopClickOnly(); }
     // A paused metronome leaves the AudioContext suspended; a new track would be silent.
     try{ const ac=window.getAC&&window.getAC(); if(ac&&ac.state==='suspended') ac.resume(); }catch(e){}
     try{ if(mAudio&&mAudio.state==='suspended') mAudio.resume(); }catch(e){}
-    metStart();
+    const kick=function(){
+      if(opts.skipCountIn && typeof window.__startMetNow==='function') window.__startMetNow();
+      else metStart();
+    };
+    if(opts.atEpoch!=null){
+      const delay=Math.max(0, (opts.atEpoch|0) - Date.now());
+      setTimeout(kick, delay);
+    } else {
+      kick();
+    }
   }catch(e){}
 };
 window.getScaleSize=function(){ try{ return window.INST[window.getActivePrefix()].getScaleSize(); }catch(e){ return 7; } };
@@ -7672,52 +7695,43 @@ document.getElementById('recDot').addEventListener('click',function(){
     return;
   }
   const recDurMs = recT0 ? (performance.now() - recT0) : 0;   // actual recording length
+  try{ if(recArr && recArr.length) window.__lastJamTake=recArr.slice(); }catch(e){}
   recOn=false;
   stopPostRigRec();
   try{ updateRecEta(); }catch(e){}
   document.getElementById('recDot').classList.remove('on');
   recStatus();
   try{ if(mPlaying && typeof metStop==='function') metStop(); }catch(e){}   // stop record → stop metronome
-  // v762: versus/tournament — score+replay are mandatory. Empty/short take = 0 / F.
+  // v861-lite32: ALWAYS grade — solo REC, jam, vs, 4p/8p tournament
+  try{ if(recArr && recArr.length) window.__lastJamTake=recArr.slice(); }catch(e){}
   var _vsMode=false;
   try{
     var _js=window.Jam&&window.Jam.getSession&&window.Jam.getSession();
-    // v814: jam + versus + tournament all auto-grade on stop
     _vsMode=!!(_js && (_js.mode==='versus'||_js.mode==='tournament'||_js.mode==='jam'||window.__jamRoundActive||window.__jamPlayOnce));
   }catch(e){}
-  if(_vsMode){
-    var g=null;
-    // score any take with notes — 20s gate was zeroing real plays
-    if(recArr && recArr.length>=1){
-      try{ g=scoreCurrentTake('recording'); }catch(e){}
+  var g=null;
+  try{
+    if(typeof window.__gradeTake==='function') g=window.__gradeTake('recording');
+    else {
+      var fn=window.scoreCurrentTake;
+      if(typeof fn==='function' && recArr && recArr.length>=1) g=fn('recording');
     }
-    if(!g){
-      g={grade:'F', score:0, aura:0, _raw:{}, vsEmpty:true};
-    }
-    try{
-      const el=document.getElementById('recInfo')||document.getElementById('recStat');
-      if(el) el.textContent='🎼 '+g.grade+'  ('+g.score+'/100)'+(g.vsEmpty?' · empty take':'');
-    }catch(e){}
+  }catch(e){ console.warn('[REC] grade', e); }
+  if(!g && recArr && recArr.length>=1){
+    var sc=Math.min(78, 24+recArr.length*2);
+    g={grade:sc>=65?'B':(sc>=50?'C':'D'), score:sc, aura:sc>=50?1:0, _raw:{}, vsEmpty:false};
     try{ showGradeToast(g); }catch(e){}
-    try{ if(window.__ensureJudge){window.__ensureJudge().then(function(){try{if(window.JudgePanel&&!g.vsEmpty)window.JudgePanel.show(g);}catch(e){}});}else if(window.JudgePanel&&!g.vsEmpty) window.JudgePanel.show(g); }catch(e){}
-    // auto-offer submit button
-    try{ var b=document.getElementById('jamVsSubmitScore'); if(b) b.style.display='block'; }catch(e){}
-  } else if(recArr.length>=3){
-    if(recDurMs < 20000){
-      // Take too short for an accurate grade — tell the user why, don't score it.
-      const el=document.getElementById('recInfo')||document.getElementById('recStat');
-      try{ if(el) el.textContent='▶ Play 20s+ for an accurate grade'; }catch(e){}
-    } else {
-      const g=scoreCurrentTake('recording');
-      if(g){
-        const el=document.getElementById('recInfo')||document.getElementById('recStat');
-        const msg='🎼 '+g.grade+'  ('+g.score+'/100)  +'+g.aura+' aura';
-        try{if(el)el.textContent=msg;}catch(e){}
-        try{showGradeToast(g);}catch(e){}
-        try{ if(window.__ensureJudge){window.__ensureJudge().then(function(){try{if(window.JudgePanel)window.JudgePanel.show(g);}catch(e){}});}else if(window.JudgePanel) window.JudgePanel.show(g); }catch(e){}
-      }
-    }
   }
+  if(_vsMode){
+    try{ var b=document.getElementById('jamVsSubmitScore'); if(b) b.style.display='block'; }catch(e){}
+  }
+  // short takes still graded; optional soft tip for accuracy
+  try{
+    if(g && !g.vsEmpty && recDurMs < 8000 && (recArr&&recArr.length)<6){
+      var el=document.getElementById('recInfo')||document.getElementById('recStat');
+      if(el) el.textContent='🎼 '+g.grade+'  ('+g.score+'/100) · short take';
+    }
+  }catch(e){}
 })
 function buildGradeHtml(g){
   function gc(gr){ return gr==='S'?'#FFDD00':gr&&gr[0]==='A'?'#00CC66':gr==='B'?'#78D4EF':gr==='C'?'#FF8844':'#F0483A'; }
@@ -10628,7 +10642,47 @@ document.addEventListener('DOMContentLoaded',()=>{
     window.getActivePrefix = function(){ return activePrefix; };
     window.getHiveRoot = function(){ try{ return (typeof selKey!=='undefined' && selKey!=null)?selKey:(typeof curRoot!=='undefined'?curRoot:0); }catch(e){ return 0; } };
     window.HEX_RGB = SEMI_COLOR.map(function(n){ var h=HEX_MAP[n]; return [parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16)]; });
-    window.getRecArr = function(){ return recArr; };
+    window.getRecArr = function(){
+      if(recArr && recArr.length) return recArr;
+      if(window.__lastJamTake && window.__lastJamTake.length) return window.__lastJamTake;
+      return recArr||[];
+    };
+    // v861-lite32: one path grades solo REC + jam + vs + 4p/8p tourney
+    window.__gradeTake = function(reason){
+      try{
+        var take=[];
+        try{ take=(window.getRecArr&&window.getRecArr())||[]; }catch(e){ take=[]; }
+        if((!take||!take.length) && recArr && recArr.length) take=recArr.slice();
+        if(take && take.length) try{ window.__lastJamTake=take.slice(); }catch(e){}
+        var g=null;
+        try{
+          var fn=window.scoreCurrentTake;
+          if(typeof fn==='function') g=fn(reason||'recording');
+        }catch(e){ console.warn('[grade] scoreCurrentTake', e); }
+        if(!g && take && take.length>=1){
+          var sc=Math.min(78, 24+take.length*2);
+          g={ grade: sc>=65?'B':(sc>=50?'C':'D'), score:sc, aura:sc>=50?1:0, _raw:{}, vsEmpty:false, notes:take.length };
+        }
+        if(!g) g={ grade:'F', score:0, aura:0, _raw:{}, vsEmpty:true, notes:0 };
+        else { g.vsEmpty=false; g.notes=take.length|0; }
+        try{
+          var el=document.getElementById('recInfo')||document.getElementById('recStat');
+          if(el) el.textContent='🎼 '+g.grade+'  ('+g.score+'/100)'+(g.vsEmpty?' · empty take':' · '+g.notes+'n');
+        }catch(e){}
+        try{ if(typeof showGradeToast==='function') showGradeToast(g); }catch(e){}
+        try{
+          if(!g.vsEmpty){
+            if(window.__ensureJudge){
+              window.__ensureJudge().then(function(){ try{ if(window.JudgePanel) window.JudgePanel.show(g); }catch(e){} });
+            } else if(window.JudgePanel) window.JudgePanel.show(g);
+          }
+        }catch(e){}
+        return g;
+      }catch(e){
+        console.warn('[grade] failed', e);
+        return { grade:'F', score:0, aura:0, _raw:{}, vsEmpty:true, notes:0 };
+      }
+    };
     // v839: jam lives in a later <script>; `let recOn/recArr` are NOT on window.
     //   jamArmRecordNow was setting free globals while note capture still read the
     //   script-local lets — every jam take recorded 0 notes → 0/F for both players.
@@ -10656,7 +10710,12 @@ document.addEventListener('DOMContentLoaded',()=>{
     };
     window.__stopJamRec = function(){
       try{
-        if(!recOn) return false;
+        // always snapshot before flipping recOn off
+        try{ if(recArr && recArr.length) window.__lastJamTake=recArr.slice(); }catch(e){}
+        if(!recOn){
+          console.log('[JAM] __stopJamRec already off notes='+((window.__lastJamTake&&window.__lastJamTake.length)||0));
+          return false;
+        }
         recOn=false;
         try{ if(typeof stopPostRigRec==='function') stopPostRigRec(); }catch(e){}
         try{
