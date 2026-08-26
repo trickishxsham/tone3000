@@ -4,7 +4,7 @@
 // Extracted from app-860 lineage. Requires peerjs + mqtt scripts already on page.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861m-lite32';
+var MODULE_VERSION = '4.9.8.861n-lite33';
 
 // Complements PeerJS seat-id races + dreamlo with a real-time pub/sub channel.
 // Uses a public MQTT broker over WebSockets. Retain messages give us durable
@@ -243,38 +243,72 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
     var pool=shuffleArr(BOT_NAME_POOL).filter(function(n){ return !used[n.toLowerCase()]; });
     return pool.slice(0, Math.max(0, need|0));
   }
+  // v861-lite33: never exceed lobby size (bots were pushing 5/4)
+  function rosterCap(){
+    var c=parseInt(tourney.size||publicKind||8, 10);
+    if(!(c>0 && c<=16)) c=8;
+    return c;
+  }
+  function clampRosterToCap(){
+    try{
+      var cap=rosterCap();
+      tourney.players=uniqRoster(tourney.players||[], myName);
+      var guard=0;
+      while(tourney.players.length>cap && guard++<32){
+        var bi=-1;
+        for(var i=tourney.players.length-1;i>=0;i--){
+          if(isBotName(tourney.players[i])){ bi=i; break; }
+        }
+        if(bi>=0){
+          var gone=tourney.players.splice(bi,1)[0];
+          try{ delete tourneyBots[gone]; delete tourneyBots[baseNick(gone)]; }catch(e){}
+        } else break;
+      }
+      if(tourney.players.length>cap) tourney.players=tourney.players.slice(0,cap);
+    }catch(e){}
+  }
   function fillBotsIfNeeded(force){
     try{
       if(!isHost) return 0;
       if(!(publicKind===4||publicKind===8||jamMode==='tournament')) return 0;
-      var cap=tourney.size||publicKind||8;
+      clampRosterToCap();
+      var cap=rosterCap();
       var cur=(tourney.players||[]).length;
       var need=cap-cur;
       if(need<=0) return 0;
-      // Prefer filling only when we already have ≥1 real player (avoid pure-bot lobbies)
       if(!force && realPlayerCount()<1) return 0;
       var names=pickBotNames(need);
       if(!names.length) return 0;
+      var added=[];
       names.forEach(function(n){
+        if((tourney.players||[]).length>=cap) return;
         tourneyBots[n]=true;
         tourney.players.push(n);
+        added.push(n);
+        clampRosterToCap();
       });
-      tourney.players=uniqRoster(tourney.players, myName);
+      if(!added.length) return 0;
+      clampRosterToCap();
+      var nNow=(tourney.players||[]).length;
       try{ renderBracket(); updateLobby(); }catch(e){}
       try{ jamSendAll({type:'tourneyLobby', players:tourney.players, size:tourney.size, bots:Object.keys(tourneyBots)}); }catch(e){}
-      try{ applyLobbyCount(publicKind||tourney.size, roomCode, tourney.players.length, false); }catch(e){}
-      try{ if(publicKind && roomCode) publishLobby(publicKind||tourney.size, roomCode, tourney.players.length, tourney.players.length>=cap); }catch(e){}
-      setStatus('Filled '+(names.length)+' bot seat(s): '+names.join(', '));
-      window.jamHud&&window.jamHud('bots joined: '+names.join(', '));
+      try{ applyLobbyCount(publicKind||tourney.size, roomCode, Math.min(nNow,cap), nNow>=cap); }catch(e){}
+      try{ if(publicKind && roomCode) publishLobby(publicKind||tourney.size, roomCode, Math.min(nNow,cap), nNow>=cap); }catch(e){}
+      setStatus('Filled '+added.length+' bot seat(s): '+added.join(', ')+' ('+Math.min(nNow,cap)+'/'+cap+')');
+      window.jamHud&&window.jamHud('bots joined: '+added.join(', '));
       try{ autoStartIfFull(); }catch(e){}
-      return names.length;
+      return added.length;
     }catch(e){ return 0; }
   }
   function scheduleBotFill(ms){
     try{ if(_botFillTimer) clearTimeout(_botFillTimer); }catch(e){}
     _botFillTimer=setTimeout(function(){
       _botFillTimer=null;
-      try{ fillBotsIfNeeded(false); }catch(e){}
+      try{
+        clampRosterToCap();
+        if((tourney.players||[]).length>=rosterCap()) return;
+        fillBotsIfNeeded(false);
+      }catch(e){}
     }, ms||28000);
   }
   function gradeFromScore(s){
@@ -824,7 +858,8 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
   function renderBracket(){
     const el=document.getElementById('jamBracketHtml'); if(!el) return;
     if(!tourney.players.length){ el.textContent='Waiting for players…'; return; }
-    let h='<div style="margin-bottom:4px;color:#fbbf24;">Players '+tourney.players.length+'/'+tourney.size+'</div>';
+    try{ clampRosterToCap(); }catch(e){}
+    let h='<div style="margin-bottom:4px;color:#fbbf24;">Players '+Math.min(tourney.players.length,rosterCap())+'/'+rosterCap()+'</div>';
     tourney.players.forEach(function(p,i){
       var tag='';
       if(p===myName) tag=' <span style="color:#6ee7b7;">(you)</span>';
@@ -938,8 +973,25 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
     // normalize double-tags
     const seatM=String(name).toUpperCase().match(/-([A-Z]*\d+[A-H]?)$/);
     const clean=seatM?(baseNick(name)+'-'+seatM[1]):baseNick(name);
+    // already seated?
+    if((tourney.players||[]).some(function(p){ return String(p).toLowerCase()===String(clean).toLowerCase(); })) return;
+    clampRosterToCap();
+    var cap=rosterCap();
+    if((tourney.players||[]).length>=cap){
+      // free a bot seat for a real player if possible
+      var bi=-1;
+      for(var i=tourney.players.length-1;i>=0;i--){ if(isBotName(tourney.players[i])){ bi=i; break; } }
+      if(bi>=0){
+        var gone=tourney.players.splice(bi,1)[0];
+        try{ delete tourneyBots[gone]; }catch(e){}
+      } else {
+        setStatus('Lobby full ('+cap+'/'+cap+') — cannot add '+clean);
+        return;
+      }
+    }
     tourney.players.push(clean);
     tourney.players=uniqRoster(tourney.players, myName);
+    clampRosterToCap();
     renderBracket();
     autoStartIfFull();
     try{ if(conn&&conn.open) conn.send({type:'tourneyLobby', players:tourney.players, size:tourney.size}); }catch(e){}
@@ -1135,7 +1187,7 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
       }catch(e){}
       // v845: host schedules bot fill if under capacity (empty seats 6–8 etc.)
       try{
-        if(isHost && !tourney.active && uniq.length>0 && uniq.length<(tourney.size||8)){
+        if(isHost && !tourney.active && uniq.length>0 && uniq.length<rosterCap()){
           scheduleBotFill(28000);
         }
       }catch(e){}
@@ -1253,6 +1305,7 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
           }catch(e){}
           if((jamMode==='tournament' || isTourneySize(publicKind)) && isHost && role!=='spec'){
             tourney.players=uniqRoster((tourney.players||[]).concat([myName, partnerName].filter(Boolean)), myName);
+            try{ clampRosterToCap(); }catch(e){}
             tourney.size=tourney.size||publicKind||4;
             renderBracket();
             try{ jamSendAll({type:'tourneyLobby', players:tourney.players, size:tourney.size}); }catch(e){}
@@ -1299,11 +1352,19 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
           // roster repair: any named chat confirms presence
           try{
             if(who && tourney && isTourneySize(publicKind||tourney.size)){
+              // real chatter can displace a bot if at cap
+              if((tourney.players||[]).length>=rosterCap() && !(tourney.players||[]).some(function(p){ return String(p).toLowerCase()===String(who).toLowerCase(); })){
+                var bi=-1;
+                for(var i=tourney.players.length-1;i>=0;i--){ if(isBotName(tourney.players[i])){ bi=i; break; } }
+                if(bi>=0){ var g=tourney.players.splice(bi,1)[0]; try{ delete tourneyBots[g]; }catch(e){} }
+              }
               tourney.players=uniqRoster((tourney.players||[]).concat([myName, who].filter(Boolean)), myName);
+              clampRosterToCap();
               updateLobby(); renderBracket();
-              applyLobbyCount(publicKind||tourney.size, roomCode, tourney.players.length, false);
-              if(isHost){ publishLobby(publicKind||tourney.size, roomCode, tourney.players.length, false); broadcastLobbyCount(); }
-              setJamBtnBadge(tourney.players.length);
+              var n=Math.min(tourney.players.length, rosterCap());
+              applyLobbyCount(publicKind||tourney.size, roomCode, n, n>=rosterCap());
+              if(isHost){ publishLobby(publicKind||tourney.size, roomCode, n, n>=rosterCap()); broadcastLobbyCount(); }
+              setJamBtnBadge(n);
             }
           }catch(e){}
           if(isHost && !data._relayed){
@@ -1428,6 +1489,7 @@ var MODULE_VERSION = '4.9.8.861m-lite32';
               data.bots.forEach(function(b){ tourneyBots[b]=true; });
             }
           }catch(e){}
+          try{ clampRosterToCap(); }catch(e){}
           renderBracket();
           try{ updateLobby(); }catch(e){}
           try{ applyLobbyCount(publicKind||tourney.size, roomCode||'', tourney.players.length, false); }catch(e){}
