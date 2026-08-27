@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite38';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite39';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -16550,8 +16550,8 @@ window.__ensureMultiplayer = function(){
 <!-- v738: LIVE JAM — two IMPROVS2 users connect directly (WebRTC via PeerJS's free public
      broker, since GitHub Pages can't broker a live connection by itself) and hear each
      other's notes in real time, with the backing track roughly synced on join. -->
-<!-- v861-lite37: JAM FAB on LEFT so it never covers the right-side scale crest badges -->
-<div id="jamBtn" style="position:fixed;left:max(10px, calc(50vw - 280px + 10px));right:auto;bottom:max(88px, calc(env(safe-area-inset-bottom, 0px) + 72px));z-index:8500;background:#7c3aed;color:#fff;
+<!-- v861-lite39: JAM FAB on RIGHT, raised above bottom shape crest when fully scrolled -->
+<div id="jamBtn" style="position:fixed;right:max(10px, calc(50vw - 280px + 10px));left:auto;bottom:max(280px, calc(32vh + env(safe-area-inset-bottom, 0px)));z-index:8500;background:#7c3aed;color:#fff;
   font-weight:900;font-size:0.72em;padding:8px 14px 8px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.4);
   cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.65em;font-weight:900;line-height:16px;text-align:center;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">0</span></div>
 
