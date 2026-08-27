@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861-lite36-combined';
+var MODULE_VERSION = '4.9.8.861-lite38-combined';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
