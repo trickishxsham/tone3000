@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite36';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite38';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -4127,12 +4127,13 @@ function createInstance(prefix, chordsAlwaysOn){
         }
         // v607: LIGHT TAP / quick pull-off on sparkly node (12/7/5) -> natural harmonic of OPEN string.
         // v861-lite26: timer+origin reset on ARRIVAL (_nhArm). Slide onto 5/7/12 then lift fast = harmonic.
-        //   Dwell still short (<=110ms from arrival, <=14px from arm point) so 3-tap triads are safe.
+        // v861-lite38: wider window — 110ms/14px was too tight for slide-then-pull-off on phones.
+        //   Now <=220ms from arrival, <=32px from arm point (still short vs held notes / 3-tap).
         if(!hung && bendSemis<0.15 && _nhDownCell){
           const _nhDt=performance.now()-_nhDownT;
           const _ux=(e&&e.clientX!=null)?e.clientX:_ptrX, _uy=(e&&e.clientY!=null)?e.clientY:_ptrY;
           const _nhMove=(_nhDownX!=null) ? Math.hypot(_ux-_nhDownX, _uy-_nhDownY) : 0;
-          if(_nhDt<=110 && _nhMove<=14){
+          if(_nhDt<=220 && _nhMove<=32){
             const _st=parseInt(_nhDownCell.dataset.str,10), _mi=parseInt(_nhDownCell.dataset.midi,10);
             const _fr=_mi-STRING_MIDI[_st], _pt={12:12,7:19,5:24}[_fr];
             if(_pt!=null && STRING_MIDI[_st]!=null){
@@ -16549,7 +16550,8 @@ window.__ensureMultiplayer = function(){
 <!-- v738: LIVE JAM — two IMPROVS2 users connect directly (WebRTC via PeerJS's free public
      broker, since GitHub Pages can't broker a live connection by itself) and hear each
      other's notes in real time, with the backing track roughly synced on join. -->
-<div id="jamBtn" style="position:fixed;right:max(10px, calc(50vw - 280px + 10px));bottom:150px;z-index:9000;background:#7c3aed;color:#fff;
+<!-- v861-lite37: JAM FAB on LEFT so it never covers the right-side scale crest badges -->
+<div id="jamBtn" style="position:fixed;left:max(10px, calc(50vw - 280px + 10px));right:auto;bottom:max(88px, calc(env(safe-area-inset-bottom, 0px) + 72px));z-index:8500;background:#7c3aed;color:#fff;
   font-weight:900;font-size:0.72em;padding:8px 14px 8px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.4);
   cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.65em;font-weight:900;line-height:16px;text-align:center;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">0</span></div>
 
