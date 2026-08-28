@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite45';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite47';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -5783,11 +5783,12 @@ function createInstance(prefix, chordsAlwaysOn){
                    //   to match the badge exactly (walk capture/playback) can just use it.
                    penta: (pentaName && !includeSet.length) ? pentaName : null}),
     getMix:()=>signatureColors(buildScale()).mix,
-    setScale:(k,m,a,p)=>{
+    setScale:(k,m,a,p,incs)=>{
       pentaName=null; octManual=false;
       currentKey=k; currentMode=m; expandedMode=m;
       try{ window.ACTIVE_SCALE={ semis:(MODE_SEMITONES[m]||MODE_SEMITONES['IONIAN']).slice(), root:NOTES.indexOf(k) }; }catch(e){}
       activeOcto.clear(); expandedOcto=null;
+      includeSet=[]; // lite47: reset; penta+include rebuilds hexatonics
       if(a && a[0]==='X'){
         excludeSet=a.slice(1).split(',').map(Number);
         currentAlt='NA'; expandedAlt='NA';
@@ -5797,9 +5798,15 @@ function createInstance(prefix, chordsAlwaysOn){
         if(isOcto){ activeOcto.add(a); expandedOcto=a; currentAlt='NA'; expandedAlt='NA'; }
         else { currentAlt=a||'NA'; expandedAlt=(a&&a!=='NA')?a:'NA'; }
       }
-      // v717b: a captured named pentatonic restores by NAME, matching the badge exactly —
-      //   no mode/exclusion reconstruction, no ambiguity.
-      if(p && PENTA_SCALES[p]){ pentaName=p; excludeSet=[]; currentAlt='NA'; expandedAlt='NA'; }
+      // v717b: named pentatonic by NAME
+      // lite47: optional incs[] = chromatic degrees ADDED → hexatonic
+      if(p && PENTA_SCALES[p]){
+        pentaName=p; excludeSet=[]; currentAlt='NA'; expandedAlt='NA';
+        if(incs && incs.length){
+          includeSet=incs.map(function(x){ return ((x%12)+12)%12; })
+            .filter(function(fr,i,arr){ return arr.indexOf(fr)===i && PENTA_SCALES[p].indexOf(fr)<0; });
+        }
+      }
       updateAll();
     }
   };
@@ -8735,8 +8742,9 @@ updateKeySigDisplay();
         const pcs=semis.map(function(x){ return (x+R)%12; });
         if(!_subsetOfPool(pcs, poolSet)) continue;
         const nm=(typeof HEX_NAMES!=='undefined' && HEX_NAMES[m] && HEX_NAMES[m][ex])||(m+' hex');
-        push({mode:'COLOUR', alt:'NA', tag:'hexa:'+nm, pcs:pcs, colourSemis:semis.slice(),
-          hexaName:nm, kind:'hexa', parentMode:m});
+        // Prefer real mode+exclusion so fret segments + colors match the named hex
+        push({mode:m, alt:'NA', tag:'hexa:'+nm, pcs:pcs, colourSemis:semis.slice(),
+          hexaName:nm, kind:'hexa', parentMode:m, exIdx:ex});
       }
     });
     if(typeof HEX_NAMES_X!=='undefined'){
@@ -8761,10 +8769,101 @@ updateKeySigDisplay();
           colourSemis:base.slice(), pentaName:nm, kind:'penta'});
       });
     }
+    // Named shapes from SCALE_UNIVERSE that sit inside the 10-note pool (unique colors)
+    try{
+      if(typeof SCALE_UNIVERSE!=='undefined'){
+        const fps=Object.keys(SCALE_UNIVERSE);
+        for(let i=0;i<fps.length;i++){
+          const e=SCALE_UNIVERSE[fps[i]];
+          if(!e||!e.semis) continue;
+          const sz=e.semis.length;
+          if(sz<5||sz>7) continue;
+          const pcs=e.semis.map(function(x){ return (x+R)%12; });
+          if(!_subsetOfPool(pcs, poolSet)) continue;
+          let mode='IONIAN', alt='NA', exIdx=null;
+          try{
+            if(typeof pickCanonical==='function' && e.sources){
+              const c=pickCanonical(e.sources);
+              mode=c.mode||e.parentMode||'IONIAN';
+              alt=c.alt||'NA';
+              if(c.ex!=null && c.ex>=0) exIdx=c.ex;
+            } else {
+              mode=e.parentMode||'IONIAN';
+              alt=e.parentAlt||'NA';
+            }
+          }catch(err){}
+          const nm=e.name||(mode+' shape');
+          push({
+            mode:(sz===7&&exIdx==null)?mode:'COLOUR',
+            alt:alt,
+            tag:'uni:'+nm,
+            pcs:pcs,
+            colourSemis:e.semis.slice(),
+            hexaName:(sz===6?nm:null),
+            pentaName:(sz===5?nm:null),
+            kind:(sz===5?'penta':sz===6?'hexa':'hepta'),
+            parentMode:mode,
+            exIdx:exIdx,
+            uniName:nm
+          });
+        }
+      }
+    }catch(e){}
     push({mode:'COLOUR', alt:'NA', tag:'penta:maj', pcs:[0,2,4,7,9].map(function(x){return (x+R)%12;}),
       colourSemis:[0,2,4,7,9], pentaName:'maj penta', kind:'penta'});
     push({mode:'COLOUR', alt:'NA', tag:'penta:min', pcs:[0,3,5,7,10].map(function(x){return (x+R)%12;}),
       colourSemis:[0,3,5,7,10], pentaName:'min penta', kind:'penta'});
+    // lite47: pentatonic + INCLUDE one pool note → hexatonic (named when possible)
+    try{
+      const pentaList=[];
+      if(typeof PENTA_SCALES!=='undefined'){
+        Object.keys(PENTA_SCALES).forEach(function(nm){
+          const base=PENTA_SCALES[nm];
+          if(!base||base.length!==5) return;
+          if(!_subsetOfPool(base.map(function(x){return (x+R)%12;}), poolSet)) return;
+          pentaList.push({nm:nm, base:base});
+        });
+      }
+      pentaList.push({nm:'maj penta', base:[0,2,4,7,9]});
+      pentaList.push({nm:'min penta', base:[0,3,5,7,10]});
+      const poolRel=spec.rel.slice();
+      pentaList.forEach(function(pe){
+        const baseSet={}; pe.base.forEach(function(x){ baseSet[x]=1; });
+        poolRel.forEach(function(fr){
+          if(baseSet[fr]) return; // already in penta
+          const semis=pe.base.concat([fr]).slice().sort(function(a,b){return a-b;});
+          const pcs=semis.map(function(x){ return (x+R)%12; });
+          // resolve name: HEX_UNIVERSE / SCALE_UNIVERSE / hexAnyName / penta+inc label
+          let nm=null;
+          const fp=semis.join(',');
+          try{
+            if(typeof HEX_UNIVERSE!=='undefined' && HEX_UNIVERSE[fp] && HEX_UNIVERSE[fp].name)
+              nm=HEX_UNIVERSE[fp].name;
+            else if(typeof SCALE_UNIVERSE!=='undefined' && SCALE_UNIVERSE[fp] && SCALE_UNIVERSE[fp].name)
+              nm=SCALE_UNIVERSE[fp].name;
+            else if(typeof hexAnyName==='function') nm=hexAnyName(semis);
+            else if(typeof hexNameFor==='function') nm=hexNameFor(fp);
+          }catch(e){}
+          if(!nm){
+            const incLbl=(typeof CI_INT!=='undefined'&&CI_INT[fr])?CI_INT[fr]:String(fr);
+            nm=pe.nm+' +'+incLbl;
+          }
+          push({
+            mode:'IONIAN', // parent placeholder; apply uses pentaName+incs
+            alt:'NA',
+            tag:'penta+inc:'+nm,
+            pcs:pcs,
+            colourSemis:semis.slice(),
+            hexaName:nm,
+            uniName:nm,
+            pentaName:(typeof PENTA_SCALES!=='undefined' && PENTA_SCALES[pe.nm])?pe.nm:null,
+            incs:[fr],
+            kind:'hexa',
+            parentMode:'IONIAN'
+          });
+        });
+      });
+    }catch(e){}
     return out;
   }
   let _homeRoot=null, _homeMaj=true, _homeSetAt=0, _lastPickKey='', _lastPickPcs=null, _lastPickKind=null;
@@ -8884,6 +8983,7 @@ updateKeySigDisplay();
       let sc=_scorePcs(hist, c.pcs);
       sc += 0.12 * ((hist[c.root]||0)/tot);
       if(c.kind==='hexa') sc += 0.16 + (spice||0)*0.1;
+      if(c.incs && c.incs.length) sc += 0.05; // penta+include hex preferred texture
       if(c.kind==='penta') sc += 0.06;
       if(c.kind==='hepta' && c.tag==='key-mode') sc += 0.04;
       if(_lastPickPcs && _lastPickPcs.length){
@@ -8938,17 +9038,134 @@ updateKeySigDisplay();
       return cands[0].b+'/4';
     }catch(e){ return null; }
   }
+  // lite46: push named universe scales onto ALL panels (colors + segments update)
   function _applyListenScale(choice){
     if(!choice) return;
     try{
-      const inst=INST[activePrefix]; if(!inst) return;
-      if(choice.mode==='COLOUR' && choice.colourSemis){
-        try{ MODE_SEMITONES['COLOUR']=choice.colourSemis.slice(); }catch(e){}
-        inst.setScale(choice.key, 'COLOUR', 'NA');
-      } else {
-        inst.setScale(choice.key, choice.mode, choice.alt||'NA');
+      const keyName=choice.key||'C';
+      const root=(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].indexOf(keyName));
+      const R=(root>=0)?root:0;
+      // relative semis for universe lookup
+      let rel=null;
+      if(choice.colourSemis && choice.colourSemis.length){
+        rel=choice.colourSemis.slice().map(function(x){ return ((x%12)+12)%12; }).sort(function(a,b){return a-b;});
+      } else if(choice.pcs && choice.pcs.length){
+        rel=choice.pcs.map(function(p){ return ((p-R)%12+12)%12; }).sort(function(a,b){return a-b;});
       }
-      try{ if(typeof onInstanceUpdate==='function') onInstanceUpdate(activePrefix); }catch(e){}
+      const fp=rel?rel.join(','):null;
+      let entry=null;
+      try{
+        if(fp && typeof SCALE_UNIVERSE!=='undefined' && SCALE_UNIVERSE[fp]) entry=SCALE_UNIVERSE[fp];
+        else if(fp && typeof HEX_UNIVERSE!=='undefined' && HEX_UNIVERSE[fp]) entry=HEX_UNIVERSE[fp];
+      }catch(e){}
+
+      function applyOne(inst){
+        if(!inst||typeof inst.setScale!=='function') return;
+        // 1) Named pentatonic (± include → hexatonic)
+        if(choice.pentaName && typeof PENTA_SCALES!=='undefined' && PENTA_SCALES[choice.pentaName]){
+          const incs=choice.incs||null;
+          inst.setScale(keyName, choice.mode||'IONIAN', 'NA', choice.pentaName, incs);
+          return;
+        }
+        // 1b) Hex built as penta+include but penta name is alias (maj/min penta)
+        if(choice.incs && choice.incs.length && choice.colourSemis && choice.colourSemis.length===6){
+          // try match a real PENTA_SCALES parent of size 5
+          let found=null, foundInc=null;
+          if(typeof PENTA_SCALES!=='undefined'){
+            Object.keys(PENTA_SCALES).forEach(function(nm){
+              if(found) return;
+              const b=PENTA_SCALES[nm];
+              if(!b||b.length!==5) return;
+              const extra=choice.colourSemis.filter(function(s){ return b.indexOf(s)<0; });
+              if(extra.length===1 && b.every(function(s){ return choice.colourSemis.indexOf(s)>=0; })){
+                found=nm; foundInc=extra;
+              }
+            });
+          }
+          if(found){
+            inst.setScale(keyName, 'IONIAN', 'NA', found, foundInc);
+            return;
+          }
+        }
+        // 2) Plain mode ± single alt (real foundation colors)
+        if(choice.mode && choice.mode!=='COLOUR' && MODE_SEMITONES[choice.mode]){
+          const alt=choice.alt||'NA';
+          // single-degree exclusion hex: alt encoded as X{idx}
+          if(choice.exIdx!=null && choice.exIdx>=0){
+            inst.setScale(keyName, choice.mode, 'X'+choice.exIdx);
+            return;
+          }
+          inst.setScale(keyName, choice.mode, alt);
+          return;
+        }
+        // 3) Universe entry — same path as tapping a named scale title
+        if(entry){
+          let mode='IONIAN', alt='NA';
+          try{
+            if(typeof pickCanonical==='function' && entry.sources){
+              const c=pickCanonical(entry.sources);
+              mode=c.mode||entry.parentMode||'IONIAN';
+              alt=c.alt||'NA';
+            } else {
+              mode=entry.parentMode||choice.parentMode||'IONIAN';
+              alt=entry.parentAlt||'NA';
+            }
+          }catch(e){}
+          const altOK=alt&&alt!=='NA'&&typeof ALT_DATA!=='undefined'&&ALT_DATA[mode]&&ALT_DATA[mode][alt];
+          // Prefer real mode/alt when op is natural or +alt
+          let op='colour';
+          try{ if(entry.sources&&entry.sources[0]) op=entry.sources[0].op||''; }catch(e){}
+          if(MODE_SEMITONES[mode] && (alt==='NA'||altOK) && (op==='natural'||op==='+alt'||!rel||rel.length===7)){
+            // check if single exclusion matches a mode degree
+            if(rel && rel.length===6 && MODE_SEMITONES[mode]){
+              const full=MODE_SEMITONES[mode].slice();
+              let ex=-1;
+              for(let i=0;i<full.length;i++){
+                if(rel.indexOf(full[i])<0){ ex=i; break; }
+              }
+              if(ex>=0 && full.filter(function(_,i){return i!==ex;}).every(function(s){return rel.indexOf(s)>=0;})){
+                inst.setScale(keyName, mode, 'X'+ex);
+                return;
+              }
+            }
+            if(rel && rel.length===7){
+              inst.setScale(keyName, mode, altOK?alt:'NA');
+              return;
+            }
+          }
+          // COLOUR injection with parent segments + named label (unique colors)
+          const pm=entry.parentMode||mode||'IONIAN';
+          const semis=(entry.semis||rel||[]).slice();
+          MODE_SEMITONES['COLOUR']=semis.slice();
+          try{
+            MODE_INT_NAMES['COLOUR']=semis.map(function(x){ return (typeof CI_INT!=='undefined'?CI_INT[((x%12)+12)%12]:String(x)); });
+            MODE_FULL['COLOUR']=entry.name||choice.hexaName||choice.pentaName||'Colour Scale';
+            if(C_START[pm]) C_START['COLOUR']=C_START[pm];
+          }catch(e){}
+          inst.setScale(keyName, 'COLOUR', 'NA');
+          return;
+        }
+        // 4) Fallback COLOUR from raw semis
+        if(rel && rel.length){
+          const pm=choice.parentMode||(choice.mode&&choice.mode!=='COLOUR'?choice.mode:'IONIAN');
+          MODE_SEMITONES['COLOUR']=rel.slice();
+          try{
+            MODE_INT_NAMES['COLOUR']=rel.map(function(x){ return (typeof CI_INT!=='undefined'?CI_INT[((x%12)+12)%12]:String(x)); });
+            MODE_FULL['COLOUR']=choice.hexaName||choice.pentaName||choice.tag||'Listen Scale';
+            if(typeof C_START!=='undefined' && C_START[pm]) C_START['COLOUR']=C_START[pm];
+          }catch(e){}
+          inst.setScale(keyName, 'COLOUR', 'NA');
+          return;
+        }
+        if(choice.mode) inst.setScale(keyName, choice.mode, choice.alt||'NA');
+      }
+
+      // Apply to every panel so Simple/Expert/Chords all show the new scale
+      ['sE_','sS_','sC_'].forEach(function(pfx){
+        try{ applyOne(INST[pfx]); }catch(e){}
+      });
+      try{ if(typeof onInstanceUpdate==='function') onInstanceUpdate(activePrefix||'sE_'); }catch(e){}
+      try{ if(typeof updateAll==='function') updateAll(); }catch(e){}
     }catch(e){ console.warn('[listen scale]', e); }
   }
   function _recentPitches(ms){
@@ -9100,8 +9317,10 @@ updateKeySigDisplay();
       const keyPlain=estimateKey(pitchHistory);
       const ch=_barChoice;
       const scaleLbl=ch
-        ? (ch.key+' '+(ch.mode==='COLOUR'?(ch.pentaName||ch.hexaName||'COLOUR'):((typeof MODE_SHORT!=='undefined'&&MODE_SHORT[ch.mode])||ch.mode))
-          +(ch.alt&&ch.alt!=='NA'?' '+ch.alt:''))
+        ? (ch.key+' '+(ch.uniName||ch.hexaName||ch.pentaName||
+            (ch.mode==='COLOUR'?'COLOUR':((typeof MODE_SHORT!=='undefined'&&MODE_SHORT[ch.mode])||ch.mode)))
+          +(ch.alt&&ch.alt!=='NA'&&!ch.uniName&&!ch.hexaName?' '+ch.alt:'')
+          +(ch.exIdx!=null?' ex'+ch.exIdx:''))
         : (keyPlain||'—');
       const _st=_getKeyStyle();
       const _nm=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
