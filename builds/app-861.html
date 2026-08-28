@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite44';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite45';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8665,13 +8665,13 @@ updateKeySigDisplay();
     }catch(e){}
     return 'myMaj';
   }
-  // Style alone picks the 10-note family — MY major / MY minor are never mixed.
+  // Pool follows DETECTED maj/min (Ionian/Aeolian). Style biases detection only.
+  // Blues/classical use their single 10-note family.
   function _activePoolSpec(maj){
     const st=_getKeyStyle();
     if(st==='blues') return _POOLS.blues;
     if(st==='classical') return _POOLS.classical;
-    if(st==='myMin') return _POOLS.myMin;
-    return _POOLS.myMaj;
+    return maj ? _POOLS.myMaj : _POOLS.myMin;
   }
   function _styleForcesMaj(){
     const st=_getKeyStyle();
@@ -8769,60 +8769,108 @@ updateKeySigDisplay();
   }
   let _homeRoot=null, _homeMaj=true, _homeSetAt=0, _lastPickKey='', _lastPickPcs=null, _lastPickKind=null;
   function _inferHome(hist, keyPlain){
+    // lite45: detect IONIAN vs AEOLIAN first (Krumhansl), THEN expand to 10-note pool.
+    // Style only biases maj/min when evidence is close — never invents "A" when audio is Dm.
     const tot=hist.reduce(function(a,b){return a+b;},0);
     if(tot<6){
       if(Date.now()-_homeSetAt>2800){ _homeRoot=null; _lastPickPcs=null; }
       return;
     }
+    const majP=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
+    const minP=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+    const avg=function(arr){ return arr.reduce(function(x,y){return x+y;},0)/arr.length; };
+    const hMean=avg(hist);
+    function pearson(prof, rot){
+      const pMean=avg(prof);
+      let num=0, dh=0, dp=0;
+      for(let i=0;i<12;i++){
+        const aa=hist[i]-hMean, bb=prof[(i-rot+12)%12]-pMean;
+        num+=aa*bb; dh+=aa*aa; dp+=bb*bb;
+      }
+      return (dh>0&&dp>0)?num/Math.sqrt(dh*dp):-1;
+    }
     const style=_getKeyStyle();
-    const forceMaj=_styleForcesMaj(); // true=MY major only, false=MY minor only, null=blues/classical
-    let bestR=0, bestMaj=(forceMaj==null?true:!!forceMaj), bestSc=-1;
+    // soft bias only (not a hard lock) — MY major tips toward major profiles
+    let majBias=0, minBias=0;
+    if(style==='myMaj') majBias=0.12;
+    else if(style==='myMin') minBias=0.12;
+
+    let bestR=0, bestMaj=true, bestSc=-2;
+    for(let R=0;R<12;R++){
+      const mj=pearson(majP, R)+majBias;
+      const mn=pearson(minP, R)+minBias;
+      // tonic weight from actual hist
+      const tW=0.08*((hist[R]||0)/tot);
+      if(mj+tW>bestSc){ bestSc=mj+tW; bestR=R; bestMaj=true; }
+      if(mn+tW>bestSc){ bestSc=mn+tW; bestR=R; bestMaj=false; }
+    }
+
+    // Blues / classical: re-rank tonic with 10-note pool fit, keep maj/min from KS as hint
     if(style==='blues' || style==='classical'){
+      let bestPoolR=bestR, bestPoolSc=-1;
       for(let R=0;R<12;R++){
         const pool=_poolPcs(R, true);
         const set={}; pool.forEach(function(p){ set[p]=1; });
         let inn=0, outn=0;
         for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
-        let sc=(inn/(tot||1)) - 0.65*(outn/(tot||1)) + 0.22*((hist[R]||0)/tot);
-        if(style==='blues') sc += 0.05*((hist[(R+3)%12]||0)/tot) + 0.04*((hist[(R+6)%12]||0)/tot);
-        else sc += 0.05*((hist[(R+3)%12]||0)/tot) + 0.04*((hist[(R+8)%12]||0)/tot);
-        if(sc>bestSc){ bestSc=sc; bestR=R; bestMaj=true; }
+        let sc=(inn/(tot||1)) - 0.55*(outn/(tot||1)) + 0.20*((hist[R]||0)/tot);
+        // blend with KS score for this root (prefer consistent tonics)
+        const mj=pearson(majP,R), mn=pearson(minP,R);
+        sc += 0.25*Math.max(mj, mn);
+        if(style==='blues') sc += 0.04*((hist[(R+3)%12]||0)/tot) + 0.03*((hist[(R+6)%12]||0)/tot);
+        else sc += 0.04*((hist[(R+3)%12]||0)/tot) + 0.03*((hist[(R+8)%12]||0)/tot);
+        if(sc>bestPoolSc){ bestPoolSc=sc; bestPoolR=R; }
       }
-    } else {
-      // MY major OR MY minor only — never both
-      const maj = forceMaj!==false; // myMaj → true, myMin → false
-      for(let R=0;R<12;R++){
+      bestR=bestPoolR;
+      // quality: still from KS at that root
+      bestMaj = pearson(majP, bestR) >= pearson(minP, bestR);
+    }
+
+    // Pool fit check: if chosen quality's 10-note pool is much worse than the other, flip quality
+    if(style==='myMaj' || style==='myMin' || style==='my'){
+      function poolFit(R, maj){
         const pool=_poolPcs(R, maj);
         const set={}; pool.forEach(function(p){ set[p]=1; });
         let inn=0, outn=0;
         for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
-        let sc=(inn/(tot||1)) - 0.65*(outn/(tot||1)) + 0.20*((hist[R]||0)/tot);
-        if(maj){
-          sc += 0.07*((hist[(R+4)%12]||0)/tot);
-          sc += 0.12*((hist[(R+8)%12]||0)/tot); // m6 harmonic of major
-        } else {
-          sc += 0.07*((hist[(R+3)%12]||0)/tot);
-          sc += 0.12*((hist[(R+11)%12]||0)/tot); // maj7 harmonic of minor
-        }
-        if(sc>bestSc){ bestSc=sc; bestR=R; bestMaj=maj; }
+        return (inn/(tot||1)) - 0.5*(outn/(tot||1));
       }
+      const fitMaj=poolFit(bestR, true);
+      const fitMin=poolFit(bestR, false);
+      // If KS said major but minor pool fits clearly better (e.g. Dm vs A), flip
+      if(bestMaj && fitMin > fitMaj+0.08) bestMaj=false;
+      if(!bestMaj && fitMaj > fitMin+0.08) bestMaj=true;
+      // Style bias: only tip when fits are close
+      if(style==='myMaj' && Math.abs(fitMaj-fitMin)<0.06) bestMaj=true;
+      if(style==='myMin' && Math.abs(fitMaj-fitMin)<0.06) bestMaj=false;
     }
+
     if(_homeRoot==null){
       _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
       return;
     }
-    // keep quality locked to style; only root may move on strong evidence
-    _homeMaj = (forceMaj==null) ? _homeMaj : !!forceMaj;
-    if(bestR!==_homeRoot){
-      if(bestSc>0.55 && (Date.now()-_homeSetAt)>5000){
-        const oldPool=_poolPcs(_homeRoot, _homeMaj);
-        const oldSet={}; oldPool.forEach(function(p){ oldSet[p]=1; });
-        let oldIn=0; for(let i=0;i<12;i++) if(oldSet[i]) oldIn+=hist[i];
-        if(bestSc > (oldIn/(tot||1))+0.12){
+    // sticky until clear change
+    if(bestR!==_homeRoot || bestMaj!==_homeMaj){
+      if(bestSc>0.15 && (Date.now()-_homeSetAt)>4000){
+        const oldFit=(function(){
+          const pool=_poolPcs(_homeRoot, _homeMaj);
+          const set={}; pool.forEach(function(p){ set[p]=1; });
+          let inn=0; for(let i=0;i<12;i++) if(set[i]) inn+=hist[i];
+          return inn/(tot||1);
+        })();
+        const newFit=(function(){
+          const pool=_poolPcs(bestR, bestMaj);
+          const set={}; pool.forEach(function(p){ set[p]=1; });
+          let inn=0; for(let i=0;i<12;i++) if(set[i]) inn+=hist[i];
+          return inn/(tot||1);
+        })();
+        if(newFit > oldFit+0.10 || (bestR!==_homeRoot && bestSc>0.35)){
           _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
           _lastPickPcs=null; _lastPickKey='';
         }
       }
+    } else {
+      _homeMaj=bestMaj; // keep quality aligned when same root
     }
   }
   function _pickMatchingScale(hist, spice){
@@ -9056,14 +9104,12 @@ updateKeySigDisplay();
           +(ch.alt&&ch.alt!=='NA'?' '+ch.alt:''))
         : (keyPlain||'—');
       const _st=_getKeyStyle();
-      const _spec=(_homeRoot!=null)?_activePoolSpec(_homeMaj):null;
       const _nm=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-      // Overall key label: "key of C" / "key of Cm" (MY); blues/classical append style tag
+      // Overall key from Ionian/Aeolian detection — "key of C" or "key of Cm"
       let homeLbl='';
       if(_homeRoot!=null){
         const root=_nm[_homeRoot];
-        const isMin=(_st==='myMin') || (_st==='myMaj'?false:!_homeMaj && _st!=='blues' && _st!=='classical');
-        const keyName=(_st==='myMin') ? (root+'m') : (_st==='myMaj') ? root : root;
+        const keyName=_homeMaj ? root : (root+'m');
         const styleTag=(_st==='blues')?' blues':(_st==='classical')?' classical':'';
         homeLbl=' · key of '+keyName+styleTag;
       }
