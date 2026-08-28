@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite43';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite44';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1153,8 +1153,9 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
   <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Listen continuously. Each bar picks a matching scale (neighbor modes, penta/hexa, one-note alts). SPICE = strict→loose. BPM updates live. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
-  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="MY: major = Ionian+Lydian+Mixo+m6 · minor = Aeolian+Dorian+Phrygian+maj7. BLUES: Lyd+Ion+Mix+Dor. CLASSICAL: Ion+Mix+Dor+Aeo. All 12 tonics." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
-    <option value="my" selected>MY (maj/min)</option>
+  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="MY major = Ionian+Lydian+Mixo+m6 (key of C). MY minor = Aeolian+Dorian+Phrygian+maj7 (key of Cm). BLUES / CLASSICAL = other 10-note families. All 12 tonics." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
+    <option value="myMaj" selected>MY major</option>
+    <option value="myMin">MY minor</option>
     <option value="blues">BLUES</option>
     <option value="classical">CLASSICAL</option>
   </select>
@@ -8659,15 +8660,24 @@ updateKeySigDisplay();
     try{
       const el=document.getElementById('selKeyStyle');
       const v=el&&el.value;
-      if(v==='blues'||v==='classical'||v==='my') return v;
+      if(v==='myMaj'||v==='myMin'||v==='blues'||v==='classical') return v;
+      if(v==='my') return 'myMaj'; // legacy
     }catch(e){}
-    return 'my';
+    return 'myMaj';
   }
+  // Style alone picks the 10-note family — MY major / MY minor are never mixed.
   function _activePoolSpec(maj){
     const st=_getKeyStyle();
     if(st==='blues') return _POOLS.blues;
     if(st==='classical') return _POOLS.classical;
-    return maj?_POOLS.myMaj:_POOLS.myMin;
+    if(st==='myMin') return _POOLS.myMin;
+    return _POOLS.myMaj;
+  }
+  function _styleForcesMaj(){
+    const st=_getKeyStyle();
+    if(st==='myMin') return false;
+    if(st==='myMaj') return true;
+    return null; // blues/classical: tonic only
   }
   function _poolPcs(root, maj){
     return _activePoolSpec(maj).rel.map(function(x){ return (x+root)%12; });
@@ -8765,7 +8775,8 @@ updateKeySigDisplay();
       return;
     }
     const style=_getKeyStyle();
-    let bestR=0, bestMaj=true, bestSc=-1;
+    const forceMaj=_styleForcesMaj(); // true=MY major only, false=MY minor only, null=blues/classical
+    let bestR=0, bestMaj=(forceMaj==null?true:!!forceMaj), bestSc=-1;
     if(style==='blues' || style==='classical'){
       for(let R=0;R<12;R++){
         const pool=_poolPcs(R, true);
@@ -8778,30 +8789,31 @@ updateKeySigDisplay();
         if(sc>bestSc){ bestSc=sc; bestR=R; bestMaj=true; }
       }
     } else {
+      // MY major OR MY minor only — never both
+      const maj = forceMaj!==false; // myMaj → true, myMin → false
       for(let R=0;R<12;R++){
-        for(let mi=0;mi<2;mi++){
-          const maj=mi===0;
-          const pool=_poolPcs(R, maj);
-          const set={}; pool.forEach(function(p){ set[p]=1; });
-          let inn=0, outn=0;
-          for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
-          let sc=(inn/(tot||1)) - 0.65*(outn/(tot||1)) + 0.18*((hist[R]||0)/tot);
-          if(maj){
-            sc += 0.06*((hist[(R+4)%12]||0)/tot);
-            sc += 0.10*((hist[(R+8)%12]||0)/tot);
-          } else {
-            sc += 0.06*((hist[(R+3)%12]||0)/tot);
-            sc += 0.10*((hist[(R+11)%12]||0)/tot);
-          }
-          if(sc>bestSc){ bestSc=sc; bestR=R; bestMaj=maj; }
+        const pool=_poolPcs(R, maj);
+        const set={}; pool.forEach(function(p){ set[p]=1; });
+        let inn=0, outn=0;
+        for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
+        let sc=(inn/(tot||1)) - 0.65*(outn/(tot||1)) + 0.20*((hist[R]||0)/tot);
+        if(maj){
+          sc += 0.07*((hist[(R+4)%12]||0)/tot);
+          sc += 0.12*((hist[(R+8)%12]||0)/tot); // m6 harmonic of major
+        } else {
+          sc += 0.07*((hist[(R+3)%12]||0)/tot);
+          sc += 0.12*((hist[(R+11)%12]||0)/tot); // maj7 harmonic of minor
         }
+        if(sc>bestSc){ bestSc=sc; bestR=R; bestMaj=maj; }
       }
     }
     if(_homeRoot==null){
       _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
       return;
     }
-    if(bestR!==_homeRoot || (style==='my' && bestMaj!==_homeMaj)){
+    // keep quality locked to style; only root may move on strong evidence
+    _homeMaj = (forceMaj==null) ? _homeMaj : !!forceMaj;
+    if(bestR!==_homeRoot){
       if(bestSc>0.55 && (Date.now()-_homeSetAt)>5000){
         const oldPool=_poolPcs(_homeRoot, _homeMaj);
         const oldSet={}; oldPool.forEach(function(p){ oldSet[p]=1; });
@@ -9045,7 +9057,16 @@ updateKeySigDisplay();
         : (keyPlain||'—');
       const _st=_getKeyStyle();
       const _spec=(_homeRoot!=null)?_activePoolSpec(_homeMaj):null;
-      const homeLbl=(_homeRoot!=null)?(' · '+['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_homeRoot]+(_spec?_spec.label:(_homeMaj?'Δ10':'m10'))+(_st==='blues'?' blues':_st==='classical'?' class':'')):'';
+      const _nm=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      // Overall key label: "key of C" / "key of Cm" (MY); blues/classical append style tag
+      let homeLbl='';
+      if(_homeRoot!=null){
+        const root=_nm[_homeRoot];
+        const isMin=(_st==='myMin') || (_st==='myMaj'?false:!_homeMaj && _st!=='blues' && _st!=='classical');
+        const keyName=(_st==='myMin') ? (root+'m') : (_st==='myMaj') ? root : root;
+        const styleTag=(_st==='blues')?' blues':(_st==='classical')?' classical':'';
+        homeLbl=' · key of '+keyName+styleTag;
+      }
       const _meter=estimateMeter(lockedBpm||bpm);
       const bPart = (lockedBpm ? ('  ·  ~'+lockedBpm+' BPM') : (bpm ? ('  ·  ~'+bpm+' BPM') : '')) + (_meter?(' · ~'+_meter):'');
       const hold=(_barUntil>now)?(' · '+beatsHold+'/hold '+Math.max(0,Math.ceil((_barUntil-now)/1000))+'s'):'';
