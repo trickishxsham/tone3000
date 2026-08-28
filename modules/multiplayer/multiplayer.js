@@ -4,7 +4,7 @@
 // Extracted from app-860 lineage. Requires peerjs + mqtt scripts already on page.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861-lite42-combined';
+var MODULE_VERSION = '4.9.8.861-lite44-combined';
 
 // Complements PeerJS seat-id races + dreamlo with a real-time pub/sub channel.
 // Uses a public MQTT broker over WebSockets. Retain messages give us durable
