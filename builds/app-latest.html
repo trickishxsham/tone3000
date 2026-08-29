@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite57';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite58';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8801,6 +8801,14 @@ updateKeySigDisplay();
     const poolSet={}; pool.forEach(function(p){ poolSet[p]=1; });
     function push(o){
       if(!_subsetOfPool(o.pcs, poolSet)) return;
+      // rule: penta/hexa cannot have more than 3 consecutive chromatic notes
+      if(o.kind==='penta' || o.kind==='hexa'){
+        let semis=o.colourSemis;
+        if(!semis && o.pcs){
+          semis=o.pcs.map(function(p){ return (p-R+12)%12; }).sort(function(a,b){return a-b;});
+        }
+        if(semis && typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3) return;
+      }
       o.root=R; o.key=names[R];
       out.push(o);
     }
@@ -9041,23 +9049,33 @@ updateKeySigDisplay();
         }
       }
     } else if(style==='jazz'){
-      // Jazz: Aeolian+maj7 ∪ Phrygian+maj3 centre, not Locrian
+      // Jazz: Aeolian+maj7 ∪ Phrygian+maj3 — tonic must stick (Am not Em)
       const ranked=[];
       for(let R=0;R<12;R++){
-        let sc = 1.20*_jazzColour(hist, tot, R);
-        sc += 0.40*poolFit(R, false);
-        sc += 0.08*((hist[(R+3)%12]||0)/tot);
-        sc -= 0.06*((hist[(R+4)%12]||0)/tot);
-        if(_homeRoot!=null && R===_homeRoot) sc += 0.12;
-        ranked.push({R:R, sc:sc});
+        let sc = 1.25*_jazzColour(hist, tot, R);
+        sc += 0.45*poolFit(R, false);
+        // strong tonic presence
+        const i=(hist[R]||0)/tot;
+        const v=(hist[(R+7)%12]||0)/tot;  // fifth (E of Am)
+        const iv=(hist[(R+5)%12]||0)/tot;
+        sc += 0.30*i;
+        if(v>i+0.03) sc -= 0.18; // fifth louder than tonic → not home
+        if(iv>i+0.05) sc -= 0.10;
+        // Phrygian m2 at true tonic is diagnostic
+        sc += 0.10*((hist[(R+1)%12]||0)/tot);
+        if(_homeRoot!=null && R===_homeRoot) sc += 0.15;
+        ranked.push({R:R, sc:sc, i:i});
       }
       ranked.sort(function(a,b){ return b.sc-a.sc; });
       bestR=ranked[0].R; bestSc=ranked[0].sc; bestMaj=false;
       if(ranked.length>1){
         const x=ranked[0], y=ranked[1];
-        const relMaj = ((x.R-y.R+12)%12===3)||((y.R-x.R+12)%12===3);
-        if(relMaj && Math.abs(x.sc-y.sc)<0.14){
-          bestR = _jazzColour(hist,tot,x.R) >= _jazzColour(hist,tot,y.R) ? x.R : y.R;
+        const fifth=((x.R-y.R+12)%12===7)||((y.R-x.R+12)%12===7);
+        const relMaj=((x.R-y.R+12)%12===3)||((y.R-x.R+12)%12===3);
+        if((fifth||relMaj) && Math.abs(x.sc-y.sc)<0.16){
+          // prefer stronger tonic energy, then jazz colour
+          if(Math.abs(x.i-y.i)>0.02) bestR = x.i>=y.i ? x.R : y.R;
+          else bestR = _jazzColour(hist,tot,x.R) >= _jazzColour(hist,tot,y.R) ? x.R : y.R;
           bestSc = bestR===x.R ? x.sc : y.sc;
         }
       }
@@ -9097,8 +9115,8 @@ updateKeySigDisplay();
     }
     if(bestR!==_homeRoot || bestMaj!==_homeMaj){
       const held=Date.now()-_homeSetAt;
-      const minHold = (style==='blues'||style==='jazz') ? 4500 : 2500;
-      const needGap = (style==='blues'||style==='jazz') ? 0.14 : 0.10;
+      const minHold = (style==='blues'||style==='jazz') ? 5500 : 2500;
+      const needGap = (style==='blues'||style==='jazz') ? 0.16 : 0.10;
       let curSc = -2;
       if(style==='blues') curSc = 1.15*_bluesColour(hist,tot,_homeRoot)+0.45*poolFit(_homeRoot,true);
       if(style==='jazz') curSc = 1.20*_jazzColour(hist,tot,_homeRoot)+0.40*poolFit(_homeRoot,false);
