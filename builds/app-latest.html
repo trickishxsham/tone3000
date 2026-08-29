@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite51';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite52';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8955,10 +8955,9 @@ updateKeySigDisplay();
   }
   let _homeRoot=null, _homeMaj=true, _homeSetAt=0, _lastPickKey='', _lastPickPcs=null, _lastPickKind=null;
   function _inferHome(hist, keyPlain){
-    // lite51: AUTO chooses among 5 ten-note keys; then Ionian/Aeolian tonic inside that pool.
+    // lite52: MUST commit a tonic. Blues I/V (C vs G) resolved; sticky once set.
     const tot=hist.reduce(function(a,b){return a+b;},0);
-    if(tot<6){
-      if(Date.now()-_homeSetAt>2800){ _homeRoot=null; _lastPickPcs=null; }
+    if(tot<4){
       return;
     }
     if(_isStyleAuto()) _inferStyleFromHist(hist);
@@ -8975,92 +8974,76 @@ updateKeySigDisplay();
       }
       return (dh>0&&dp>0)?num/Math.sqrt(dh*dp):-1;
     }
+    function poolFit(R, maj){
+      const pool=_poolPcs(R, maj);
+      const set={}; pool.forEach(function(p){ set[p]=1; });
+      let inn=0, outn=0;
+      for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
+      return (inn/(tot||1)) - 0.55*(outn/(tot||1));
+    }
     const style=_getKeyStyle();
-    // soft bias only (not a hard lock) — MY major tips toward major profiles
     let majBias=0, minBias=0;
     if(style==='myMaj') majBias=0.12;
-    else if(style==='myMin') minBias=0.12;
+    else if(style==='myMin'||style==='jazz') minBias=0.10;
 
-    let bestR=0, bestMaj=true, bestSc=-2;
+    const scores=[];
     for(let R=0;R<12;R++){
       const mj=pearson(majP, R)+majBias;
       const mn=pearson(minP, R)+minBias;
-      // tonic weight from actual hist
-      const tW=0.08*((hist[R]||0)/tot);
-      if(mj+tW>bestSc){ bestSc=mj+tW; bestR=R; bestMaj=true; }
-      if(mn+tW>bestSc){ bestSc=mn+tW; bestR=R; bestMaj=false; }
+      const isMaj = mj>=mn;
+      let sc = Math.max(mj, mn);
+      sc += 0.28*((hist[R]||0)/tot);
+      sc -= 0.06*((hist[(R+7)%12]||0)/tot);
+      sc += 0.55*poolFit(R, isMaj);
+      if(style==='blues'){
+        sc += 0.05*((hist[(R+3)%12]||0)/tot) + 0.04*((hist[(R+6)%12]||0)/tot);
+        sc += 0.04*((hist[(R+10)%12]||0)/tot);
+      } else if(style==='classical'){
+        sc += 0.04*((hist[(R+3)%12]||0)/tot) + 0.03*((hist[(R+8)%12]||0)/tot);
+      } else if(style==='jazz'){
+        sc += 0.05*((hist[(R+1)%12]||0)/tot) + 0.03*((hist[(R+3)%12]||0)/tot)
+            + 0.03*((hist[(R+10)%12]||0)/tot);
+      } else if(style==='myMaj'){
+        sc += 0.05*((hist[(R+4)%12]||0)/tot) + 0.04*((hist[(R+8)%12]||0)/tot);
+      } else if(style==='myMin'){
+        sc += 0.05*((hist[(R+3)%12]||0)/tot) + 0.04*((hist[(R+11)%12]||0)/tot);
+      }
+      if(_homeRoot!=null && R===_homeRoot) sc += 0.08;
+      scores.push({R:R, maj:isMaj, sc:sc});
     }
+    scores.sort(function(a,b){ return b.sc-a.sc; });
+    let best=scores[0];
 
-    // Blues / classical: re-rank tonic with 10-note pool fit, keep maj/min from KS as hint
-    if(style==='blues' || style==='classical' || style==='jazz'){
-      let bestPoolR=bestR, bestPoolSc=-1;
-      for(let R=0;R<12;R++){
-        const pool=_poolPcs(R, true);
-        const set={}; pool.forEach(function(p){ set[p]=1; });
-        let inn=0, outn=0;
-        for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
-        let sc=(inn/(tot||1)) - 0.55*(outn/(tot||1)) + 0.20*((hist[R]||0)/tot);
-        const mj=pearson(majP,R), mn=pearson(minP,R);
-        sc += 0.25*Math.max(mj, mn);
-        if(style==='blues') sc += 0.04*((hist[(R+3)%12]||0)/tot) + 0.03*((hist[(R+6)%12]||0)/tot);
-        else if(style==='classical') sc += 0.04*((hist[(R+3)%12]||0)/tot) + 0.03*((hist[(R+8)%12]||0)/tot);
-        else {
-          // jazz: weight m2, both 3rds, m7, maj7 (chromatic approach colours)
-          sc += 0.04*((hist[(R+1)%12]||0)/tot) + 0.03*((hist[(R+3)%12]||0)/tot)
-              + 0.03*((hist[(R+4)%12]||0)/tot) + 0.03*((hist[(R+10)%12]||0)/tot)
-              + 0.03*((hist[(R+11)%12]||0)/tot);
+    if(scores.length>1){
+      const s0=scores[0], s1=scores[1];
+      const fifthApart = ((s0.R-s1.R+12)%12===7) || ((s1.R-s0.R+12)%12===7);
+      if(fifthApart && Math.abs(s0.sc-s1.sc)<0.12){
+        function rootVsFifth(R){
+          return ((hist[R]||0)+0.001) / (((hist[R]||0)+(hist[(R+7)%12]||0))+0.001);
         }
-        if(sc>bestPoolSc){ bestPoolSc=sc; bestPoolR=R; }
+        if(poolFit(s1.R,s1.maj) > poolFit(s0.R,s0.maj)+0.04) best=s1;
+        else best = rootVsFifth(s0.R) >= rootVsFifth(s1.R) ? s0 : s1;
       }
-      bestR=bestPoolR;
-      bestMaj = pearson(majP, bestR) >= pearson(minP, bestR);
     }
 
-    // Pool fit check: if chosen quality's 10-note pool is much worse than the other, flip quality
-    if(style==='myMaj' || style==='myMin' || style==='my'){
-      function poolFit(R, maj){
-        const pool=_poolPcs(R, maj);
-        const set={}; pool.forEach(function(p){ set[p]=1; });
-        let inn=0, outn=0;
-        for(let i=0;i<12;i++){ if(set[i]) inn+=hist[i]; else outn+=hist[i]; }
-        return (inn/(tot||1)) - 0.5*(outn/(tot||1));
-      }
-      const fitMaj=poolFit(bestR, true);
-      const fitMin=poolFit(bestR, false);
-      // If KS said major but minor pool fits clearly better (e.g. Dm vs A), flip
-      if(bestMaj && fitMin > fitMaj+0.08) bestMaj=false;
-      if(!bestMaj && fitMaj > fitMin+0.08) bestMaj=true;
-      // Style bias: only tip when fits are close
-      if(style==='myMaj' && Math.abs(fitMaj-fitMin)<0.06) bestMaj=true;
-      if(style==='myMin' && Math.abs(fitMaj-fitMin)<0.06) bestMaj=false;
-    }
+    const bestR=best.R, bestMaj=best.maj, bestSc=best.sc;
 
     if(_homeRoot==null){
       _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
       return;
     }
-    // sticky until clear change
     if(bestR!==_homeRoot || bestMaj!==_homeMaj){
-      if(bestSc>0.15 && (Date.now()-_homeSetAt)>4000){
-        const oldFit=(function(){
-          const pool=_poolPcs(_homeRoot, _homeMaj);
-          const set={}; pool.forEach(function(p){ set[p]=1; });
-          let inn=0; for(let i=0;i<12;i++) if(set[i]) inn+=hist[i];
-          return inn/(tot||1);
-        })();
-        const newFit=(function(){
-          const pool=_poolPcs(bestR, bestMaj);
-          const set={}; pool.forEach(function(p){ set[p]=1; });
-          let inn=0; for(let i=0;i<12;i++) if(set[i]) inn+=hist[i];
-          return inn/(tot||1);
-        })();
-        if(newFit > oldFit+0.10 || (bestR!==_homeRoot && bestSc>0.35)){
-          _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
-          _lastPickPcs=null; _lastPickKey='';
-        }
+      const held=Date.now()-_homeSetAt;
+      const cur=scores.find(function(s){ return s.R===_homeRoot; });
+      const gap=bestSc - (cur?cur.sc:-2);
+      const fitGain=poolFit(bestR,bestMaj)-poolFit(_homeRoot,_homeMaj);
+      if(held>2500 && (gap>0.10 || fitGain>0.08 || (held>6000 && gap>0.04))){
+        _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
+        _lastPickPcs=null; _lastPickKey='';
       }
     } else {
-      _homeMaj=bestMaj; // keep quality aligned when same root
+      _homeMaj=bestMaj;
+      if(bestSc>0.15) _homeSetAt=Math.max(_homeSetAt, Date.now()-2000);
     }
   }
   function _pickMatchingScale(hist, spice){
@@ -9427,7 +9410,7 @@ updateKeySigDisplay();
       // pause / new song: almost no recent pitches → clear home
       if(recent.length<3 && pitchTimestamps.length){
         const lastT=pitchTimestamps[pitchTimestamps.length-1];
-        if(Date.now()-lastT>2800){ _homeRoot=null; _barChoice=null; }
+        if(Date.now()-lastT>7000){ _homeRoot=null; _barChoice=null; }
       }
       const hist=_histFromPitches(recent.length>=6?recent:pitchHistory);
       const now=Date.now();
