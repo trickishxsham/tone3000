@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite64';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite66';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1161,12 +1161,14 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <option value="myMin">ShAM Minor</option>
     <option value="jazz">JAZZ</option>
   </select>
-  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;">
-    <option value="internal">Internal Audio</option>
-    <option value="mic">Mic Input</option>
-    <option value="both">Both</option>
-    <option value="capture">Capture Stream</option>
+  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="FILE = pick an MP3/WAV from your phone (Musicolet library files work). APP = this app only. MIC = speakers on. CAPTURE = browser tab audio. Android blocks web apps from tapping Musicolet’s live output.">
+    <option value="file">Load audio file</option>
+    <option value="internal">App audio (this app)</option>
+    <option value="mic">Mic (speakers on)</option>
+    <option value="both">App + Mic</option>
+    <option value="capture">Capture tab/stream</option>
   </select>
+  <input type="file" id="keyFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" style="display:none;">
   <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on, each bar applies the best-matching scale to the fretboard (does not lock forever).">
     <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
   </label>
@@ -8494,6 +8496,7 @@ updateKeySigDisplay();
   let energyHistory=[];   // {t,e} for tempo detection
   let lastKeyReads=[], lastBpmReads=[], keyLocked=false, lockedKey='', lockedBpm=0;
   let keyAnInt=null, keyAnMic=null, keyAnCap=null, keyCapStream=null, keyTimers=[];
+  let keyFileSrc=null, keyFileBuf=null, keyAnFile=null;
   const DETECT_WINDOW=10000;
 
   function freqToMidi(f){ return 12*Math.log2(f/(refFreq||440))+69; }  // obey A-reference tuning
@@ -9429,11 +9432,16 @@ updateKeySigDisplay();
     _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
     _homeRoot=null; _homeMaj=true; _homeSetAt=0; _lastPickKey='';
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
-    out.textContent='estimating tempo...';
     ensureAudio();                                              // creates _AC / _MASTER if needed
     if(_AC && _AC.state==='suspended'){ try{ await _AC.resume(); }catch(e){} }
     const srcEl=document.getElementById('selKeySource');
     const src=srcEl?srcEl.value:'internal';
+    if(src==='file') out.textContent='pick an audio file...';
+    else if(src==='internal') out.textContent='app audio only — play in THIS app, or Load file / Mic for external songs';
+    else if(src==='mic') out.textContent='mic on — play song on SPEAKERS (not headphones)...';
+    else if(src==='both') out.textContent='app + mic...';
+    else if(src==='capture') out.textContent='pick a tab/window and tick Share audio...';
+    else out.textContent='estimating tempo...';
 
     if(src==='internal'||src==='both'){
       keyAnInt=_AC.createAnalyser(); keyAnInt.fftSize=2048;
@@ -9472,6 +9480,43 @@ updateKeySigDisplay();
       }
     }
     // Capture Stream — analyse tab/system audio (reuses a running CAP, else opens its own)
+    if(src==='file'){
+      // Local file (Musicolet library tracks etc.) — play through Web Audio + analyse
+      try{
+        const fi=document.getElementById('keyFileInput');
+        if(!fi){ out.textContent='file picker missing'; }
+        else {
+          const file=await new Promise(function(resolve){
+            fi.value='';
+            fi.onchange=function(){ resolve(fi.files && fi.files[0] ? fi.files[0] : null); };
+            fi.click();
+          });
+          if(!file){ out.textContent='no file chosen'; }
+          else {
+            out.textContent='loading '+file.name+'...';
+            const ab=await file.arrayBuffer();
+            ensureAudio();
+            if(_AC.state==='suspended') try{ await _AC.resume(); }catch(e){}
+            keyFileBuf=await _AC.decodeAudioData(ab.slice(0));
+            keyAnFile=_AC.createAnalyser(); keyAnFile.fftSize=2048;
+            keyFileSrc=_AC.createBufferSource();
+            keyFileSrc.buffer=keyFileBuf;
+            keyFileSrc.loop=true;
+            keyFileSrc.connect(keyAnFile);
+            // hear it while analysing
+            try{ keyAnFile.connect(_AC.destination); }catch(e){}
+            try{ if(_MASTER) keyFileSrc.connect(_MASTER); }catch(e){}
+            keyFileSrc.start(0);
+            keyTimers.push(setInterval(function(){ if(keyDetectActive) collectPitch(keyAnFile); },110));
+            out.textContent='playing '+file.name+' · estimating tempo...';
+            keyFileSrc.onended=function(){ try{ keyFileSrc=null; }catch(e){} };
+          }
+        }
+      }catch(e){
+        out.textContent='file load failed — try mp3/wav';
+        console.warn('[listen file]', e);
+      }
+    }
     if(src==='capture'){
       let capSrcNode=null;
       if(typeof capActive!=='undefined' && capActive && capSysSource){
@@ -9479,17 +9524,24 @@ updateKeySigDisplay();
         out.textContent='analysing capture...';
       } else if(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia){
         try{
-          keyCapStream=await navigator.mediaDevices.getDisplayMedia({audio:true,video:true});
+          // Prefer tab audio. Mobile often has no system-audio share — then use Mic instead.
+          keyCapStream=await navigator.mediaDevices.getDisplayMedia({
+            video:true,
+            audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+          });
           if(!keyCapStream.getAudioTracks().length){
-            out.textContent='no audio — pick a TAB and tick "Share tab audio"';
+            out.textContent='no audio in share — on phone use Mic + speakers; on desktop share a TAB + tick audio';
             keyCapStream.getTracks().forEach(t=>t.stop()); keyCapStream=null;
           } else {
             keyCapStream.getVideoTracks().forEach(t=>t.stop());
             capSrcNode=_AC.createMediaStreamSource(keyCapStream);
+            out.textContent='capture audio on · estimating tempo...';
           }
-        }catch(e){ out.textContent='capture cancelled'; }
+        }catch(e){
+          out.textContent='capture cancelled — on phone use Mic (speakers, no headphones)';
+        }
       } else {
-        out.textContent='capture not supported on this browser';
+        out.textContent='capture not supported — use Mic with speakers on';
       }
       if(capSrcNode){
         keyAnCap=_AC.createAnalyser(); keyAnCap.fftSize=2048;
@@ -9623,6 +9675,9 @@ updateKeySigDisplay();
     if(keyMicStream){ keyMicStream.getTracks().forEach(t=>t.stop()); keyMicStream=null; }
     if(keyCapStream){ keyCapStream.getTracks().forEach(t=>t.stop()); keyCapStream=null; }
     keyAnCap=null;
+    try{ if(keyFileSrc){ keyFileSrc.stop(); } }catch(e){}
+    try{ if(keyAnFile){ keyAnFile.disconnect(); } }catch(e){}
+    keyFileSrc=null; keyFileBuf=null; keyAnFile=null;
     try{ if(keyAnInt) _MASTER.disconnect(keyAnInt); }catch(e){}
     keyAnInt=null; keyAnMic=null;
     const btn=document.getElementById('btnKeyDetect');
