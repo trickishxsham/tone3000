@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite66';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite67';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8559,7 +8559,7 @@ updateKeySigDisplay();
   // Energy sampling for tempo detection
   function sampleEnergy(){
     let sum=0, cnt=0;
-    [keyAnInt, keyAnMic, keyAnCap].forEach(an=>{
+    [keyAnInt, keyAnMic, keyAnCap, keyAnFile].forEach(an=>{
       if(!an) return;
       const buf=new Float32Array(an.fftSize);
       an.getFloatTimeDomainData(buf);
@@ -9503,11 +9503,12 @@ updateKeySigDisplay();
             keyFileSrc.buffer=keyFileBuf;
             keyFileSrc.loop=true;
             keyFileSrc.connect(keyAnFile);
-            // hear it while analysing
+            // hear while analysing (single path — avoid double via _MASTER)
             try{ keyAnFile.connect(_AC.destination); }catch(e){}
-            try{ if(_MASTER) keyFileSrc.connect(_MASTER); }catch(e){}
             keyFileSrc.start(0);
-            keyTimers.push(setInterval(function(){ if(keyDetectActive) collectPitch(keyAnFile); },110));
+            keyTimers.push(setInterval(function(){ if(keyDetectActive) collectPitch(keyAnFile); },80));
+            // prime energy so tempo phase is not stuck waiting on empty history
+            for(let _i=0;_i<5;_i++) try{ sampleEnergy(); }catch(e){}
             out.textContent='playing '+file.name+' · estimating tempo...';
             keyFileSrc.onended=function(){ try{ keyFileSrc=null; }catch(e){} };
           }
@@ -9575,14 +9576,18 @@ updateKeySigDisplay();
       const twoBarsMs=Math.max(3200, Math.min(16000, beatMs*8));
 
       if(_listenPhase==='tempo'){
-        if(useBpm && lastBpmReads.length>=4 && energyHistory.length>=60){
+        // File source: less energy history needed (signal is continuous)
+        const needE = keyAnFile ? 30 : 60;
+        const needB = keyAnFile ? 2 : 4;
+        if(useBpm && lastBpmReads.length>=needB && energyHistory.length>=needE){
           _listenPhase='bars';
           _listenPhaseAt=now;
           _barsAccumStart=now;
           pitchHistory=[]; pitchTimestamps=[]; // clean window for first 2 bars
           out.textContent='tempo ~'+useBpm+' BPM · listening 2 bars...';
         } else {
-          out.textContent='estimating tempo'+(bpm?(' ~'+bpm):'')+'...';
+          const hint = keyAnFile ? ' (file)' : '';
+          out.textContent='estimating tempo'+(bpm?(' ~'+bpm):'')+hint+'...';
         }
         return;
       }
