@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite68';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite69';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9444,13 +9444,20 @@ updateKeySigDisplay();
     else out.textContent='estimating tempo...';
 
     if(src==='internal'||src==='both'){
+      // lite69: hear FULL app mix — BK is on _BKGAIN→_MASTERCLIP, NOT on _MASTER
       keyAnInt=_AC.createAnalyser(); keyAnInt.fftSize=2048;
-      try{ _MASTER.connect(keyAnInt); }catch(e){}
+      try{ if(_MASTER) _MASTER.connect(keyAnInt); }catch(e){}
+      try{ if(_BKGAIN) _BKGAIN.connect(keyAnInt); }catch(e){}
+      try{ if(_MASTERCLIP) _MASTERCLIP.connect(keyAnInt); }catch(e){}
       keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnInt); },80));
-      // seed app BPM so tempo phase does not hang on weak flux
+      // Soft tempo seed: prefer playing track BPM, else metronome (refine from audio)
       try{
-        const ab=(typeof mBpm==='number'&&mBpm>=30)?mBpm:(typeof window.getBPM==='function'?window.getBPM():0);
-        if(ab){ lockedBpm=Math.round(ab); lastBpmReads=[ab,ab,ab]; _bpmEma=ab; }
+        let ab=0;
+        const bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack&&window.BackingTracks.getCurrentTrack();
+        if(bt && (bt.bpm||bt.tempo)) ab=Math.round(Number(bt.bpm||bt.tempo));
+        if(!ab && typeof mBpm==='number'&&mBpm>=30) ab=mBpm;
+        if(!ab && typeof window.getBPM==='function') ab=window.getBPM()||0;
+        if(ab>=30 && ab<=300){ lockedBpm=ab; lastBpmReads=[ab,ab,ab]; _bpmEma=ab; }
       }catch(e){}
     }
     if(src==='mic'||src==='both'){
@@ -9701,7 +9708,9 @@ updateKeySigDisplay();
     try{ if(keyFileSrc){ keyFileSrc.stop(); } }catch(e){}
     try{ if(keyAnFile){ keyAnFile.disconnect(); } }catch(e){}
     keyFileSrc=null; keyFileBuf=null; keyAnFile=null;
-    try{ if(keyAnInt) _MASTER.disconnect(keyAnInt); }catch(e){}
+    try{ if(keyAnInt){ if(_MASTER) _MASTER.disconnect(keyAnInt); } }catch(e){}
+    try{ if(keyAnInt && _BKGAIN) _BKGAIN.disconnect(keyAnInt); }catch(e){}
+    try{ if(keyAnInt && _MASTERCLIP) _MASTERCLIP.disconnect(keyAnInt); }catch(e){}
     keyAnInt=null; keyAnMic=null;
     const btn=document.getElementById('btnKeyDetect');
     if(btn){ btn.textContent='🎵 LISTEN KEY/BPM'; btn.style.background='#16a34a'; }
