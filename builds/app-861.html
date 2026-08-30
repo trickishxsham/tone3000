@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite67';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite68';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9445,8 +9445,13 @@ updateKeySigDisplay();
 
     if(src==='internal'||src==='both'){
       keyAnInt=_AC.createAnalyser(); keyAnInt.fftSize=2048;
-      _MASTER.connect(keyAnInt);                       // persistent tap on synth bus
-      keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnInt); },110));
+      try{ _MASTER.connect(keyAnInt); }catch(e){}
+      keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnInt); },80));
+      // seed app BPM so tempo phase does not hang on weak flux
+      try{
+        const ab=(typeof mBpm==='number'&&mBpm>=30)?mBpm:(typeof window.getBPM==='function'?window.getBPM():0);
+        if(ab){ lockedBpm=Math.round(ab); lastBpmReads=[ab,ab,ab]; _bpmEma=ab; }
+      }catch(e){}
     }
     if(src==='mic'||src==='both'){
       if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -9559,35 +9564,48 @@ updateKeySigDisplay();
       const spice=(typeof _spice==='function')?_spice():(window.__spice!=null?window.__spice:0.18);
 
       // ── Phase 1: estimate tempo (refine continuously) ──
+      // App audio: seed from metronome/transport BPM so we never hang
+      let appBpm=0;
+      try{
+        if(typeof mBpm==='number' && mBpm>=30 && mBpm<=300) appBpm=mBpm;
+        else if(typeof window.getBPM==='function') appBpm=window.getBPM()||0;
+      }catch(e){}
+      if(keyAnInt && !keyAnFile && !keyAnMic && !keyAnCap && appBpm){
+        if(!lockedBpm) lockedBpm=Math.round(appBpm);
+        if(lastBpmReads.length<4) lastBpmReads.push(Math.round(appBpm));
+      }
       const bpm=estimateTempo();
       if(bpm){
         lastBpmReads.push(bpm);
         if(lastBpmReads.length>20) lastBpmReads.shift();
-        if(lastBpmReads.length>=6){
+        if(lastBpmReads.length>=4){
           const sorted=lastBpmReads.slice().sort(function(a,b){return a-b;});
           const lo=Math.floor(sorted.length*0.15), hi=Math.ceil(sorted.length*0.85);
           const mid=sorted.slice(lo, hi);
           lockedBpm=mid[Math.floor(mid.length/2)];
         }
       }
-      const useBpm=lockedBpm||bpm||0;
+      const useBpm=lockedBpm||bpm||appBpm||0;
       const beatMs=60000/(useBpm||100);
-      // 2 bars of 4/4 = 8 beats (at 60 BPM → 8s)
       const twoBarsMs=Math.max(3200, Math.min(16000, beatMs*8));
 
       if(_listenPhase==='tempo'){
-        // File source: less energy history needed (signal is continuous)
-        const needE = keyAnFile ? 30 : 60;
-        const needB = keyAnFile ? 2 : 4;
-        if(useBpm && lastBpmReads.length>=needB && energyHistory.length>=needE){
+        const elapsed=now-(_listenPhaseAt||now);
+        const needE = (keyAnFile || keyAnInt) ? 25 : 50;
+        const needB = (keyAnFile || (keyAnInt && appBpm)) ? 1 : 3;
+        // Hard timeout: never stay on estimating > 2.5s if we have any BPM candidate
+        const ready = (useBpm && lastBpmReads.length>=needB && energyHistory.length>=needE)
+                   || (useBpm && elapsed>2500)
+                   || (appBpm && keyAnInt && elapsed>800);
+        if(ready && useBpm){
+          if(!lockedBpm) lockedBpm=Math.round(useBpm);
           _listenPhase='bars';
           _listenPhaseAt=now;
           _barsAccumStart=now;
-          pitchHistory=[]; pitchTimestamps=[]; // clean window for first 2 bars
-          out.textContent='tempo ~'+useBpm+' BPM · listening 2 bars...';
+          pitchHistory=[]; pitchTimestamps=[];
+          out.textContent='tempo ~'+Math.round(useBpm)+' BPM · listening 2 bars...';
         } else {
-          const hint = keyAnFile ? ' (file)' : '';
-          out.textContent='estimating tempo'+(bpm?(' ~'+bpm):'')+hint+'...';
+          out.textContent='estimating tempo'+(useBpm?(' ~'+Math.round(useBpm)):(bpm?(' ~'+bpm):''))+'...';
         }
         return;
       }
