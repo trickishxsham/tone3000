@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite88';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite92';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1002,7 +1002,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <button data-walk="seq">JIMI</button>
     <button data-walk="dhex" data-tip-title="DACTYLIC HEXAMETER" data-tip="The epic meter as a walk. Each line = 6 feet = 24 bars: feet are DACTYLS (long-short-short) or SPONDEES (long-long), a long syllable holds a scale 2 bars, a short 1 bar. Feet 1-4 lean dactylic, the 5th is (almost) always a dactyl, the 6th always a spondee - so every line lands with weight. Long syllables anchor on consonant scales; shorts pass through 1-note glides.">D.HEX</button>
     <button data-walk="free" data-tip-title="FREE - F# MINOR TRACK" data-tip="The scale SIZE follows the meter: short bars = pentatonic, mid = hexatonic, long = heptatonic. Plays the current key's aeolian (+ dorian/phrygian borrows), so set any minor key. Pair with the FREE time signature (the 61-bar pi progression).">FREE</button>
-    <button data-walk="glide" data-tip-title="GLIDE · 1-NOTE" data-tip="Each bar moves to a scale exactly ONE note different — smooth single-semitone voice-leading, like walking the hive. Every step is provably 1 note away.">GLIDE</button>
+    <button data-walk="glide" data-tip-title="G11DE · DECATONIC 11" data-tip="Walk the rule of 11. Major-side (no m2 devil): TRiCkiSh ↔ Blues ↔ Classical. Minor-side (no b5 devil): Classical ↔ ShAM ↔ Jazz. Never 12. Mostly hexatonics ≤3 consecutive; penta/hepta allowed. Knows all 12 keys' devils.">G11DE</button>
     <button data-walk="custom" data-tip-title="CUSTOM" data-tip="Define your own scale sequence bar by bar using note count buttons." class="expert-only">CUSTOM</button>
     <button data-walk="chord" data-tip-title="CHORD" data-tip="Auto-select scales that fit a chord progression you define." class="expert-only">CHORD</button>
     <button data-walk="bktrk" data-tip-title="BKTRK · YOUR TRACK" data-tip="Play to your own saved backing track. Loads its key + tempo, plays the audio, and auto-follows its chord changes with similar-note / similar-colour scales." class="expert-only">BKTRK</button>
@@ -4386,7 +4386,40 @@ function createInstance(prefix, chordsAlwaysOn){
 
   function getColor(e){return SEMI_COLOR[e.absSemi];}
   function getIntLabel(e){return viewMode==='cionian'?CI_INT[e.absSemi]:e.intName;}
-  function getStart(shape){const ki=NOTES.indexOf(currentKey);const res=C_START[currentMode][shape]+ki+octOffset;return res<0?res+12:res;}
+  // lite89: each of 3 segments can sit in its own octave window (start fret 0–22)
+  let segOctOffset = {};
+  function randomizeSegOctaves(){
+    try{
+      const shapes=Object.keys(C_START[currentMode]||{});
+      const ki=NOTES.indexOf(currentKey);
+      const next={};
+      shapes.forEach(function(sh){
+        const base=(C_START[currentMode][sh]|0)+ki+(octOffset|0);
+        const opts=[];
+        [-24,-12,0,12,24].forEach(function(off){
+          const st=base+off;
+          if(st>=0 && st<=22) opts.push(off);
+        });
+        if(!opts.length){
+          let st=base;
+          while(st>22) st-=12;
+          while(st<0) st+=12;
+          next[sh]=st-base;
+        } else {
+          next[sh]=opts[Math.floor(Math.random()*opts.length)];
+        }
+      });
+      segOctOffset=next;
+    }catch(e){ segOctOffset={}; }
+  }
+  function getStart(shape){
+    const ki=NOTES.indexOf(currentKey);
+    const extra=(segOctOffset&&segOctOffset[shape])|0;
+    let res=C_START[currentMode][shape]+ki+octOffset+extra;
+    if(res<0) res+=12;
+    while(res>22) res-=12;
+    return res;
+  }
   // end fret of a shape at a given octave offset = start + span - 1 (the last visible fret)
   function shapeEnd(shape,off){ const ki=NOTES.indexOf(currentKey); return C_START[currentMode][shape]+ki+off+getSpan(shape)-1; }
   function shapeStart(shape,off){ const ki=NOTES.indexOf(currentKey); return C_START[currentMode][shape]+ki+off; }
@@ -6797,49 +6830,198 @@ function applyWalkEntry(inst, nx){
     inst.setScale(nx[0],nx[1],nx[2],nx[4]);
   }
 }
-// GLIDE: return a scale exactly ONE note different from the current one (single-semitone voice-leading).
-// Guaranteed 1-note-away by construction — moves one note ±1 semitone with no collision.
-function nextScaleGlide(st){
-  const as = window.ACTIVE_SCALE || { semis:(MODE_SEMITONES[st.mode]||MODE_SEMITONES['IONIAN']).slice(), root:NOTES.indexOf(st.key) };
-  const root=((as.root||0)%12+12)%12;
-  const pcs=(as.semis||[]).map(s=>((s+root)%12+12)%12);
-  const set=new Set(pcs);
-  const moves=[];
-  for(const p of pcs){ for(const d of [1,-1]){ const np=((p+d)%12+12)%12; if(set.has(np)) continue;
-    const ns=new Set(set); ns.delete(p); ns.add(np); moves.push([...ns]); } }
-  if(!moves.length) return [st.key,st.mode,st.alt];
-  // ── v583: GLIDE OBEYS THE NAMING RULE TOO ─────────────────────────────────
-  //  Every other walk was taught that an unnamed shape is not a destination, but glide
-  //  emitted raw COLOUR sets straight from a chromatic neighbour move — so a single
-  //  glide step could drop the walk onto a nameless pentatonic, which is exactly what
-  //  must never happen. Score each move by whether the landing shape has a real name
-  //  ON ITS OWN ROOT, and keep only the named ones when any exist.
-  const nameOf=(chosen)=>{
-    const sorted=chosen.slice().sort((a,b)=>a-b);
-    for(const nr of sorted){                       // any note in the set may be the root
-      const rel=sorted.map(pc=>((pc-nr)%12+12)%12).sort((a,b)=>a-b);
-      const key=rel.join(',');
-      let nm=null;
-      if(rel.length===5)      nm=pentaNameFor(key) || derivedPentaNameSet(rel);
-      else if(rel.length===6) nm=hexAnyName(rel);
-      else if(rel.length===7){ for(const m of MODE_ORDER) if(MODE_SEMITONES[m].join(',')===key){ nm=m; break; } }
-      if(nm) return {nr, nm, rel};
-    }
-    return null;
+// ═══════════════════════════════════════════════════════════════
+// G11DE — decatonic rule-of-11 walk (replaces GLIDE)
+// 5 key styles · major-side (devil=m2) · minor-side (devil=b5)
+// Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz · never 12
+// Mostly hexa (≤3 consecutive); penta + hepta/alts allowed when legal
+// ═══════════════════════════════════════════════════════════════
+const G11DE = (function(){
+  const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  // relative 11-note pools (no devil)
+  const MAJ_SIDE = [0,2,3,4,5,6,7,8,9,10,11]; // no m2
+  const MIN_SIDE = [0,1,2,3,4,5,7,8,9,10,11]; // no b5
+  const STYLES = {
+    myMaj:     { side:'maj', rel:[0,2,4,5,6,7,8,9,10,11], modes:['IONIAN','LYDIAN','MIXOLYDIAN'], label:'TRiCkiSh' },
+    blues:     { side:'maj', rel:[0,2,3,4,5,6,7,9,10,11], modes:['DORIAN','MIXOLYDIAN','IONIAN','LYDIAN'], label:'Blues' },
+    classical: { side:'both', rel:[0,2,3,4,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','MIXOLYDIAN','IONIAN'], label:'Classical' },
+    myMin:     { side:'min', rel:[0,1,2,3,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','PHRYGIAN'], label:'ShAM' },
+    jazz:      { side:'min', rel:[0,1,2,3,4,5,7,8,10,11], modes:['PHRYGIAN','AEOLIAN','DORIAN'], label:'Jazz' }
   };
-  const scored=moves.map(mv=>({mv, hit:nameOf(mv)}));
-  const named=scored.filter(s=>s.hit);
-  const pool=named.length?named:scored;            // soft: never dead-end the glide
-  const pick=pool[Math.floor(Math.random()*pool.length)];
-  if(pick.hit){
-    // a real, named scale — hand it over as a proper walk entry
-    return [NOTES[pick.hit.nr],'COLOUR','NA',{ semis:pick.hit.rel, name:pick.hit.nm, realName:pick.hit.nm, parentMode:'IONIAN' }];
+  const NBR = {
+    myMaj:['blues','classical'], blues:['myMaj','classical'],
+    classical:['myMaj','blues','myMin','jazz'],
+    myMin:['classical','jazz'], jazz:['classical','myMin']
+  };
+  const FORBIDDEN = {
+    'myMaj|myMin':1,'myMin|myMaj':1,'myMaj|jazz':1,'jazz|myMaj':1,
+    'blues|jazz':1,'jazz|blues':1,'blues|myMin':1,'myMin|blues':1
+  };
+  // Devil table: major-side tonic → m2; minor-side tonic → b5
+  function devil(root, side){
+    const R=((root%12)+12)%12;
+    return side==='maj' ? (R+1)%12 : (R+6)%12;
   }
-  const chosen=pick.mv.slice().sort((a,b)=>a-b);
-  const nr=chosen[0];                                   // root at lowest note so COLOUR semis start at 0
-  const semis=chosen.map(pc=>((pc-nr)%12+12)%12).sort((a,b)=>a-b);
-  return [NOTES[nr],'COLOUR','NA',{ semis, name:'1-note glide', parentMode:'IONIAN' }];
+  function devilName(root, side){ return NAMES[devil(root, side)]; }
+  // All 12 keys — major-side devil (m2) and minor-side devil (b5)
+  const DEVIL_MAJ = {}; const DEVIL_MIN = {};
+  for(let r=0;r<12;r++){
+    DEVIL_MAJ[NAMES[r]] = NAMES[(r+1)%12];
+    DEVIL_MIN[NAMES[r]+'m'] = NAMES[(r+6)%12];
+  }
+  let style = 'classical';
+  let side = 'maj'; // 'maj' | 'min'
+  function compat(a,b){
+    if(!a||!b||a===b) return true;
+    if(FORBIDDEN[a+'|'+b]) return false;
+    return true;
+  }
+  function maxRun(semis){
+    if(!semis||!semis.length) return 0;
+    if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis);
+    const ext=semis.concat(semis.map(x=>x+12));
+    let best=1, run=1;
+    for(let i=1;i<ext.length;i++){
+      if(ext[i]-ext[i-1]===1){ run++; if(run>best) best=run; } else run=1;
+    }
+    return Math.min(best, semis.length);
+  }
+  function poolSet(root, st){
+    const spec=STYLES[st]||STYLES.classical;
+    const set={};
+    (spec.rel||[]).forEach(function(x){ set[(x+root)%12]=1; });
+    return set;
+  }
+  function inPool(pcs, set){
+    for(let i=0;i<(pcs||[]).length;i++) if(!set[pcs[i]]) return false;
+    return true;
+  }
+  function detectSide(stKey, mode){
+    const m=(mode||'').toUpperCase();
+    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(m)) return 'min';
+    if(/IONIAN|LYDIAN|MIXOLYDIAN/.test(m)) return 'maj';
+    if(stKey==='myMin'||stKey==='jazz') return 'min';
+    if(stKey==='myMaj'||stKey==='blues') return 'maj';
+    return side;
+  }
+  function pickStyle(sideNow, cur){
+    const allowed = sideNow==='maj'
+      ? ['myMaj','blues','classical']
+      : ['classical','myMin','jazz'];
+    let pool = allowed.filter(function(s){ return compat(cur, s) && ((NBR[cur]||[]).indexOf(s)>=0 || s===cur); });
+    if(!pool.length) pool = allowed.slice();
+    // stay often; neighbour sometimes
+    if(pool.indexOf(cur)>=0 && Math.random()<0.55) return cur;
+    return pool[Math.floor(Math.random()*pool.length)];
+  }
+  function buildHexas(root, stKey){
+    const set=poolSet(root, stKey);
+    const spec=STYLES[stKey]||STYLES.classical;
+    const out=[];
+    const modes=spec.modes||['IONIAN'];
+    modes.forEach(function(m){
+      const base=(typeof MODE_SEMITONES!=='undefined' && MODE_SEMITONES[m]) ? MODE_SEMITONES[m].slice() : [0,2,4,5,7,9,11];
+      // hepta if legal
+      const pcs7=base.map(function(x){ return (x+root)%12; });
+      if(inPool(pcs7, set) && maxRun(base)<=3){
+        out.push({kind:'hepta', mode:m, alt:'NA', semis:base.slice(), pcs:pcs7, name:m});
+      }
+      // hexas = exclude 1
+      for(let ex=0;ex<base.length;ex++){
+        const semis=base.filter(function(_,i){ return i!==ex; });
+        if(maxRun(semis)>3) continue;
+        const pcs=semis.map(function(x){ return (x+root)%12; });
+        if(!inPool(pcs, set)) continue;
+        let nm=m+' hex';
+        try{
+          if(typeof HEX_NAMES!=='undefined' && HEX_NAMES[m] && HEX_NAMES[m][ex]) nm=HEX_NAMES[m][ex];
+          else if(typeof hexAnyName==='function') nm=hexAnyName(semis)||nm;
+        }catch(e){}
+        out.push({kind:'hexa', mode:m, alt:'NA', semis:semis, pcs:pcs, name:nm, ex:ex});
+      }
+      // pentas from mode (drop 2) — sparse
+      if(Math.random()<0.35){
+        for(let a=0;a<base.length;a++){
+          for(let b=a+1;b<base.length;b++){
+            const semis=base.filter(function(_,i){ return i!==a && i!==b; });
+            if(semis.length!==5 || maxRun(semis)>3) continue;
+            const pcs=semis.map(function(x){ return (x+root)%12; });
+            if(!inPool(pcs, set)) continue;
+            let nm='penta';
+            try{ if(typeof pentaNameFor==='function') nm=pentaNameFor(semis.join(','))||nm; }catch(e){}
+            out.push({kind:'penta', mode:m, alt:'NA', semis:semis, pcs:pcs, name:nm});
+          }
+        }
+      }
+    });
+    return out;
+  }
+  function next(st){
+    const root = (NOTES.indexOf(st.key)+12)%12;
+    // side from current mode / style memory
+    side = detectSide(style, st.mode);
+    // optional style neighbour step (rule of 11)
+    if(Math.random()<0.28){
+      style = pickStyle(side, style);
+      if(style==='myMaj'||style==='blues') side='maj';
+      else if(style==='myMin'||style==='jazz') side='min';
+    }
+    const cands = buildHexas(root, style);
+    if(!cands.length){
+      // fallback: ionian/aeolian hex
+      const m = side==='maj'?'IONIAN':'AEOLIAN';
+      const base=(MODE_SEMITONES[m]||[0,2,4,5,7,9,11]).slice();
+      const semis=base.filter(function(_,i){ return i!==base.length-1; });
+      return [st.key,'COLOUR','NA',{ semis:semis, name:'G11DE '+m+' hex', realName:'G11DE', parentMode:m }];
+    }
+    // prefer hexa, then penta, then hepta; voice-lead 1 note from last when possible
+    const as = window.ACTIVE_SCALE || {};
+    const prevRoot = ((as.root||root)%12+12)%12;
+    const prevPcs = (as.semis||[]).map(function(s){ return (s+prevRoot)%12; });
+    function symDiff(a,b){
+      const A={}, B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
+      let d=0; for(const k in A) if(!B[k]) d++; for(const k in B) if(!A[k]) d++; return d;
+    }
+    cands.forEach(function(c){
+      c.sc = (c.kind==='hexa'?3:c.kind==='penta'?1.2:0.6) + Math.random()*0.4;
+      if(prevPcs.length){
+        const d=symDiff(prevPcs, c.pcs);
+        if(d<=1) c.sc += 2.0;
+        else if(d<=2) c.sc += 0.8;
+        else c.sc -= 0.5;
+      }
+    });
+    cands.sort(function(a,b){ return b.sc-a.sc; });
+    const pick=cands[0];
+    const dvl = devilName(root, side);
+    const label = (STYLES[style]&&STYLES[style].label)||style;
+    const nm = pick.name+' · '+label+' · devil '+dvl;
+    return [st.key, 'COLOUR', 'NA', {
+      semis: pick.semis.slice(),
+      name: nm,
+      realName: pick.name,
+      parentMode: pick.mode||'IONIAN',
+      g11de: { style:style, side:side, devil:dvl, kind:pick.kind }
+    }];
+  }
+  return {
+    next: next,
+    DEVIL_MAJ: DEVIL_MAJ,
+    DEVIL_MIN: DEVIL_MIN,
+    STYLES: STYLES,
+    setStyle: function(s){ if(STYLES[s]) style=s; },
+    getStyle: function(){ return style; },
+    getSide: function(){ return side; }
+  };
+})();
+window.G11DE = G11DE;
+// G11DE walk step (data-walk still "glide" for compatibility)
+function nextScaleGlide(st){
+  try{ return G11DE.next(st); }catch(e){
+    return [st.key, st.mode||'IONIAN', st.alt||'NA'];
+  }
 }
+
 let _lastTickAt=0;
 function metTick(){
   // v675: swallow any duplicate tick that lands inside half a beat. Whatever fires it - a stray
@@ -6852,8 +7034,18 @@ function metTick(){
   if(!bkAudioActive) metClick(beat===0);   // BKTRK: silent — your track carries the time
   renderDots(beat);
   if(beat===0 && mCount>0){           // downbeat of a new bar → maybe change scale
-    if(_walkHoldable() && _barsLeft>1){
-      _barsLeft--;                     // hold the current scale for another bar
+    // lite90: track transport already runs — LISTEN follows THESE bar lines
+    var listenOwns=false;
+    try{
+      listenOwns=!!window.__listenFollowActive;
+      if(listenOwns && typeof window.__listenOnMetBar==='function'){
+        window.__listenOnMetBar();
+      }
+    }catch(e){}
+    if(listenOwns){
+      // do not let walk steal the board while LISTEN+Follow is coaching
+    } else if(_walkHoldable() && _barsLeft>1){
+      _barsLeft--;
     } else {
       walkAdvance();
     }
@@ -9025,9 +9217,14 @@ updateKeySigDisplay();
   }
   function _devilStatusSuffix(){
     if(!_iaLocked) return ' · locking Ionian/Aeolian';
-    if(!_devilName) return '';
+    let seed='';
+    try{
+      const s=window.__listenKeySeed;
+      if(s&&s.key) seed=' · label '+(s.maj?s.key:s.key+'m')+(s.src?(' via '+s.src):'');
+    }catch(e){}
+    if(!_devilName) return seed;
     const fam=_styleFamily==='majSide'?'major-side':(_styleFamily==='minSide'?'minor-side':'side');
-    return ' · devil '+_devilName+' ('+fam+')';
+    return seed+' · devil '+_devilName+' ('+fam+')';
   }
   function _getKeyStyle(){
     try{
@@ -9458,20 +9655,85 @@ updateKeySigDisplay();
   }
   // lite60: phased listen — tempo → 2 bars Ionian/Aeolian → decatonic → hold 2 bars
   let _listenPhase='tempo', _listenPhaseAt=0, _barsAccumStart=0;
+  function _parseKeyLabel(str){
+    // Understand track labels: "E major", "Em", "EM", "E minor", "key of Am", "F#m", "Bb major"
+    if(!str) return null;
+    const s=String(str).trim();
+    const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const flat={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#','CB':'B','FB':'E'};
+    // explicit major/minor words
+    let m=s.match(/\b([A-Ga-g](?:#|b|♯|♭)?)\s*[-_]?\s*(major|maj|minor|min|m)\b/i);
+    if(!m) m=s.match(/\bkey\s+of\s+([A-Ga-g](?:#|b|♯|♭)?)\s*(m|minor|maj|major)?\b/i);
+    if(!m) m=s.match(/\b([A-Ga-g](?:#|b|♯|♭)?)(m)\b/); // Em, F#m
+    if(!m) m=s.match(/\b([A-Ga-g](?:#|b|♯|♭)?)\b/); // bare letter last resort
+    if(!m) return null;
+    let k=m[1].toUpperCase().replace('♯','#').replace('♭','b');
+    if(flat[k]) k=flat[k];
+    if(k.indexOf('B')===0 && k.length===2 && k[1]==='B') k='A#'; // Bb already in flat map as BB
+    const qual=(m[2]||'').toLowerCase();
+    let maj=true;
+    if(qual==='m'||qual==='min'||qual==='minor') maj=false;
+    if(qual==='maj'||qual==='major') maj=true;
+    if(names.indexOf(k)<0) return null;
+    return {key:k, maj:maj};
+  }
   function _seedIaFromBoard(){
-    // Backing tracks already set the board key — confirm, don't rediscover from zero
+    // Track key label (E major / Em) is the start — listen confirms (may correct if wrong)
     try{
       const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-      let k=null, maj=true;
-      if(typeof currentKey==='string' && currentKey){
-        k=currentKey.replace(/m$/i,'').replace('b','#').toUpperCase();
-        // map flats roughly
-        const flat={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
-        if(flat[k]) k=flat[k];
-        maj = !/m$/i.test(currentKey) && !(typeof currentMode==='string' && /AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/i.test(currentMode));
-        if(typeof currentMode==='string'){
-          if(/AEOLIAN|DORIAN|PHRYGIAN/i.test(currentMode)) maj=false;
-          if(/IONIAN|LYDIAN|MIXOLYDIAN/i.test(currentMode)) maj=true;
+      let k=null, maj=true, src='board';
+      // 1) Current backing track object (title + key + min)
+      try{
+        const bt=window.BackingTracks&&window.BackingTracks.getCurrentTrack&&window.BackingTracks.getCurrentTrack();
+        if(bt){
+          if(bt.key){
+            k=String(bt.key).replace(/m$/i,'').toUpperCase().replace('B','B');
+            const flat={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
+            if(flat[k]) k=flat[k];
+            maj=!(bt.min||bt.isMinor||bt.minor);
+            src='track.key';
+          }
+          // title often carries "E major" / "Em" even when key field is off
+          const fromTitle=_parseKeyLabel(bt.title||bt.name||'');
+          if(fromTitle){
+            // title wins when explicit major/minor word present
+            if(/major|minor|\bm\b|maj|min/i.test(bt.title||bt.name||'')){
+              k=fromTitle.key; maj=fromTitle.maj; src='track.title';
+            } else if(!k){ k=fromTitle.key; maj=fromTitle.maj; src='track.title'; }
+          }
+        }
+      }catch(e){}
+      // 2) last track cache
+      if(!k){
+        try{
+          const lt=window.__lastBkTrack;
+          if(lt){
+            const fromTitle=_parseKeyLabel(lt.title||lt.name||'');
+            if(lt.key){
+              k=String(lt.key).replace(/m$/i,'').toUpperCase();
+              maj=!(lt.min||lt.isMinor);
+              src='lastBk.key';
+            }
+            if(fromTitle && /major|minor|maj|min|\bm\b/i.test(lt.title||lt.name||'')){
+              k=fromTitle.key; maj=fromTitle.maj; src='lastBk.title';
+            }
+          }
+        }catch(e){}
+      }
+      // 3) Board currentKey / mode
+      if(!k && typeof currentKey==='string' && currentKey){
+        const fromBoard=_parseKeyLabel(currentKey) || _parseKeyLabel(currentKey+(typeof currentMode==='string'&&/AEOLIAN|DORIAN|PHRYGIAN/i.test(currentMode)?'m':''));
+        if(fromBoard){ k=fromBoard.key; maj=fromBoard.maj; src='board'; }
+        else {
+          k=currentKey.replace(/m$/i,'').toUpperCase();
+          const flat={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
+          if(flat[k]) k=flat[k];
+          maj = !/m$/i.test(currentKey);
+          if(typeof currentMode==='string'){
+            if(/AEOLIAN|DORIAN|PHRYGIAN/i.test(currentMode)) maj=false;
+            if(/IONIAN|LYDIAN|MIXOLYDIAN/i.test(currentMode)) maj=true;
+          }
+          src='board';
         }
       }
       const R=names.indexOf(k);
@@ -9479,6 +9741,7 @@ updateKeySigDisplay();
       if(maj){ _iaIonian=R; _iaAeolian=(R+9)%12; _homeRoot=R; _homeMaj=true; }
       else { _iaAeolian=R; _iaIonian=(R+3)%12; _homeRoot=R; _homeMaj=false; }
       _iaLocked=true; _iaLockAt=Date.now(); _homeSetAt=Date.now();
+      try{ window.__listenKeySeed={key:k, maj:maj, src:src}; }catch(e){}
       return true;
     }catch(e){ return false; }
   }
@@ -9517,11 +9780,12 @@ updateKeySigDisplay();
     if(_iaIonian==null){
       _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now(); _iaLocked=false;
     } else if(ionian!==_iaIonian){
-      // slow to change — basic major/minor must be solid
-      if((Date.now()-_homeSetAt)>8000 && bestSc>0.32){
+      // seed is a start — if audio strongly disagrees, revise (label may be wrong)
+      if((Date.now()-_homeSetAt)>6000 && bestSc>0.38){
         _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now();
-        _iaLocked=false; _iaLockAt=0;
+        _iaLocked=true; _iaLockAt=Date.now();
         _lastPickPcs=null; _lastPickKey=''; _autoStyle=null; _styleFamily=null;
+        try{ window.__listenKeySeed={key:['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_homeRoot], maj:_homeMaj, src:'audio-revise'}; }catch(e){}
       }
     } else {
       // same ionian held — confirm quickly (board seed already locks)
@@ -9741,6 +10005,7 @@ updateKeySigDisplay();
   function _applyListenScale(choice){
     if(!choice) return;
     try{
+      try{ if(typeof randomizeSegOctaves==='function') randomizeSegOctaves(); }catch(e){}
       const keyName=choice.key||'C';
       const root=(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].indexOf(keyName));
       const R=(root>=0)?root:0;
@@ -9876,6 +10141,8 @@ updateKeySigDisplay();
     return out;
   }
   let _barChoice=null, _barUntil=0, _lastFollowKey='';
+  let _listenBarsLeft=2;
+
 
   function collectPitch(analyser){
     const buf=new Float32Array(analyser.fftSize);
@@ -9892,6 +10159,8 @@ updateKeySigDisplay();
     const btn=document.getElementById('btnKeyDetect'), out=document.getElementById('keyResult');
     if(btn){ btn.textContent='⏹ STOP'; btn.style.background='#dc2626'; }   // listen state on the in-block button
     keyDetectActive=true; pitchHistory=[]; pitchTimestamps=[];
+    _listenBarsLeft=2;
+    try{ window.__listenFollowActive=!!(document.getElementById('keyFollowScale')&&document.getElementById('keyFollowScale').checked); }catch(e){ window.__listenFollowActive=true; }
     try{ _seedIaFromBoard(); }catch(e){}
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
     _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
@@ -10036,6 +10305,10 @@ updateKeySigDisplay();
     keyTimers.push(setInterval(()=>{
       if(!keyDetectActive) return;
       if(!out) return;
+      try{
+        const f=document.getElementById('keyFollowScale');
+        window.__listenFollowActive=!!(f && f.checked);
+      }catch(e){}
       const now=Date.now();
       const spice=(typeof _spice==='function')?_spice():(window.__spice!=null?window.__spice:0.18);
 
@@ -10154,15 +10427,14 @@ updateKeySigDisplay();
         }
       }
 
-      // ── Phase 3: Parker buffer — decide on last 1 bar, show hexa for 2 bars ──
-      // Player is ~1 bar behind the track; we throw language they can answer in
-      const recent=_recentPitches(oneBarMs);
-      const hist=_histFromPitches(recent.length>=4?recent:(pitchHistory||[]));
-      if(_listenPhase==='locked' && (!_barChoice || now>=_barUntil)){
+      // ── Phase 3: metronome owns the clock — 2 full bars per scale ──
+      const recent=_recentPitches(twoBarsMs);
+      const hist=_histFromPitches(recent.length>=6?recent:(pitchHistory||[]));
+      const metOn=!!(typeof mPlaying!=='undefined' && mPlaying);
+      function _commitListenPick(){
         _inferHome(hist, null);
         if(_isStyleAuto() && _iaLocked) _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
         let pick=_pickMatchingScale(hist, spice);
-        // Mostly hexa; penta + legal hepta/alts ok; never >3 consecutive chromatics
         if(pick){
           try{
             let semis=pick.colourSemis;
@@ -10170,20 +10442,12 @@ updateKeySigDisplay();
               const rr=pick.root|0;
               semis=pick.pcs.map(function(p){ return (p-rr+12)%12; }).sort(function(a,b){return a-b;});
             }
-            if(semis && typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3){
-              pick=null; // illegal — fall through to rebuild
-            }
+            if(semis && typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3) pick=null;
           }catch(e){}
         }
         if(!pick || (pick.kind!=='hexa' && Math.random()>0.35)){
-          // bias toward hexa ~65% of the time when non-hexa won
           try{
-            const cands=_buildListenCandidates(spice, _homeRoot, _homeMaj).filter(function(c){
-              if(c.kind==='hexa') return true;
-              if(c.kind==='penta') return true;
-              if(c.kind==='hepta') return true;
-              return false;
-            });
+            const cands=_buildListenCandidates(spice, _homeRoot, _homeMaj);
             if(cands.length){
               const tot=hist.reduce(function(s,x){return s+x;},0)||1;
               let best=null, bestSc=-1e9;
@@ -10205,15 +10469,39 @@ updateKeySigDisplay();
         }
         if(pick){
           _barChoice=pick;
+          _listenBarsLeft=2;
           try{ window.__listenHasPick=!!pick; if(window.__pinJamBtn) window.__pinJamBtn(); }catch(e){}
-          _barUntil=now+twoBarsMs; // hold 2 full bars — player speaks in their language
+          _barUntil=now+twoBarsMs;
           const follow=document.getElementById('keyFollowScale');
           if(follow && follow.checked){
             try{ _applyListenScale(pick); }catch(e){}
           }
-        } else {
-          _barUntil=now+twoBarsMs;
         }
+      }
+      window.__listenOnMetBar=function(){
+        try{
+          if(!keyDetectActive) return;
+          if(_listenPhase!=='locked') return;
+          const follow=document.getElementById('keyFollowScale');
+          if(!follow || !follow.checked) return;
+          // Exactly 2 transport bars on each scale — no early flip
+          if(typeof _listenBarsLeft!=='number' || _listenBarsLeft<1) _listenBarsLeft=2;
+          if(_listenBarsLeft>1){
+            _listenBarsLeft--;
+            return;
+          }
+          _listenBarsLeft=2;
+          _commitListenPick();
+        }catch(e){}
+      };
+      if(_listenPhase==='locked'){
+        if(!_barChoice){
+          _commitListenPick();
+        } else if(!metOn && now>=_barUntil){
+          // only if transport is NOT running (tracks always start met)
+          _commitListenPick();
+        }
+        // when met is on: ONLY __listenOnMetBar changes scales (2 bars)
       }
 
       const ch=_barChoice;
@@ -10233,15 +10521,22 @@ updateKeySigDisplay();
         homeLbl=' · key of '+keyName+' · '+stName;
       }
       const bPart = useBpm ? ('  ·  ~'+useBpm+' BPM') : '';
-      const holdLeft=(_barUntil>now)?Math.max(0,Math.ceil((_barUntil-now)/1000)):0;
-      const hold=(_listenPhase==='locked' && holdLeft)?(' · hexa '+holdLeft+'s (2 bars)'):'';
+      let hold='';
+      if(_listenPhase==='locked'){
+        if(typeof mPlaying!=='undefined' && mPlaying){
+          hold=' · hold '+(_listenBarsLeft||2)+' bar(s) · met';
+        } else {
+          const holdLeft=(_barUntil>now)?Math.max(0,Math.ceil((_barUntil-now)/1000)):0;
+          if(holdLeft) hold=' · hold '+holdLeft+'s (2 bars)';
+        }
+      }
       const phase=(_listenPhase==='bars')?' · deciding':(_listenPhase==='tempo'?' · tempo':'');
       out.textContent=scaleLbl+homeLbl+bPart+hold+phase+(_devilStatusSuffix?_devilStatusSuffix():'')+'  ('+recent.length+'/'+pitchHistory.length+')';
     },400));
   }
 
   function stopKeyDetect(){
-    keyDetectActive=false;
+    keyDetectActive=false; try{ window.__listenFollowActive=false; }catch(e){}
     keyTimers.forEach(clearInterval); keyTimers=[];
     if(keyMicStream){ keyMicStream.getTracks().forEach(t=>t.stop()); keyMicStream=null; }
     if(keyCapStream){ keyCapStream.getTracks().forEach(t=>t.stop()); keyCapStream=null; }
