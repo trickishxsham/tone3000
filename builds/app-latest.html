@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite93';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite94';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -4390,11 +4390,12 @@ function createInstance(prefix, chordsAlwaysOn){
   let segOctOffset = {};
   function randomizeSegOctaves(){
     try{
-      const shapes=Object.keys(C_START[currentMode]||{});
+      const modeKey=C_START[currentMode]?currentMode:(C_START['IONIAN']?'IONIAN':Object.keys(C_START)[0]);
+      const shapes=Object.keys(C_START[modeKey]||{});
       const ki=NOTES.indexOf(currentKey);
       const next={};
       shapes.forEach(function(sh){
-        const base=(C_START[currentMode][sh]|0)+ki+(octOffset|0);
+        const base=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
         const opts=[];
         [-24,-12,0,12,24].forEach(function(off){
           const st=base+off;
@@ -6817,17 +6818,50 @@ function applyWalkEntry(inst, nx){
   try{ AdManager.onScaleChange(); }catch(e){}
   if(nx && nx[3]){               // a universe shape -> COLOUR injection w/ parent segments
     const u=nx[3], pm=u.parentMode||'IONIAN';
-    MODE_SEMITONES['COLOUR']=u.semis.slice();
-    MODE_INT_NAMES['COLOUR']=u.semis.map(x=>CI_INT[((x%12)+12)%12]);
-    // v572: a merged shape whose note-set IS a genuinely named scale (Kumud, Hamsa
-    //   Vinodini, a real pentatonic, ...) must READ as that scale. The COLOUR mechanism
-    //   still carries the arbitrary note-set — only the label changes. u.name here is the
-    //   synthesized path-name ("Ionian ex m7") or a hex signature, which is why real
-    //   named scales were displaying as unnamed COLOUR.
-    MODE_FULL['COLOUR']=u.realName||u.name||'Colour Scale';
-    if(C_START[pm]) C_START['COLOUR']=C_START[pm];
+    let semis=(u.semis||[]).slice().sort(function(a,b){return a-b;});
+    // Resolve a real name from universe / hex / penta tables
+    let displayName=u.realName||u.name||null;
+    try{
+      const fp=semis.join(',');
+      if(typeof SCALE_UNIVERSE!=='undefined' && SCALE_UNIVERSE[fp]){
+        const e=SCALE_UNIVERSE[fp];
+        if(e._realName) displayName=e._realName;
+        else if(e.name) displayName=e.name;
+        if(e.parentMode) u.parentMode=e.parentMode;
+      }
+      if((!displayName || /G11DE|hex$/i.test(displayName)) && typeof hexAnyName==='function'){
+        const hn=hexAnyName(semis);
+        if(hn) displayName=hn;
+      }
+      if((!displayName || displayName==='penta') && semis.length===5 && typeof pentaNameFor==='function'){
+        const pn=pentaNameFor(fp);
+        if(pn) displayName=pn;
+      }
+    }catch(e){}
+    // G11DE: keep deca + devil on the label so the player can see the style
+    if(u.g11de){
+      const st=(u.g11de.style||'');
+      const lab=(window.G11DE&&window.G11DE.STYLES&&window.G11DE.STYLES[st]&&window.G11DE.STYLES[st].label)||st;
+      const dvl=u.g11de.devil||'';
+      const base=displayName||(pm+' shape');
+      displayName=base+' · '+lab+(dvl?(' · devil '+dvl):'');
+    }
+    if(!displayName) displayName='Colour Scale';
+    MODE_SEMITONES['COLOUR']=semis.slice();
+    MODE_INT_NAMES['COLOUR']=semis.map(function(x){return CI_INT[((x%12)+12)%12];});
+    MODE_FULL['COLOUR']=displayName;
+    const parent=u.parentMode||pm;
+    if(C_START[parent]) C_START['COLOUR']=C_START[parent];
+    // move each segment to a random legal octave window 0–22
+    try{ if(typeof randomizeSegOctaves==='function') randomizeSegOctaves(); }catch(e){}
     inst.setScale(nx[0],'COLOUR','NA');
+    try{
+      // force banner/crest refresh with the resolved name
+      if(typeof updateAll==='function') updateAll();
+      else if(typeof renderShapesNow==='function') renderShapesNow();
+    }catch(e){}
   } else {
+    try{ if(typeof randomizeSegOctaves==='function') randomizeSegOctaves(); }catch(e){}
     inst.setScale(nx[0],nx[1],nx[2],nx[4]);
   }
 }
@@ -6933,11 +6967,16 @@ const G11DE = (function(){
         if(maxRun(semis)>3) continue;
         const pcs=semis.map(function(x){ return (x+root)%12; });
         if(!inPool(pcs, set)) continue;
-        let nm=m+' hex';
+        let nm=null;
         try{
           if(typeof HEX_NAMES!=='undefined' && HEX_NAMES[m] && HEX_NAMES[m][ex]) nm=HEX_NAMES[m][ex];
-          else if(typeof hexAnyName==='function') nm=hexAnyName(semis)||nm;
+          if(!nm && typeof hexAnyName==='function') nm=hexAnyName(semis);
+          if(!nm && typeof SCALE_UNIVERSE!=='undefined'){
+            const e=SCALE_UNIVERSE[semis.join(',')];
+            if(e&&(e._realName||e.name)) nm=e._realName||e.name;
+          }
         }catch(e){}
+        if(!nm) nm=m+' ex '+ex;
         out.push({kind:'hexa', mode:m, alt:'NA', semis:semis, pcs:pcs, name:nm, ex:ex});
       }
       // pentas from mode (drop 2) — sparse
