@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite84';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite85';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9401,10 +9401,40 @@ updateKeySigDisplay();
   }
   // lite60: phased listen — tempo → 2 bars Ionian/Aeolian → decatonic → hold 2 bars
   let _listenPhase='tempo', _listenPhaseAt=0, _barsAccumStart=0;
+  function _seedIaFromBoard(){
+    // Backing tracks already set the board key — confirm, don't rediscover from zero
+    try{
+      const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      let k=null, maj=true;
+      if(typeof currentKey==='string' && currentKey){
+        k=currentKey.replace(/m$/i,'').replace('b','#').toUpperCase();
+        // map flats roughly
+        const flat={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
+        if(flat[k]) k=flat[k];
+        maj = !/m$/i.test(currentKey) && !(typeof currentMode==='string' && /AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/i.test(currentMode));
+        if(typeof currentMode==='string'){
+          if(/AEOLIAN|DORIAN|PHRYGIAN/i.test(currentMode)) maj=false;
+          if(/IONIAN|LYDIAN|MIXOLYDIAN/i.test(currentMode)) maj=true;
+        }
+      }
+      const R=names.indexOf(k);
+      if(R<0) return false;
+      if(maj){ _iaIonian=R; _iaAeolian=(R+9)%12; _homeRoot=R; _homeMaj=true; }
+      else { _iaAeolian=R; _iaIonian=(R+3)%12; _homeRoot=R; _homeMaj=false; }
+      _iaLocked=true; _iaLockAt=Date.now(); _homeSetAt=Date.now();
+      return true;
+    }catch(e){ return false; }
+  }
   function _inferHome(hist, keyPlain){
-    // Phase order: 1) patient Ionian/Aeolian  2) only then decas + rule of 11
+    // Phase order: 1) Ionian/Aeolian (seed from board key when present)  2) decas + rule of 11
+    if(!_iaLocked){ try{ _seedIaFromBoard(); }catch(e){} }
     const tot=hist.reduce(function(a,b){return a+b;},0);
-    if(tot<0.0001) return;
+    if(tot<0.0001){
+      if(_iaLocked && _isStyleAuto() && _iaIonian!=null){
+        // still allow style from seed with empty hist later
+      }
+      return;
+    }
     const majP=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
     const minP=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
     const avg=function(arr){ return arr.reduce(function(x,y){return x+y;},0)/arr.length; };
@@ -9437,13 +9467,15 @@ updateKeySigDisplay();
         _lastPickPcs=null; _lastPickKey=''; _autoStyle=null; _styleFamily=null;
       }
     } else {
-      // same ionian held — build lock over time (patient)
-      if(bestSc>0.22){
+      // same ionian held — confirm quickly (board seed already locks)
+      if(bestSc>0.12){
         if(!_iaLockAt) _iaLockAt=Date.now();
-        // ~2+ bars of agreement before IA is locked
-        if(!_iaLocked && (Date.now()-_iaLockAt)>3500 && bestSc>0.28){
+        if(!_iaLocked && (Date.now()-_iaLockAt)>1200 && bestSc>0.15){
           _iaLocked=true;
         }
+      }
+      if(!_iaLocked && _iaIonian!=null && (Date.now()-(_homeSetAt||Date.now()))>5000){
+        _iaLocked=true;
       }
     }
     if(_homeRoot==null){ _homeRoot=bestR; _homeMaj=bestMaj; }
@@ -9803,6 +9835,7 @@ updateKeySigDisplay();
     const btn=document.getElementById('btnKeyDetect'), out=document.getElementById('keyResult');
     if(btn){ btn.textContent='⏹ STOP'; btn.style.background='#dc2626'; }   // listen state on the in-block button
     keyDetectActive=true; pitchHistory=[]; pitchTimestamps=[];
+    try{ _seedIaFromBoard(); }catch(e){}
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
     _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
     _devilPc=null; _devilName=null; _elevenCertain=false; _elevenScatter=false;
@@ -10021,13 +10054,21 @@ updateKeySigDisplay();
         // Decide from the 2-bar window only
         const hist=_histFromPitches(recent);
         _inferHome(hist, null);
-        // Patient Ionian/Aeolian first — do not rush into decas
+        if(!_iaLocked){ try{ _seedIaFromBoard(); }catch(e){} }
+        if(!_iaLocked && _iaIonian!=null && elapsed>twoBarsMs){
+          _iaLocked=true; // 2 bars heard — commit base key
+        }
+        if(_homeRoot==null && _iaIonian!=null){
+          _homeRoot=_iaIonian; _homeMaj=true;
+        }
         if(_homeRoot==null || !_iaLocked){
           _barsAccumStart=now-(twoBarsMs/2);
-          const iaLbl=(_iaIonian!=null)?(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaIonian]+' major / '+['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaAeolian]+' minor'):'...';
-          out.textContent='tempo ~'+useBpm+' BPM · finding Ionian/Aeolian ('+iaLbl+')...';
+          const iaLbl=(_iaIonian!=null)?(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaIonian]+' major / '+['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaAeolian]+' minor'):'board key...';
+          out.textContent='tempo ~'+useBpm+' BPM · confirming key ('+iaLbl+')...';
           return;
         }
+        // confirm board key with audio, then enter decas
+        if(_isStyleAuto()) _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
         _listenPhase='locked';
         _listenPhaseAt=now;
         const pick=_pickMatchingScale(hist, spice);
@@ -10037,14 +10078,8 @@ updateKeySigDisplay();
           _barUntil=now+twoBarsMs;
           const follow=document.getElementById('keyFollowScale');
           if(follow && follow.checked){
-            // lite78: do not override an active walk — walk owns scale changes while transport runs
-            let walkOwns=false;
-            try{
-              walkOwns = !!(typeof mPlaying!=='undefined' && mPlaying && typeof mWalkMode!=='undefined' && mWalkMode
-                && mWalkMode!=='off' && mWalkMode!=='none');
-            }catch(e){}
-            if(!walkOwns) _applyListenScale(pick);
-            // when walk owns: still keep pick as suggestion for ♥ / display
+            // Follow scales: LISTEN commits the pick to the fret segments every 2 bars
+            try{ _applyListenScale(pick); }catch(e){}
           }
         }
       }
@@ -10061,14 +10096,8 @@ updateKeySigDisplay();
           _barUntil=now+twoBarsMs; // always hold 2 full bars
           const follow=document.getElementById('keyFollowScale');
           if(follow && follow.checked){
-            // lite78: do not override an active walk — walk owns scale changes while transport runs
-            let walkOwns=false;
-            try{
-              walkOwns = !!(typeof mPlaying!=='undefined' && mPlaying && typeof mWalkMode!=='undefined' && mWalkMode
-                && mWalkMode!=='off' && mWalkMode!=='none');
-            }catch(e){}
-            if(!walkOwns) _applyListenScale(pick);
-            // when walk owns: still keep pick as suggestion for ♥ / display
+            // Follow scales: LISTEN commits the pick to the fret segments every 2 bars
+            try{ _applyListenScale(pick); }catch(e){}
           }
         } else {
           _barUntil=now+Math.floor(twoBarsMs/2); // retry sooner if no pick
