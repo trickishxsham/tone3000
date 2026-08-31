@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite77';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite78';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1169,12 +1169,11 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <option value="capture">Capture tab/stream</option>
   </select>
   <input type="file" id="keyFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" style="display:none;">
-  <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on, each bar applies the best-matching scale to the fretboard (does not lock forever).">
+  <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on and walks are OFF, LISTEN applies suggested scales to the board. When a walk is playing, walks keep changing scales — LISTEN only suggests (♥ to train).">
     <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
   </label>
   <span id="keyResult" style="margin-left:0.4em; font-weight:bold; color:#4ade80; min-width:120px; display:inline-block;">—</span>
-  <button id="btnKeyHeart" data-tip-title="HEART · MATCH" data-tip="Tap when the suggested scale feels right with the track. Saves timestamp + scale + style for learning." style="padding:0.25em 0.55em; margin-left:0.35em; cursor:pointer; background:#7f1d1d; color:#fecaca; border:1px solid #f87171; border-radius:3px; font-weight:800;">♥</button>
-  <span id="keyHeartCount" style="font-size:0.75em;color:#f9a8d4;margin-left:0.2em;"></span>
+  <span id="keyHeartCount" style="font-size:0.75em;color:#f9a8d4;margin-left:0.35em;"></span>
 </div>
 
 <!-- Colour Scale Generator -->
@@ -9782,9 +9781,19 @@ updateKeySigDisplay();
         const pick=_pickMatchingScale(hist, spice);
         if(pick){
           _barChoice=pick;
+          try{ window.__listenHasPick=!!pick; if(window.__pinJamBtn) window.__pinJamBtn(); }catch(e){}
           _barUntil=now+twoBarsMs;
           const follow=document.getElementById('keyFollowScale');
-          if(follow && follow.checked) _applyListenScale(pick);
+          if(follow && follow.checked){
+            // lite78: do not override an active walk — walk owns scale changes while transport runs
+            let walkOwns=false;
+            try{
+              walkOwns = !!(typeof mPlaying!=='undefined' && mPlaying && typeof mWalkMode!=='undefined' && mWalkMode
+                && mWalkMode!=='off' && mWalkMode!=='none');
+            }catch(e){}
+            if(!walkOwns) _applyListenScale(pick);
+            // when walk owns: still keep pick as suggestion for ♥ / display
+          }
         }
       }
 
@@ -9796,9 +9805,19 @@ updateKeySigDisplay();
         const pick=_pickMatchingScale(hist, spice);
         if(pick){
           _barChoice=pick;
+          try{ window.__listenHasPick=!!pick; if(window.__pinJamBtn) window.__pinJamBtn(); }catch(e){}
           _barUntil=now+twoBarsMs; // always hold 2 full bars
           const follow=document.getElementById('keyFollowScale');
-          if(follow && follow.checked) _applyListenScale(pick);
+          if(follow && follow.checked){
+            // lite78: do not override an active walk — walk owns scale changes while transport runs
+            let walkOwns=false;
+            try{
+              walkOwns = !!(typeof mPlaying!=='undefined' && mPlaying && typeof mWalkMode!=='undefined' && mWalkMode
+                && mWalkMode!=='off' && mWalkMode!=='none');
+            }catch(e){}
+            if(!walkOwns) _applyListenScale(pick);
+            // when walk owns: still keep pick as suggestion for ♥ / display
+          }
         } else {
           _barUntil=now+Math.floor(twoBarsMs/2); // retry sooner if no pick
         }
@@ -17466,6 +17485,7 @@ window.__ensureMultiplayer = function(){
      broker, since GitHub Pages can't broker a live connection by itself) and hear each
      other's notes in real time, with the backing track roughly synced on join. -->
 <!-- v861-lite40: JAM pinned under MIDDLE board crest (sig2) — 3STR + 4STR; lowest safe spot -->
+<button id="btnKeyHeart" data-tip-title="HEART · MATCH" data-tip="Tap when the suggested LISTEN scale matches the track. Saves timestamp + scale for training." style="position:fixed;right:10px;top:40%;z-index:8501;background:#7f1d1d;color:#fecaca;border:1px solid #f87171;border-radius:999px;width:40px;height:40px;font-size:1.15em;font-weight:900;cursor:pointer;line-height:1;padding:0;box-shadow:0 0 10px #f8717166;">♥</button>
 <div id="jamBtn" style="position:fixed;right:10px;left:auto;top:45%;bottom:auto;z-index:8500;background:#7c3aed;color:#fff;
   font-weight:900;font-size:0.72em;padding:8px 14px 8px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.4);
   cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.65em;font-weight:900;line-height:16px;text-align:center;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">0</span></div>
@@ -17489,34 +17509,66 @@ window.__ensureMultiplayer = function(){
   function placeJamBtn(){
     try{
       var jb=document.getElementById('jamBtn');
-      if(!jb) return;
+      var hb=document.getElementById('btnKeyHeart');
+      if(!jb && !hb) return;
       var p=activePrefix();
       var sig=document.getElementById(p+'sig2');
       var box=document.getElementById(p+'box2');
+      var box1=document.getElementById(p+'box1');
+      var box3=document.getElementById(p+'box3');
       var el=sig||box;
       if(!el) return;
       var r=el.getBoundingClientRect();
       if(r.width<12 || r.height<12) return;
       var gap=6;
-      var jbH=jb.offsetHeight||36;
-      var jbW=jb.offsetWidth||56;
-      // UNDER the middle crest
-      var top=r.bottom+gap;
-      // clamp into viewport (most-bottom = just under middle badge when it is low on screen)
+      var jbH=jb?(jb.offsetHeight||36):36;
+      var jbW=jb?(jb.offsetWidth||56):56;
+      var hbH=hb?(hb.offsetHeight||40):40;
+      var hbW=hb?(hb.offsetWidth||40):40;
+      // Heart sits BETWEEN scale segments (middle crest), ABOVE jam
+      var heartTop=r.bottom+gap;
+      var jamTop=heartTop+hbH+4;
       var minTop=6;
       var maxTop=window.innerHeight-jbH-Math.max(10, (window.visualViewport&&window.visualViewport.offsetTop)||0)-8;
       if(maxTop<minTop) maxTop=minTop;
-      top=Math.max(minTop, Math.min(maxTop, top));
-      // right-align to crest's right edge
-      var right=Math.max(8, window.innerWidth-r.right);
-      // keep fully on-screen horizontally
-      if(right+jbW>window.innerWidth-4) right=Math.max(8, window.innerWidth-jbW-8);
-      jb.style.position='fixed';
-      jb.style.left='auto';
-      jb.style.right=right+'px';
-      jb.style.top=top+'px';
-      jb.style.bottom='auto';
-      jb.style.zIndex='8500';
+      if(jamTop>maxTop){
+        jamTop=maxTop;
+        heartTop=Math.max(minTop, jamTop-hbH-4);
+      }
+      heartTop=Math.max(minTop, heartTop);
+      // horizontal: center between segment 1 and 3 if present, else middle crest
+      var cx=r.left+r.width/2;
+      try{
+        if(box1&&box3){
+          var r1=box1.getBoundingClientRect(), r3=box3.getBoundingClientRect();
+          if(r1.width>8&&r3.width>8) cx=(r1.left+r3.right)/2;
+        }
+      }catch(e){}
+      var rightJam=Math.max(8, window.innerWidth-(cx+jbW/2));
+      if(rightJam+jbW>window.innerWidth-4) rightJam=Math.max(8, window.innerWidth-jbW-8);
+      var rightHeart=Math.max(8, window.innerWidth-(cx+hbW/2));
+      if(rightHeart+hbW>window.innerWidth-4) rightHeart=Math.max(8, window.innerWidth-hbW-8);
+      if(jb){
+        jb.style.position='fixed';
+        jb.style.left='auto';
+        jb.style.right=rightJam+'px';
+        jb.style.top=jamTop+'px';
+        jb.style.bottom='auto';
+        jb.style.zIndex='8500';
+      }
+      if(hb){
+        hb.style.position='fixed';
+        hb.style.left='auto';
+        hb.style.right=rightHeart+'px';
+        hb.style.top=heartTop+'px';
+        hb.style.bottom='auto';
+        hb.style.zIndex='8501';
+        // show heart when listen has a suggestion or is active
+        try{
+          var show=!!(window.__listenHasPick || (typeof keyDetectActive!=='undefined' && keyDetectActive));
+          hb.style.opacity=show?'1':'0.55';
+        }catch(e){}
+      }
     }catch(e){}
   }
   window.__pinJamBtn=placeJamBtn;
