@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite92';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite93';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -6318,6 +6318,7 @@ function holdBarsFor(size){
   return Math.max(1, Math.round(want/beats));
 }
 function nxSize(nx){
+  if(nx && nx[3] && nx[3].semis && nx[3].semis.length) return nx[3].semis.length;
   if(nx && nx[3] && nx[3].size) return nx[3].size;
   const ki=NOTES.indexOf(nx[0]);
   return buildScalePure(ki,nx[1],nx[2]).length;
@@ -6956,46 +6957,60 @@ const G11DE = (function(){
     });
     return out;
   }
+  let _lastFp='';
   function next(st){
     const root = (NOTES.indexOf(st.key)+12)%12;
-    // side from current mode / style memory
     side = detectSide(style, st.mode);
-    // optional style neighbour step (rule of 11)
-    if(Math.random()<0.28){
+    if(Math.random()<0.35){
       style = pickStyle(side, style);
       if(style==='myMaj'||style==='blues') side='maj';
       else if(style==='myMin'||style==='jazz') side='min';
     }
-    const cands = buildHexas(root, style);
+    let cands = buildHexas(root, style);
+    // also try neighbour style if thin
+    if(cands.length<4){
+      const nbr=(NBR[style]||[])[0];
+      if(nbr) cands = cands.concat(buildHexas(root, nbr));
+    }
     if(!cands.length){
-      // fallback: ionian/aeolian hex
       const m = side==='maj'?'IONIAN':'AEOLIAN';
       const base=(MODE_SEMITONES[m]||[0,2,4,5,7,9,11]).slice();
-      const semis=base.filter(function(_,i){ return i!==base.length-1; });
-      return [st.key,'COLOUR','NA',{ semis:semis, name:'G11DE '+m+' hex', realName:'G11DE', parentMode:m }];
+      const semis=base.filter(function(_,i){ return i!==4; });
+      const out=[st.key,'COLOUR','NA',{ semis:semis, name:'G11DE '+m+' hex', realName:'G11DE', parentMode:m }];
+      try{ window.ACTIVE_SCALE={root:root, semis:semis.slice()}; }catch(e){}
+      return out;
     }
-    // prefer hexa, then penta, then hepta; voice-lead 1 note from last when possible
     const as = window.ACTIVE_SCALE || {};
-    const prevRoot = ((as.root||root)%12+12)%12;
+    const prevRoot = ((as.root!=null?as.root:root)%12+12)%12;
     const prevPcs = (as.semis||[]).map(function(s){ return (s+prevRoot)%12; });
     function symDiff(a,b){
       const A={}, B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
       let d=0; for(const k in A) if(!B[k]) d++; for(const k in B) if(!A[k]) d++; return d;
     }
+    function fpOf(pcs){ return pcs.slice().sort(function(a,b){return a-b;}).join(','); }
     cands.forEach(function(c){
-      c.sc = (c.kind==='hexa'?3:c.kind==='penta'?1.2:0.6) + Math.random()*0.4;
+      c.sc = (c.kind==='hexa'?3:c.kind==='penta'?1.2:0.6) + Math.random()*0.8;
+      const fp=fpOf(c.pcs);
+      if(fp===_lastFp) c.sc -= 5.0; // never stick on same set
       if(prevPcs.length){
         const d=symDiff(prevPcs, c.pcs);
-        if(d<=1) c.sc += 2.0;
-        else if(d<=2) c.sc += 0.8;
-        else c.sc -= 0.5;
+        if(d===0) c.sc -= 5.0;
+        else if(d===1) c.sc += 1.6;
+        else if(d===2) c.sc += 0.9;
+        else c.sc -= 0.2;
       }
     });
     cands.sort(function(a,b){ return b.sc-a.sc; });
-    const pick=cands[0];
+    // first non-identical
+    let pick=cands[0];
+    for(let i=0;i<cands.length;i++){
+      if(fpOf(cands[i].pcs)!==_lastFp){ pick=cands[i]; break; }
+    }
+    _lastFp=fpOf(pick.pcs);
     const dvl = devilName(root, side);
     const label = (STYLES[style]&&STYLES[style].label)||style;
     const nm = pick.name+' · '+label+' · devil '+dvl;
+    try{ window.ACTIVE_SCALE={root:root, semis:pick.semis.slice()}; }catch(e){}
     return [st.key, 'COLOUR', 'NA', {
       semis: pick.semis.slice(),
       name: nm,
@@ -7034,16 +7049,20 @@ function metTick(){
   if(!bkAudioActive) metClick(beat===0);   // BKTRK: silent — your track carries the time
   renderDots(beat);
   if(beat===0 && mCount>0){           // downbeat of a new bar → maybe change scale
-    // lite90: track transport already runs — LISTEN follows THESE bar lines
+    // G11DE must always cycle on the metronome (2 bars). Listen never freezes it.
+    var isG11 = (mWalkMode==='glide');
     var listenOwns=false;
     try{
-      listenOwns=!!window.__listenFollowActive;
-      if(listenOwns && typeof window.__listenOnMetBar==='function'){
+      listenOwns=!!window.__listenFollowActive && !isG11;
+      if(window.__listenFollowActive && typeof window.__listenOnMetBar==='function'){
         window.__listenOnMetBar();
       }
     }catch(e){}
-    if(listenOwns){
-      // do not let walk steal the board while LISTEN+Follow is coaching
+    if(isG11){
+      if(_barsLeft>1){ _barsLeft--; }
+      else { walkAdvance(); }
+    } else if(listenOwns){
+      // listen coaching owns board for other walks
     } else if(_walkHoldable() && _barsLeft>1){
       _barsLeft--;
     } else {
@@ -7141,7 +7160,13 @@ function walkAdvance(targetPrefix){
       nx=enforceSizeRun(nx,st);
     } else if(mWalkMode==='glide'){
       nx=nextScaleGlide(st);
-      nx=enforceSizeRun(nx,st);
+      // G11DE owns size/voice-lead — do not let enforceSizeRun swap it for group nextScale
+      try{
+        if(nx && nx[3] && nx[3].semis){
+          _lastSize = nx[3].semis.length;
+          if(_lastSize===6) _hexRun=(_lastSize===6?_hexRun:0)+1; else _hexRun=0;
+        }
+      }catch(e){}
     } else {
       // v560: group/roam now obey the same meter->size doctrine as JIMI and SEQ.
       const _cs=buildScalePure(NOTES.indexOf(st.key),st.mode,st.alt).length;   // v577: bridge on ALL walks
@@ -7149,7 +7174,11 @@ function walkAdvance(targetPrefix){
       nx=enforceSizeRun(nx,st);
     }
     applyWalkEntry(inst,nx);
-    if(holdable) _barsLeft = (mWalkMode==='dhex') ? dhexHold : holdBarsFor(nxSize(nx));   // dhex: the syllable IS the hold
+    if(mWalkMode==='glide'){
+      _barsLeft = 2; // G11DE: always 2 whole bars (3/4@85 → ~4.2s; 4/4@85 → ~5.6s)
+    } else if(holdable){
+      _barsLeft = (mWalkMode==='dhex') ? dhexHold : holdBarsFor(nxSize(nx));
+    }
     return nx;
 }
 // ⚖ NEXT SCALE: pull the walk's next change forward to right now. The fresh hold span is
