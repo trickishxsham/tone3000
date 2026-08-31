@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite69';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite77';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1173,6 +1173,8 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
   </label>
   <span id="keyResult" style="margin-left:0.4em; font-weight:bold; color:#4ade80; min-width:120px; display:inline-block;">—</span>
+  <button id="btnKeyHeart" data-tip-title="HEART · MATCH" data-tip="Tap when the suggested scale feels right with the track. Saves timestamp + scale + style for learning." style="padding:0.25em 0.55em; margin-left:0.35em; cursor:pointer; background:#7f1d1d; color:#fecaca; border:1px solid #f87171; border-radius:3px; font-weight:800;">♥</button>
+  <span id="keyHeartCount" style="font-size:0.75em;color:#f9a8d4;margin-left:0.2em;"></span>
 </div>
 
 <!-- Colour Scale Generator -->
@@ -8755,63 +8757,49 @@ updateKeySigDisplay();
          + 0.08*p4 + 0.10*p5 + 0.10*m6 + 0.12*m7 + 0.14*M7
          - 0.10*b5 - 0.06*M6; // not Locrian, not Dorian-high
   }
-  // ── lite63: AFTER Ionian/Aeolian tonic is certain, 3 residual intervals pick style ──
-  // Major (Ionian 1 2 3 4 5 6 7): residual colour tones m3 b5 m6 m7 (+ others)
-  //   TRiCkiSh Major = b5 + m6 + m7
-  //   Blues          = b5 + m3 + m7
-  //   Classical      = m3 + m6 + m7
-  // Minor (Aeolian 1 2 m3 4 5 m6 m7): residual m2 3 b5 6 7
-  //   Jazz           = m2 + 3 + 7
-  //   ShAM Minor     = m2 + 6 + 7
-  //   Classical      = 3 + 6 + 7
-  // Major styles never on minor tonic; minor styles never on major tonic.
+  // ── lite71/73: Ionian/Aeolian pair first, then style maps the KEY ──
+  // TRiCkiSh/Blues always MAJOR names. Jazz/ShAM always MINOR. Classical C or Cm.
+  // Blues tonic = Ionian + P4 (C Ionian / A Aeolian → F blues). Hundreds of hexes in pool.
   const _STYLE_SIG = {
-    myMaj:      { maj:true,  degs:[6,8,10] },      // b5 m6 m7
-    blues:      { maj:true,  degs:[6,3,10] },      // b5 m3 m7
-    classicalM: { maj:true,  degs:[3,8,10] },      // m3 m6 m7 (classical on major)
-    classicalm: { maj:false, degs:[4,9,11] },      // 3 6 7   (classical on minor)
-    myMin:      { maj:false, degs:[1,9,11] },      // m2 6 7
-    jazz:       { maj:false, degs:[1,4,11] }       // m2 3 7
+    myMaj:      { maj:true,  degs:[6,8,10] },
+    blues:      { maj:true,  degs:[3,6,10] },
+    classicalM: { maj:true,  degs:[3,8,10] },
+    classicalm: { maj:false, degs:[4,9,11] },
+    myMin:      { maj:false, degs:[1,9,11] },
+    jazz:       { maj:false, degs:[1,4,11] }
   };
-  function _inferStyleFromHist(hist, homeRoot, homeMaj){
+  function _inferStyleFromHist(hist, ionian, aeolian){
     const tot=hist.reduce(function(a,b){return a+b;},0);
-    if(tot<6 || homeRoot==null) return _autoStyle|| (homeMaj!==false ? 'myMaj' : 'myMin');
-    const R=homeRoot|0;
-    const isMaj=!!homeMaj;
-    function energy(degs){
-      let s=0;
-      degs.forEach(function(d){ s+=(hist[(R+d)%12]||0); });
+    if(tot<0.0001) return _autoStyle||'myMaj';
+    const I=(ionian!=null)?(ionian|0):0;
+    const A=(aeolian!=null)?(aeolian|0):((I+9)%12);
+    const F=(I+5)%12;
+    function e(R, degs){
+      let s=0; degs.forEach(function(d){ s+=(hist[(R+d)%12]||0); });
       return s/(tot||1);
     }
-    // score only styles that match major/minor quality
-    const cands=[];
-    if(isMaj){
-      cands.push({st:'myMaj', sc:energy(_STYLE_SIG.myMaj.degs)});
-      cands.push({st:'blues', sc:energy(_STYLE_SIG.blues.degs)});
-      cands.push({st:'classical', sc:energy(_STYLE_SIG.classicalM.degs)});
-    } else {
-      cands.push({st:'jazz', sc:energy(_STYLE_SIG.jazz.degs)});
-      cands.push({st:'myMin', sc:energy(_STYLE_SIG.myMin.degs)});
-      cands.push({st:'classical', sc:energy(_STYLE_SIG.classicalm.degs)});
-    }
+    function pc(R){ return (hist[R]||0)/tot; }
+    const cands=[
+      {st:'myMaj', sc: 1.10*e(I,[6,8,10]) + 0.35*pc(I) - 0.18*pc((I+3)%12) - 0.10*pc((I+1)%12)},
+      {st:'blues', sc: 1.05*e(F,[3,6,10]) + 0.42*pc(F) + 0.16*pc(I) - 0.24*pc(A) - 0.12*pc((F+1)%12)},
+      {st:'classical', sc: 1.00*e(I,[3,8,10]) + 0.22*pc(I) + 0.22*pc(A) - 0.12*pc((I+6)%12)},
+      {st:'myMin', sc: 1.10*e(A,[1,9,11]) + 0.38*pc(A) - 0.12*pc((A+4)%12)},
+      {st:'jazz', sc: 1.10*e(A,[1,4,11]) + 0.38*pc(A) + 0.08*pc((A+1)%12) - 0.10*pc((A+6)%12)}
+    ];
     cands.sort(function(a,b){ return b.sc-a.sc; });
-    const best=cands[0];
-    // stickiness: only switch if clearly stronger
-    if(_autoStyle && _autoStyle===best.st){
-      _autoStyleAt=Date.now();
-      return _autoStyle;
+    const best=cands[0], second=cands[1]?cands[1].sc:-99;
+    if(!_autoStyle || (Date.now()-(_autoStyleAt||0))>3500 || best.sc>=second*1.04 || best.sc>0.08){
+      _autoStyle=best.st; _autoStyleAt=Date.now();
     }
-    if(best.sc<0.04){
-      // not enough residual colour yet — keep prior or default to quality family
-      return _autoStyle || (isMaj ? 'myMaj' : 'myMin');
+    const st=_autoStyle||best.st;
+    if(st==='myMaj'){ _homeRoot=I; _homeMaj=true; }
+    else if(st==='blues'){ _homeRoot=F; _homeMaj=true; }
+    else if(st==='classical'){
+      if(pc(A)>pc(I)*1.08){ _homeRoot=A; _homeMaj=false; }
+      else { _homeRoot=I; _homeMaj=true; }
     }
-    if(!_autoStyle || !_autoStyleAt || (Date.now()-_autoStyleAt)>4000 || best.sc>0.12){
-      // require margin over second place
-      if(cands.length<2 || best.sc>=cands[1].sc*1.08 || best.sc>0.15){
-        _autoStyle=best.st; _autoStyleAt=Date.now();
-      }
-    }
-    return _autoStyle || best.st;
+    else { _homeRoot=A; _homeMaj=false; }
+    return st;
   }
   function _getKeyStyle(){
     try{
@@ -8834,8 +8822,8 @@ updateKeySigDisplay();
   function _styleForcesMaj(){
     const st=_getKeyStyle();
     if(st==='myMin'||st==='jazz') return false;
-    if(st==='myMaj') return true;
-    return null; // blues/classical: tonic only, quality from KS
+    if(st==='myMaj'||st==='blues') return true;
+    return null; // classical: C or Cm
   }
   function _poolPcs(root, maj){
     return _activePoolSpec(maj).rel.map(function(x){ return (x+root)%12; });
@@ -8883,6 +8871,7 @@ updateKeySigDisplay();
       o.root=R; o.key=names[R];
       out.push(o);
     }
+    // All 5 styles: hepta modes available occasionally (doors); hex is primary
     (spec.modes||[]).forEach(function(m,i){
       const tag=(m===spec.keyMode)?'key-mode':('nbr-'+i);
       push({mode:m, alt:'NA', tag:tag, pcs:_pcsFor(R,m,'NA'), kind:'hepta', spiceTier:0});
@@ -9014,6 +9003,37 @@ updateKeySigDisplay();
       colourSemis:[0,2,4,7,9], pentaName:'maj penta', kind:'penta'});
     push({mode:'COLOUR', alt:'NA', tag:'penta:min', pcs:[0,3,5,7,10].map(function(x){return (x+R)%12;}),
       colourSemis:[0,3,5,7,10], pentaName:'min penta', kind:'penta'});
+    // lite74: ALL 5 key styles — enumerate every valid hex in the 10-note pool (hundreds each)
+    {
+      const poolRel=(spec.rel||[]).slice().sort(function(a,b){return a-b;});
+      const stLabel=_getKeyStyle()||'key';
+      if(_getKeyStyle()==='blues'){
+        push({mode:'COLOUR', alt:'NA', tag:'hexa:blues-maj', pcs:[0,3,4,5,7,9].map(function(x){return (x+R)%12;}),
+          colourSemis:[0,3,4,5,7,9], hexaName:'blues maj hex', uniName:'blues maj hex', kind:'hexa', parentMode:'LYDIAN'});
+        push({mode:'COLOUR', alt:'NA', tag:'hexa:blues-min', pcs:[0,3,5,6,7,10].map(function(x){return (x+R)%12;}),
+          colourSemis:[0,3,5,6,7,10], hexaName:'blues min hex', uniName:'blues min hex', kind:'hexa', parentMode:'DORIAN'});
+      }
+      function comb6(arr){
+        const out=[], n=arr.length;
+        for(let a=0;a<n;a++) for(let b=a+1;b<n;b++) for(let c=b+1;c<n;c++)
+          for(let d=c+1;d<n;d++) for(let e=d+1;e<n;e++) for(let f=e+1;f<n;f++)
+            out.push([arr[a],arr[b],arr[c],arr[d],arr[e],arr[f]]);
+        return out;
+      }
+      comb6(poolRel).forEach(function(semis){
+        if(typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3) return;
+        const fp=semis.join(',');
+        let nm=null;
+        try{
+          if(typeof HEX_UNIVERSE!=='undefined' && HEX_UNIVERSE[fp] && HEX_UNIVERSE[fp].name) nm=HEX_UNIVERSE[fp].name;
+          else if(typeof SCALE_UNIVERSE!=='undefined' && SCALE_UNIVERSE[fp] && SCALE_UNIVERSE[fp].name) nm=SCALE_UNIVERSE[fp].name;
+          else if(typeof hexAnyName==='function') nm=hexAnyName(semis);
+        }catch(e){}
+        if(!nm) nm=stLabel+' hex '+fp;
+        push({mode:'COLOUR', alt:'NA', tag:'hexa:pool:'+fp, pcs:semis.map(function(x){return (x+R)%12;}),
+          colourSemis:semis.slice(), hexaName:nm, uniName:nm, kind:'hexa', parentMode:(spec.keyMode||'IONIAN')});
+      });
+    }
     // lite47: pentatonic + INCLUDE one pool note → hexatonic (named when possible)
     try{
       const pentaList=[];
@@ -9068,13 +9088,86 @@ updateKeySigDisplay();
     return out;
   }
   let _homeRoot=null, _homeMaj=true, _homeSetAt=0, _lastPickKey='', _lastPickPcs=null, _lastPickKind=null;
+  let _iaIonian=null, _iaAeolian=null;
+  let _listenHearts=[]; // {t, key, style, scale, pcs, bpm, chroma}
+  try{ _listenHearts=JSON.parse(localStorage.getItem('improvs2_listen_hearts')||'[]')||[]; }catch(e){ _listenHearts=[]; }
+  let _heartModel={byFp:{}, byKind:{}, byStyle:{}, n:0, ready:false};
+  function _pcsFp(pcs, root){
+    const R=(root!=null)?(root|0):0;
+    const rel=(pcs||[]).map(function(p){ return (p-R+12)%12; }).sort(function(a,b){return a-b;});
+    return rel.join(',');
+  }
+  function _chromaSim(a, b){
+    if(!a||!b||!a.length||!b.length) return 0;
+    let dot=0, na=0, nb=0;
+    for(let i=0;i<12;i++){
+      const x=a[i]||0, y=b[i]||0;
+      dot+=x*y; na+=x*x; nb+=y*y;
+    }
+    if(na<1e-12||nb<1e-12) return 0;
+    return dot/Math.sqrt(na*nb);
+  }
+  function _rebuildHeartModel(){
+    const m={byFp:{}, byKind:{}, byStyle:{}, n:0, ready:false};
+    (_listenHearts||[]).forEach(function(h){
+      if(!h||!h.pcs||!h.pcs.length) return;
+      const st=h.style||'any';
+      const rootNames={'C':0,'C#':1,'Db':1,'D':2,'D#':3,'Eb':3,'E':4,'F':5,'F#':6,'Gb':6,'G':7,'G#':8,'Ab':8,'A':9,'A#':10,'Bb':10,'B':11};
+      let root=0;
+      if(h.key){
+        const k=String(h.key).replace(/m$/,'');
+        if(rootNames[k]!=null) root=rootNames[k];
+      }
+      const fp=_pcsFp(h.pcs, root);
+      const k1=st+'|'+fp;
+      m.byFp[k1]=(m.byFp[k1]||0)+1;
+      m.byFp['any|'+fp]=(m.byFp['any|'+fp]||0)+0.35;
+      const kd=st+'|'+(h.kind||'hexa');
+      m.byKind[kd]=(m.byKind[kd]||0)+1;
+      m.byStyle[st]=(m.byStyle[st]||0)+1;
+      m.n++;
+    });
+    m.ready=m.n>0;
+    _heartModel=m;
+    return m;
+  }
+  _rebuildHeartModel();
+  function _heartBoost(c, hist, styleNow){
+    if(!_heartModel||!_heartModel.ready) return 0;
+    const st=styleNow||'any';
+    const fp=_pcsFp(c.pcs, c.root);
+    let b=0;
+    const n=Math.max(1, _heartModel.n);
+    // exact shape hearted before in this style
+    const hit=(_heartModel.byFp[st+'|'+fp]||0)+0.5*(_heartModel.byFp['any|'+fp]||0);
+    if(hit>0) b += 0.22 * Math.min(1.5, Math.log(1+hit)/Math.log(2));
+    // kind preference learned per style
+    const kh=_heartModel.byKind[st+'|'+(c.kind||'')]||0;
+    if(kh>0) b += 0.06 * Math.min(1, kh/Math.max(2,n*0.15));
+    // chroma similarity to recent hearts of same style
+    let bestSim=0;
+    const recent=(_listenHearts||[]).slice(-40);
+    for(let i=0;i<recent.length;i++){
+      const h=recent[i];
+      if(!h||(h.style&&h.style!==st&&st!=='auto')) continue;
+      const sim=_chromaSim(hist, h.chroma);
+      // also require scale pcs overlap with heart pcs
+      if(h.pcs&&c.pcs){
+        const set={}; c.pcs.forEach(function(p){ set[p]=1; });
+        let ov=0; h.pcs.forEach(function(p){ if(set[p]) ov++; });
+        const ovr=ov/Math.max(1, Math.min(h.pcs.length, c.pcs.length));
+        const s=sim*0.55 + ovr*0.45;
+        if(s>bestSim) bestSim=s;
+      } else if(sim>bestSim) bestSim=sim;
+    }
+    if(bestSim>0.25) b += 0.18 * bestSim;
+    return b;
+  }
   // lite60: phased listen — tempo → 2 bars Ionian/Aeolian → decatonic → hold 2 bars
   let _listenPhase='tempo', _listenPhaseAt=0, _barsAccumStart=0;
   function _inferHome(hist, keyPlain){
-    // lite63: 1) lock Ionian/Aeolian tonic  2) 3 residual intervals → decatonic style
     const tot=hist.reduce(function(a,b){return a+b;},0);
-    if(tot<4) return;
-
+    if(tot<0.0001) return;
     const majP=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
     const minP=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
     const avg=function(arr){ return arr.reduce(function(x,y){return x+y;},0)/arr.length; };
@@ -9088,8 +9181,6 @@ updateKeySigDisplay();
       }
       return (dh>0&&dp>0)?num/Math.sqrt(dh*dp):-1;
     }
-
-    // ── Step 1: Ionian vs Aeolian tonic (100% key of X / Xm) ──
     let bestR=0, bestMaj=true, bestSc=-2;
     for(let R=0;R<12;R++){
       const mj=pearson(majP, R) + 0.30*((hist[R]||0)/tot);
@@ -9097,22 +9188,21 @@ updateKeySigDisplay();
       if(mj>bestSc){ bestSc=mj; bestR=R; bestMaj=true; }
       if(mn>bestSc){ bestSc=mn; bestR=R; bestMaj=false; }
     }
-    if(_homeRoot==null){
-      _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
-    } else if(bestR!==_homeRoot || bestMaj!==_homeMaj){
-      const held=Date.now()-_homeSetAt;
-      if(held>5000 && bestSc>0.25){
-        _homeRoot=bestR; _homeMaj=bestMaj; _homeSetAt=Date.now();
-        _lastPickPcs=null; _lastPickKey='';
-        _autoStyle=null; // restyle after tonic change
+    const ionian=bestMaj ? bestR : (bestR+3)%12;
+    const aeolian=bestMaj ? (bestR+9)%12 : bestR;
+    if(_iaIonian==null){
+      _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now();
+    } else if(ionian!==_iaIonian){
+      if((Date.now()-_homeSetAt)>5000 && bestSc>0.25){
+        _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now();
+        _lastPickPcs=null; _lastPickKey=''; _autoStyle=null;
       }
-    } else {
-      if(bestSc>0.15) _homeSetAt=Math.max(_homeSetAt, Date.now()-2500);
+    } else if(bestSc>0.15){
+      _homeSetAt=Math.max(_homeSetAt, Date.now()-2500);
     }
-
-    // ── Step 2: once tonic certain, 3 residual intervals pick decatonic ──
-    if(_isStyleAuto() && _homeRoot!=null){
-      _inferStyleFromHist(hist, _homeRoot, _homeMaj);
+    if(_homeRoot==null){ _homeRoot=bestR; _homeMaj=bestMaj; }
+    if(_isStyleAuto() && _iaIonian!=null){
+      _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
     }
   }
   function _pickMatchingScale(hist, spice){
@@ -9132,29 +9222,64 @@ updateKeySigDisplay();
     // At any spice>0 keep the full alt-ex catalog available — scoring picks the mix
     if(!cands.length) cands=_buildListenCandidates(0, _homeRoot, _homeMaj);
     const tot=hist.reduce(function(a,b){return a+b;},0)||1;
+    // Top heard pitch-classes this window (educated guess target)
+    const ranked=[];
+    for(let i=0;i<12;i++) ranked.push({pc:i, e:hist[i]||0});
+    ranked.sort(function(a,b){ return b.e-a.e; });
+    const topPcs=ranked.filter(function(x){ return x.e>tot*0.04; }).slice(0,6).map(function(x){ return x.pc; });
+    if(!topPcs.length) topPcs.push(ranked[0].pc);
     const scored=[];
     cands.forEach(function(c){
       let sc=_scorePcs(hist, c.pcs);
-      sc += 0.12 * ((hist[c.root]||0)/tot);
+      sc += 0.18 * ((hist[c.root]||0)/tot);
+      // Contain the notes the track is actually sounding
+      let hit=0, miss=0;
+      topPcs.forEach(function(pc){
+        if((c.pcs||[]).indexOf(pc)>=0) hit++; else miss++;
+      });
+      sc += 0.55*(hit/Math.max(1,topPcs.length)) - 0.35*(miss/Math.max(1,topPcs.length));
+      // lite77: train on hearts — reuse shapes that worked with this track feel
+      try{ sc += _heartBoost(c, hist, _getKeyStyle()); }catch(e){}
       const tier=c.spiceTier||0;
       const sp=spice||0;
       // Prefer HEXATONICS overall; alt-exclude hexas are first-class (not garnish)
       const styleNow=_getKeyStyle();
+      // lite74: all styles — hexatonics primary, some penta, some hepta (doors to broader hex reach)
       if(c.kind==='hexa'){
-        sc += 0.18;
-        if(c.fromAlt) sc += 0.06 + sp*1.35;
-        else sc += 0.06 + (styleNow==='blues'?0.08:0);
+        sc += 0.28;
+        if(c.fromAlt) sc += 0.08 + sp*1.2;
+        else sc += 0.10;
+        if((c.tag||'').indexOf('hexa:pool:')===0) sc += 0.06; // full 10-note catalog
       }
       if(c.incs && c.incs.length) sc += 0.05 + sp*0.15;
-      if(c.kind==='penta') sc += 0.08 + (styleNow==='blues'?0.12:0);
-      if(styleNow==='blues' && c.root===_homeRoot) sc += 0.12;
+      if(c.kind==='penta') sc += 0.10 * (1 - Math.min(0.7, sp*0.9)); // some penta, less at high spice
+      if(c.kind==='hepta') sc += 0.04 * (1 - Math.min(0.85, sp*1.1)); // occasional hepta doors
+      if(styleNow==='blues' && c.root===_homeRoot) sc += 0.10;
       if(styleNow==='jazz' && c.root===_homeRoot) sc += 0.12;
       if(styleNow==='jazz' && c.mode==='PHRYGIAN') sc += 0.10;
       if(styleNow==='jazz' && (c.mode==='AEOLIAN'||c.mode==='DORIAN')) sc += 0.04;
-      if(styleNow==='blues' && c.mode==='DORIAN') sc += 0.10;
-      if(styleNow==='blues' && (c.mode==='MIXOLYDIAN'||c.mode==='IONIAN')) sc += 0.04;
-      if(c.kind==='hepta' && c.tag==='key-mode') sc += 0.07 * (1 - Math.min(0.85, sp*1.1));
-      if(c.kind==='hepta' && (c.tag||'').indexOf('nbr')===0) sc += 0.04 * (1 - Math.min(0.8, sp));
+      // All 5 styles same policy: hex mostly; penta/chords sometimes; hepta + hepta-alts rarely
+      if(c.kind==='hepta'){
+        if(c.tag==='key-mode') sc += 0.05 * (1 - Math.min(0.9, sp*1.2));
+        else if((c.tag||'').indexOf('nbr')===0) sc += 0.03 * (1 - Math.min(0.85, sp));
+        else if(c.fromAlt || c.tag==='key-alt') sc += 0.02 + sp*0.25; // occasional alt hepta
+        else sc += 0.02;
+      }
+      if(styleNow==='blues'){
+        const rel=(c.colourSemis&&c.colourSemis.length)?c.colourSemis:(c.pcs||[]).map(function(p){return (p-c.root+12)%12;});
+        const has2=rel.indexOf(2)>=0, has7=rel.indexOf(11)>=0;
+        if(c.kind==='hexa'){
+          if(has2) sc += 0.05 + sp*0.45;
+          if(has7) sc += 0.05 + sp*0.45;
+          if(has2 && has7) sc += 0.06 + sp*0.25;
+        }
+        if(c.tag==='hexa:blues-maj' || c.hexaName==='blues maj hex') sc += 0.05;
+        if(c.tag==='hexa:blues-min' || c.hexaName==='blues min hex') sc += 0.05;
+      }
+      if(_lastPickKey){
+        const id=c.key+'|'+(c.mode)+'|'+(c.alt||'')+'|'+(c.pentaName||c.hexaName||c.tag||'');
+        if(id===_lastPickKey) sc -= 0.50;
+      }
       if(tier===1){ // alt hepta parents
         sc += -0.05 + sp*0.55;
       }
@@ -9212,9 +9337,15 @@ updateKeySigDisplay();
         } else {
           ok=diff<=2;
         }
-        if(!ok) sc -= 1.2; // hard prefer legal transitions
+        if(!ok){ return; } // illegal transition — not a candidate (educated path only)
+        // reward smooth 1-note voice-leading
+        if(sameSize && diff===2) sc += 0.35;
+        if(sameSize && diff===0) sc -= 0.55;
         const id=c.key+'|'+(c.mode)+'|'+(c.alt||'')+'|'+(c.pentaName||c.hexaName||c.tag||'');
-        if(id===_lastPickKey) sc -= 0.45;
+        if(id===_lastPickKey) sc -= 0.55;
+      } else {
+        // first pick: prefer hexes that cover heard pcs
+        if(c.kind==='hexa') sc += 0.12;
       }
       // hard reject illegal consecutive runs on penta/hexa (belt + suspenders)
       if((c.kind==='penta'||c.kind==='hexa') && c.colourSemis && typeof maxConsecutiveRun==='function'){
@@ -9223,29 +9354,26 @@ updateKeySigDisplay();
       scored.push({c:c, sc:sc});
     });
     scored.sort(function(a,b){ return b.sc-a.sc; });
-    if(!scored.length || scored[0].sc<-0.15) return null;
+    if(!scored.length || scored[0].sc<-0.5) return null;
     const top=scored[0].sc;
-    let cluster=scored.filter(function(x){ return x.sc>=top-0.14; }).slice(0,12);
-    const hexas=cluster.filter(function(x){ return x.c.kind==='hexa'; });
-    const altHex=hexas.filter(function(x){ return x.c.fromAlt; });
-    // High spice → prefer alt-exclude hex pool; mid → any hexa; low → mixed
     const sp2=spice||0;
-    if(altHex.length && Math.random()<Math.min(0.95, 0.25+sp2*1.8)){
-      cluster=altHex.concat(cluster.filter(function(x){ return !(x.c.kind==='hexa'&&x.c.fromAlt); })).slice(0,14);
-    } else if(hexas.length && Math.random()<0.6+sp2*0.5){
-      cluster=hexas.concat(cluster.filter(function(x){ return x.c.kind!=='hexa'; })).slice(0,12);
-    }
+    // lite76: educated pick — best match to heard pcs among legal voice-led moves
+    // soft mix still prefers hex, allows penta/hepta when they fit the audio better
+    let cluster=scored.filter(function(x){ return x.sc>=top-0.22; }).slice(0, 12);
+    if(!cluster.length) cluster=scored.slice(0, 6);
+    // prefer hex when scores are close
+    cluster.sort(function(a,b){
+      const ah=(a.c.kind==='hexa'?0.08:0)+(a.c.kind==='penta'?0.02:0);
+      const bh=(b.c.kind==='hexa'?0.08:0)+(b.c.kind==='penta'?0.02:0);
+      return (b.sc+bh)-(a.sc+ah);
+    });
     let pick=cluster[0];
+    // small randomness only among near-ties (musician still steering with guitar)
     if(cluster.length>1){
-      const w=cluster.map(function(x){
-        return Math.max(0.04, x.sc-top+0.18)
-          +(x.c.kind==='hexa'?0.14:0)
-          +(x.c.fromAlt?0.10+sp2*0.5:0)
-          +(x.c.kind==='penta'?0.03:0);
-      });
-      const sum=w.reduce(function(a,b){return a+b;},0);
-      let r=Math.random()*sum;
-      for(let i=0;i<cluster.length;i++){ r-=w[i]; if(r<=0){ pick=cluster[i]; break; } }
+      const near=cluster.filter(function(x){ return x.sc>=pick.sc-0.10; });
+      if(near.length>1 && Math.random()<0.35){
+        pick=near[Math.floor(Math.random()*Math.min(3, near.length))];
+      }
     }
     _lastPickKey=pick.c.key+'|'+(pick.c.mode)+'|'+(pick.c.alt||'')+'|'+(pick.c.pentaName||pick.c.hexaName||pick.c.tag||'');
     _lastPickPcs=(pick.c.pcs||[]).slice();
@@ -9431,6 +9559,7 @@ updateKeySigDisplay();
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
     _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
     _homeRoot=null; _homeMaj=true; _homeSetAt=0; _lastPickKey='';
+    _iaIonian=null; _iaAeolian=null;
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
     ensureAudio();                                              // creates _AC / _MASTER if needed
     if(_AC && _AC.state==='suspended'){ try{ await _AC.resume(); }catch(e){} }
@@ -10898,6 +11027,57 @@ document.addEventListener('DOMContentLoaded',()=>{
     }
   })();
   // In-block button = the LISTEN control (start/stop key+BPM detection).
+
+  function _refreshHeartCount(){
+    try{
+      const el=document.getElementById('keyHeartCount');
+      if(el) el.textContent=_listenHearts.length?('×'+_listenHearts.length):'';
+    }catch(e){}
+  }
+  function _heartListenMatch(){
+    try{
+      const ch=_barChoice;
+      if(!ch){ try{ alert('No scale suggestion yet — wait for LISTEN to lock.'); }catch(e){} return; }
+      const hist=(typeof _liveHist==='function')?_liveHist():[];
+      const row={
+        t:Date.now(),
+        key:(_homeRoot!=null?(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_homeRoot]+(_homeMaj?'':'m')):null),
+        style:_getKeyStyle(),
+        scale:ch.key+' '+(ch.uniName||ch.hexaName||ch.pentaName||ch.mode||''),
+        mode:ch.mode, alt:ch.alt||'NA', kind:ch.kind,
+        pcs:(ch.pcs||[]).slice(),
+        bpm:lockedBpm||0,
+        chroma:hist.slice?hist.slice():[],
+        build:window.BUILD||''
+      };
+      _listenHearts.push(row);
+      if(_listenHearts.length>500) _listenHearts=_listenHearts.slice(-500);
+      try{ localStorage.setItem('improvs2_listen_hearts', JSON.stringify(_listenHearts)); }catch(e){}
+      try{ _rebuildHeartModel(); }catch(e){}
+      _refreshHeartCount();
+      try{
+        const out=document.getElementById('keyResult');
+        if(out&&out.textContent) out.textContent=out.textContent.replace(/\s*♥trained.*/,'')+' · ♥trained '+_heartModel.n;
+      }catch(e){}
+      const btn=document.getElementById('btnKeyHeart');
+      if(btn){ btn.style.background='#be123c'; setTimeout(function(){ btn.style.background='#7f1d1d'; },180); }
+    }catch(e){ console.warn('[heart]',e); }
+  }
+  window.exportListenHearts=function(){ return (_listenHearts||[]).slice(); };
+  window.getHeartModel=function(){ return {n:_heartModel.n, byFp:Object.assign({},_heartModel.byFp), byKind:Object.assign({},_heartModel.byKind), byStyle:Object.assign({},_heartModel.byStyle)}; };
+  window.clearListenHearts=function(){
+    _listenHearts=[];
+    try{ localStorage.removeItem('improvs2_listen_hearts'); }catch(e){}
+    _rebuildHeartModel();
+    _refreshHeartCount();
+    return true;
+  };
+  try{
+    const hb=document.getElementById('btnKeyHeart');
+    if(hb) hb.addEventListener('click', _heartListenMatch);
+    _refreshHeartCount();
+  }catch(e){}
+
   document.getElementById('btnKeyDetect').addEventListener('click',()=>{
     
   try{
