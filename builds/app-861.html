@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite85';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite88';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9086,16 +9086,73 @@ updateKeySigDisplay();
     const spec=_activePoolSpec(maj);
     const pool=spec.rel.map(function(x){ return (x+R)%12; });
     const poolSet={}; pool.forEach(function(p){ poolSet[p]=1; });
+    function _semisOf(o){
+      if(o.colourSemis && o.colourSemis.length) return o.colourSemis.slice().sort(function(a,b){return a-b;});
+      if(o.pcs) return o.pcs.map(function(p){ return (p-R+12)%12; }).sort(function(a,b){return a-b;});
+      return null;
+    }
+    function _consecRun(semis){
+      if(!semis||!semis.length) return 0;
+      if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis);
+      return 0;
+    }
+    // Indices in sorted semis that sit inside a run of 4+ consecutive chromatics
+    function _consecClusterIdx(semis){
+      if(!semis||semis.length<4) return [];
+      const ext=semis.concat(semis.map(function(x){return x+12;}));
+      let run=1, start=0, hits=[];
+      for(let i=1;i<ext.length;i++){
+        if(ext[i]-ext[i-1]===1){
+          run++;
+          if(run>=4){
+            for(let k=i-run+1;k<=i;k++){
+              const idx=((k%semis.length)+semis.length)%semis.length;
+              if(hits.indexOf(idx)<0) hits.push(idx);
+            }
+          }
+        } else { run=1; start=i; }
+      }
+      return hits;
+    }
+    // If hepta/alt has 4+ consecutive, exclude 1 note from that cluster → legal hexas
+    function _pushHeptaOrBreak(o){
+      let semis=_semisOf(o);
+      if(!semis) return;
+      const run=_consecRun(semis);
+      if(run<=3){
+        o.colourSemis=semis;
+        push(o);
+        return;
+      }
+      // 4+ consecutive → do not offer full hepta; break into hexas by excluding 1 of the cluster
+      const cluster=_consecClusterIdx(semis);
+      const idxs=cluster.length?cluster:semis.map(function(_,i){return i;});
+      idxs.forEach(function(ex){
+        const hsemis=semis.filter(function(_,i){ return i!==ex; });
+        if(hsemis.length!==6) return;
+        if(_consecRun(hsemis)>3) return;
+        const pcs=hsemis.map(function(x){ return (x+R)%12; });
+        if(!_subsetOfPool(pcs, poolSet)) return;
+        const nm=(o.uniName||o.hexaName||(o.mode+' '+o.alt)||'alt')+' ex cluster';
+        push({
+          mode:o.mode||'COLOUR', alt:o.alt||'NA', tag:'alt-break:'+(hsemis.join(',')),
+          pcs:pcs, colourSemis:hsemis.slice(),
+          hexaName:nm, uniName:nm, kind:'hexa', parentMode:o.parentMode||o.mode,
+          spiceTier:Math.max(2, o.spiceTier||2), fromAlt:!!o.fromAlt
+        });
+      });
+    }
     function push(o){
       if(!_subsetOfPool(o.pcs, poolSet)) return;
-      // rule: penta/hexa cannot have more than 3 consecutive chromatic notes
-      if(o.kind==='penta' || o.kind==='hexa'){
-        let semis=o.colourSemis;
-        if(!semis && o.pcs){
-          semis=o.pcs.map(function(p){ return (p-R+12)%12; }).sort(function(a,b){return a-b;});
+      let semis=_semisOf(o);
+      // HARD RULE: never more than 3 consecutive chromatic notes (penta, hexa, hepta)
+      if(semis && _consecRun(semis)>3){
+        if(o.kind==='hepta'){
+          _pushHeptaOrBreak(o);
         }
-        if(semis && typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3) return;
+        return; // penta/hexa with 4+ dropped; hepta broken above
       }
+      if(semis) o.colourSemis=semis;
       o.root=R; o.key=names[R];
       out.push(o);
     }
@@ -9132,8 +9189,8 @@ updateKeySigDisplay();
           let outN=0; pcs7.forEach(function(p){ if(!poolSet[p]) outN++; });
           if(outN<=1){
             const formula=names[R]+' '+m.toLowerCase()+' +alt '+al;
-            push({mode:m, alt:al, tag:'key-alt', pcs:pcs7, kind:'hepta',
-              uniName:formula, spiceTier:1, fromAlt:true});
+            _pushHeptaOrBreak({mode:m, alt:al, tag:'key-alt', pcs:pcs7, kind:'hepta',
+              uniName:formula, spiceTier:1, fromAlt:true, parentMode:m});
           }
           // Build altered 7 semis, then EXCLUDE each degree → new hexatonics
           let semis7=(MODE_SEMITONES[m]||[]).slice();
@@ -9525,10 +9582,10 @@ updateKeySigDisplay();
       const styleNow=_getKeyStyle();
       // lite74: all styles — hexatonics primary, some penta, some hepta (doors to broader hex reach)
       if(c.kind==='hexa'){
-        sc += 0.28;
+        sc += 0.42; // Parker buffer: hexa is the default throw
         if(c.fromAlt) sc += 0.08 + sp*1.2;
-        else sc += 0.10;
-        if((c.tag||'').indexOf('hexa:pool:')===0) sc += 0.06; // full 10-note catalog
+        else sc += 0.12;
+        if((c.tag||'').indexOf('hexa:pool:')===0) sc += 0.06;
       }
       if(c.incs && c.incs.length) sc += 0.05 + sp*0.15;
       if(c.kind==='penta') sc += 0.10 * (1 - Math.min(0.7, sp*0.9)); // some penta, less at high spice
@@ -10005,8 +10062,19 @@ updateKeySigDisplay();
         }
       }
       const useBpm=lockedBpm||bpm||appBpm||0;
-      const beatMs=60000/(useBpm||100);
-      const twoBarsMs=Math.max(3200, Math.min(16000, beatMs*8));
+      const beatMs=60000/Math.max(30, Math.min(300, useBpm||100));
+      // Charlie Parker buffer: decide on 1 bar, show hexa for 2 bars (player is ~1 bar behind)
+      // 4/4 @ 60: listen 4s → throw hexa for 8s; next choice from the bar just heard
+      let beatsPerBar=4;
+      try{
+        if(typeof mBeats==='number' && mBeats>=1 && mBeats<=16) beatsPerBar=mBeats;
+        else if(typeof window.getMeter==='function'){
+          const m=window.getMeter();
+          if(m && m.beats>=1 && m.beats<=16) beatsPerBar=m.beats;
+        }
+      }catch(e){}
+      const oneBarMs=Math.max(1200, Math.min(12000, beatMs*beatsPerBar));
+      const twoBarsMs=Math.max(2400, Math.min(24000, oneBarMs*2)); // display hold = 2 bars
 
       if(_listenPhase==='tempo'){
         const elapsed=now-(_listenPhaseAt||now);
@@ -10041,18 +10109,20 @@ updateKeySigDisplay();
         }
       }
 
-      // ── Phase 2: accumulate first 2 bars, then Ionian/Aeolian → decatonic ──
+      // ── Phase 2: confirm key (board seed + 1 bar listen), then Parker buffer ──
       if(_listenPhase==='bars'){
         const elapsed=now-_barsAccumStart;
-        const recent=_recentPitches(twoBarsMs);
-        const need=Math.max(12, Math.floor(useBpm/8)); // ~1.5 notes/beat min
-        if(elapsed<twoBarsMs || recent.length<need){
-          const left=Math.max(0, Math.ceil((twoBarsMs-elapsed)/1000));
-          out.textContent='tempo ~'+useBpm+' BPM · 2 bars ('+left+'s) · '+recent.length+' notes';
+        const recent=_recentPitches(Math.max(oneBarMs, twoBarsMs));
+        const need=Math.max(6, Math.floor(useBpm/12));
+        // Board-seeded: 1 bar is enough to confirm; otherwise need ~2 bars
+        const needMs=_iaLocked?oneBarMs:twoBarsMs;
+        if(elapsed<needMs || recent.length<need){
+          const left=Math.max(0, Math.ceil((needMs-elapsed)/1000));
+          out.textContent='tempo ~'+useBpm+' BPM · '+beatsPerBar+'/4 · listen '+left+'s · '+recent.length+' notes';
           return;
         }
-        // Decide from the 2-bar window only
-        const hist=_histFromPitches(recent);
+        // Decision from the bar just heard (1 bar buffer)
+        const hist=_histFromPitches(_recentPitches(oneBarMs).length>=4?_recentPitches(oneBarMs):recent);
         _inferHome(hist, null);
         if(!_iaLocked){ try{ _seedIaFromBoard(); }catch(e){} }
         if(!_iaLocked && _iaIonian!=null && elapsed>twoBarsMs){
@@ -10062,9 +10132,9 @@ updateKeySigDisplay();
           _homeRoot=_iaIonian; _homeMaj=true;
         }
         if(_homeRoot==null || !_iaLocked){
-          _barsAccumStart=now-(twoBarsMs/2);
+          // keep full 2-bar window — do not half-step the clock
           const iaLbl=(_iaIonian!=null)?(['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaIonian]+' major / '+['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_iaAeolian]+' minor'):'board key...';
-          out.textContent='tempo ~'+useBpm+' BPM · confirming key ('+iaLbl+')...';
+          out.textContent='tempo ~'+useBpm+' BPM · '+beatsPerBar+'/4 · confirming key ('+iaLbl+')...';
           return;
         }
         // confirm board key with audio, then enter decas
@@ -10084,23 +10154,65 @@ updateKeySigDisplay();
         }
       }
 
-      // ── Phase 3: locked — only change scale every 2 bars ──
-      const recent=_recentPitches(twoBarsMs);
-      const hist=_histFromPitches(recent.length>=8?recent:pitchHistory);
-      if(_listenPhase==='locked' && (now>=_barUntil || !_barChoice)){
+      // ── Phase 3: Parker buffer — decide on last 1 bar, show hexa for 2 bars ──
+      // Player is ~1 bar behind the track; we throw language they can answer in
+      const recent=_recentPitches(oneBarMs);
+      const hist=_histFromPitches(recent.length>=4?recent:(pitchHistory||[]));
+      if(_listenPhase==='locked' && (!_barChoice || now>=_barUntil)){
         _inferHome(hist, null);
-        const pick=_pickMatchingScale(hist, spice);
+        if(_isStyleAuto() && _iaLocked) _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
+        let pick=_pickMatchingScale(hist, spice);
+        // Mostly hexa; penta + legal hepta/alts ok; never >3 consecutive chromatics
+        if(pick){
+          try{
+            let semis=pick.colourSemis;
+            if(!semis && pick.pcs){
+              const rr=pick.root|0;
+              semis=pick.pcs.map(function(p){ return (p-rr+12)%12; }).sort(function(a,b){return a-b;});
+            }
+            if(semis && typeof maxConsecutiveRun==='function' && maxConsecutiveRun(semis)>3){
+              pick=null; // illegal — fall through to rebuild
+            }
+          }catch(e){}
+        }
+        if(!pick || (pick.kind!=='hexa' && Math.random()>0.35)){
+          // bias toward hexa ~65% of the time when non-hexa won
+          try{
+            const cands=_buildListenCandidates(spice, _homeRoot, _homeMaj).filter(function(c){
+              if(c.kind==='hexa') return true;
+              if(c.kind==='penta') return true;
+              if(c.kind==='hepta') return true;
+              return false;
+            });
+            if(cands.length){
+              const tot=hist.reduce(function(s,x){return s+x;},0)||1;
+              let best=null, bestSc=-1e9;
+              cands.forEach(function(c){
+                let sc=_scorePcs(hist, c.pcs)+0.2*((hist[c.root]||0)/tot);
+                if(c.kind==='hexa') sc+=0.35;
+                else if(c.kind==='penta') sc+=0.12;
+                else if(c.kind==='hepta') sc+=0.06;
+                try{ sc+=_heartBoost(c, hist, _getKeyStyle()); }catch(e){}
+                if(_lastPickPcs && _lastPickPcs.length){
+                  const d=_symDiff(_lastPickPcs, c.pcs||[]);
+                  if(d<=1) sc+=0.25; else if(d<=2) sc+=0.08; else sc-=0.15;
+                }
+                if(sc>bestSc){ bestSc=sc; best=c; }
+              });
+              if(best) pick=best;
+            }
+          }catch(e){}
+        }
         if(pick){
           _barChoice=pick;
           try{ window.__listenHasPick=!!pick; if(window.__pinJamBtn) window.__pinJamBtn(); }catch(e){}
-          _barUntil=now+twoBarsMs; // always hold 2 full bars
+          _barUntil=now+twoBarsMs; // hold 2 full bars — player speaks in their language
           const follow=document.getElementById('keyFollowScale');
           if(follow && follow.checked){
-            // Follow scales: LISTEN commits the pick to the fret segments every 2 bars
             try{ _applyListenScale(pick); }catch(e){}
           }
         } else {
-          _barUntil=now+Math.floor(twoBarsMs/2); // retry sooner if no pick
+          _barUntil=now+twoBarsMs;
         }
       }
 
@@ -10122,7 +10234,7 @@ updateKeySigDisplay();
       }
       const bPart = useBpm ? ('  ·  ~'+useBpm+' BPM') : '';
       const holdLeft=(_barUntil>now)?Math.max(0,Math.ceil((_barUntil-now)/1000)):0;
-      const hold=(_listenPhase==='locked' && holdLeft)?(' · 2 bars '+holdLeft+'s'):'';
+      const hold=(_listenPhase==='locked' && holdLeft)?(' · hexa '+holdLeft+'s (2 bars)'):'';
       const phase=(_listenPhase==='bars')?' · deciding':(_listenPhase==='tempo'?' · tempo':'');
       out.textContent=scaleLbl+homeLbl+bPart+hold+phase+(_devilStatusSuffix?_devilStatusSuffix():'')+'  ('+recent.length+'/'+pitchHistory.length+')';
     },400));
