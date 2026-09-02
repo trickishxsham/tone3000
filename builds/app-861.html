@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite100';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite102';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1009,7 +1009,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <button data-walk="seq">JIMI</button>
     <button data-walk="dhex" data-tip-title="DACTYLIC HEXAMETER" data-tip="The epic meter as a walk. Each line = 6 feet = 24 bars: feet are DACTYLS (long-short-short) or SPONDEES (long-long), a long syllable holds a scale 2 bars, a short 1 bar. Feet 1-4 lean dactylic, the 5th is (almost) always a dactyl, the 6th always a spondee - so every line lands with weight. Long syllables anchor on consonant scales; shorts pass through 1-note glides.">D.HEX</button>
     <button data-walk="free" data-tip-title="FREE - F# MINOR TRACK" data-tip="The scale SIZE follows the meter: short bars = pentatonic, mid = hexatonic, long = heptatonic. Plays the current key's aeolian (+ dorian/phrygian borrows), so set any minor key. Pair with the FREE time signature (the 61-bar pi progression).">FREE</button>
-    <button data-walk="glide" data-tip-title="G11DE · DECATONIC 11" data-tip="Full decatonic hex catalog (hundreds) + core penta+harmonic hexes (blues maj/min, classical, jog…). Ladder biases brightness; does not limit the pool. m2/b5 exiled locks side. key C/Cm · style · name · exiled.">G11DE</button>
+    <button data-walk="glide" data-tip-title="G11DE · 11-NOTE" data-tip="Ionian/Aeolian first. Major→exile m2 · Minor→exile b5. Any penta/hexa/hepta (any root) in the 11, ≤3 consecutive. Voice-lead: same size Δ1 · hexa↔penta/hepta Δ2. HEXA ALTS included.">G11DE</button>
     <button data-walk="custom" data-tip-title="CUSTOM" data-tip="Define your own scale sequence bar by bar using note count buttons." class="expert-only">CUSTOM</button>
     <button data-walk="chord" data-tip-title="CHORD" data-tip="Auto-select scales that fit a chord progression you define." class="expert-only">CHORD</button>
     <button data-walk="bktrk" data-tip-title="BKTRK · YOUR TRACK" data-tip="Play to your own saved backing track. Loads its key + tempo, plays the audio, and auto-follows its chord changes with similar-note / similar-colour scales." class="expert-only">BKTRK</button>
@@ -1787,6 +1787,88 @@ const HEX_STATS = {modes:0, altCombos:0, total:0, unique:0, named:0, unnamed:0, 
   try{ console.log('HEX_UNIVERSE: '+HEX_STATS.unique+' unique ('+HEX_STATS.named+' named, '+HEX_STATS.unnamed+' new)'); }catch(e){}
 })();
 
+// ── lite101: NAMED HEX × 8 ALTS → "Kumud +HI", "Trimurti +MP", … in universe as HEXA ALTS
+window.HEXA_ALTS = {};   // fp -> {semis, name, parent, alt, mode, ex}
+(function injectNamedHexAlts(){
+  const ALTS = ['HI','HA','Ne','MS','MP','Bh','BL','Ba'];
+  let n = 0, nNew = 0;
+  function fpOf(s){ return s.slice().sort(function(a,b){return a-b;}).join(','); }
+  function applyAltToHex(hex, ad){
+    if(!ad || ad.isOcto) return null;
+    const s = hex.slice();
+    const ix = s.indexOf(ad.fromSemi);
+    if(ix < 0) return null;                 // alt degree not in this hex
+    s[ix] = ad.toSemi;
+    const out = [...new Set(s)].sort(function(a,b){return a-b;});
+    if(out.length !== 6) return null;       // collapse or octo → skip
+    return out;
+  }
+  for(const mode of MODE_ORDER){
+    const base = MODE_SEMITONES[mode];
+    if(!base || !HEX_NAMES[mode]) continue;
+    for(let ex = 0; ex < base.length; ex++){
+      const parent = HEX_NAMES[mode][ex];
+      if(!parent || / ex /i.test(parent)) continue;   // only true named hexes
+      const hex0 = base.filter(function(_,i){ return i !== ex; });
+      for(const alt of ALTS){
+        const ad = ALT_DATA[mode] && ALT_DATA[mode][alt];
+        const hex6 = applyAltToHex(hex0, ad);
+        if(!hex6) continue;
+        const fp = fpOf(hex6);
+        const nm = parent + ' +' + alt;
+        n++;
+        // Prefer this name when shape is new or only had a generic "Mode ALT ex N" label
+        if(!HEX_UNIVERSE[fp]){
+          HEX_UNIVERSE[fp] = { semis:hex6.slice(), sources:[], name:nm, hexaAlt:true };
+          nNew++;
+        } else {
+          const cur = HEX_UNIVERSE[fp].name || '';
+          if(/ ex /i.test(cur) || !cur || HEX_UNIVERSE[fp].hexaAlt){
+            HEX_UNIVERSE[fp].name = nm;
+            HEX_UNIVERSE[fp].hexaAlt = true;
+          }
+        }
+        HEX_UNIVERSE[fp].sources.push({mode:mode, alt:alt, ex:ex, exSemi:base[ex], parent:parent, hexaAlt:true});
+        if(!window.HEXA_ALTS[fp] || window.HEXA_ALTS[fp].parent === parent){
+          window.HEXA_ALTS[fp] = { semis:hex6.slice(), name:nm, parent:parent, alt:alt, mode:mode, ex:ex };
+        }
+        // SCALE_UNIVERSE may not exist yet — fill later in ensureHexaAltsInScaleUniverse
+      }
+    }
+  }
+  try{ console.log('HEXA ALTS: '+n+' named-hex×alt applications, '+Object.keys(window.HEXA_ALTS).length+' unique shapes ('+nNew+' new in HEX_UNIVERSE)'); }catch(e){}
+})();
+
+function ensureHexaAltsInScaleUniverse(){
+  try{
+    if(typeof SCALE_UNIVERSE === 'undefined') return;
+    let added = 0;
+    Object.keys(window.HEXA_ALTS||{}).forEach(function(fp){
+      const e = window.HEXA_ALTS[fp];
+      if(!SCALE_UNIVERSE[fp]){
+        SCALE_UNIVERSE[fp] = {
+          semis: e.semis.slice(), size: 6, sources: [],
+          name: e.name, hexaAlt: true, _realName: e.name
+        };
+        added++;
+      } else {
+        // promote name to "Parent +ALT" when current is generic
+        const cur = SCALE_UNIVERSE[fp].name || '';
+        if(!cur || / ex /i.test(cur) || SCALE_UNIVERSE[fp].hexaAlt){
+          SCALE_UNIVERSE[fp].name = e.name;
+          SCALE_UNIVERSE[fp]._realName = e.name;
+          SCALE_UNIVERSE[fp].hexaAlt = true;
+        }
+      }
+      SCALE_UNIVERSE[fp].sources.push({
+        kind:'hexa-alt', mode:e.mode, alt:e.alt, parent:e.parent, op:'named-hex+alt'
+      });
+    });
+    try{ if(added) console.log('HEXA ALTS merged into SCALE_UNIVERSE: +'+added); }catch(e){}
+  }catch(e){ console.warn('ensureHexaAltsInScaleUniverse', e); }
+}
+
+
 // ────────────────────────────────────────────────────────────────────────────
 // SCALE_UNIVERSE — the deep enumeration the user asked for.
 // Bases: natural pentas, natural hexatonics, modes (hepta), modes+octo-alts (octo).
@@ -1973,44 +2055,66 @@ function buildScaleUniverse(){
 }
 function renderUniverseRow(){
   const row = document.getElementById('universeRow'); if(!row) return;
+  try{ ensureHexaAltsInScaleUniverse(); }catch(e){}
   const bySize = {4:[],5:[],6:[],7:[],8:[],9:[]};
-  Object.values(SCALE_UNIVERSE).forEach(e => { if(bySize[e.size]) bySize[e.size].push(e); });
+  const hexaAlts = [];
+  Object.values(SCALE_UNIVERSE).forEach(e => {
+    if(bySize[e.size]) bySize[e.size].push(e);
+    if(e.hexaAlt || (e.name && / \+[A-Za-z]{2}$/.test(e.name)) || (window.HEXA_ALTS && window.HEXA_ALTS[e.semis.join(',')])){
+      hexaAlts.push(e);
+    }
+  });
+  // Also include every HEXA_ALTS entry even if name not yet on SCALE_UNIVERSE
+  try{
+    Object.keys(window.HEXA_ALTS||{}).forEach(function(fp){
+      if(!SCALE_UNIVERSE[fp]) return;
+      if(!hexaAlts.some(function(x){ return x.semis.join(',')===fp; }))
+        hexaAlts.push(SCALE_UNIVERSE[fp]);
+    });
+  }catch(e){}
   let h = '<span class="su-lab">UNIVERSE</span>';
   [4,5,6,7,8,9].forEach(n => {
     const c = bySize[n].length;
     h += '<button class="su-btn" data-size="'+n+'">'+n+'<span class="su-count">'+c+'</span></button>';
   });
+  h += '<button class="su-btn" data-hexa-alts="1" title="Named hexatonics × 8 alterations (Kumud +HI, Trimurti +MP, …)">HEXA ALTS<span class="su-count">'+hexaAlts.length+'</span></button>';
   h += '<div class="su-titles" id="suTitles"></div>';
   row.innerHTML = h;
+  function showEntries(entries, btn){
+    const wasOn = btn.classList.contains('on');
+    row.querySelectorAll('.su-btn').forEach(b => b.classList.remove('on'));
+    const out = document.getElementById('suTitles');
+    if(wasOn){ out.classList.remove('show'); return; }
+    btn.classList.add('on');
+    entries = entries.slice().sort((a,b) => {
+      const an=a.name||'?', bn=b.name||'?';
+      const aHex=/^#[0-9A-F]{6}$/i.test(an), bHex=/^#[0-9A-F]{6}$/i.test(bn);
+      if(aHex && !bHex) return 1; if(!aHex && bHex) return -1;
+      return an.localeCompare(bn);
+    });
+    const keyEl=document.querySelector('#'+activePrefix+'keyRow [data-key].active');
+    const keyName=keyEl?keyEl.dataset.key:'C';
+    out.innerHTML = entries.map(e => {
+      const can=pickCanonical(e.sources||[]);
+      const hex=sigMixFor(keyName, can.mode||'IONIAN', can.alt||'NA', e.semis);
+      let label=(e.name && e.name!=='?') ? e.name : hex.toUpperCase();
+      try{
+        if(window.HEXA_ALTS && window.HEXA_ALTS[e.semis.join(',')])
+          label = window.HEXA_ALTS[e.semis.join(',')].name;
+      }catch(x){}
+      return '<span class="su-title" data-fp="'+e.semis.join(',')+'" style="cursor:pointer;"><span class="su-sw" style="background:'+hex+'"></span>'+label+'</span>';
+    }).join(' ');
+    out.classList.add('show');
+  }
   row.addEventListener('click', ev => {
-    // size button -> unfold the title list for that size
+    const altBtn = ev.target.closest('[data-hexa-alts]');
+    if(altBtn){ showEntries(hexaAlts, altBtn); return; }
     const btn = ev.target.closest('[data-size]');
     if(btn){
       const size = parseInt(btn.dataset.size, 10);
-      const wasOn = btn.classList.contains('on');
-      row.querySelectorAll('.su-btn').forEach(b => b.classList.remove('on'));
-      const out = document.getElementById('suTitles');
-      if(wasOn){ out.classList.remove('show'); return; }
-      btn.classList.add('on');
-      const entries = bySize[size].slice().sort((a,b) => {
-        const an=a.name||'?', bn=b.name||'?';
-        const aHex=/^#[0-9A-F]{6}$/i.test(an), bHex=/^#[0-9A-F]{6}$/i.test(bn);
-        if(aHex && !bHex) return 1; if(!aHex && bHex) return -1;
-        return an.localeCompare(bn);
-      });
-      // colour each title by its signature at the current key (default C)
-      const keyEl=document.querySelector('#'+activePrefix+'keyRow [data-key].active');
-      const keyName=keyEl?keyEl.dataset.key:'C';
-      out.innerHTML = entries.map(e => {
-        const can=pickCanonical(e.sources);
-        const hex=sigMixFor(keyName, can.mode||'IONIAN', can.alt||'NA', e.semis);
-        const label=(e.name && e.name!=='?') ? e.name : hex.toUpperCase();
-        return '<span class="su-title" data-fp="'+e.semis.join(',')+'" style="cursor:pointer;"><span class="su-sw" style="background:'+hex+'"></span>'+label+'</span>';
-      }).join(' ');
-      out.classList.add('show');
+      showEntries(bySize[size], btn);
       return;
     }
-    // title click -> load that scale onto the active panel
     const title = ev.target.closest('.su-title');
     if(title && title.dataset.fp){
       applyUniverseScale(title.dataset.fp);
@@ -2048,7 +2152,12 @@ function applyUniverseScale(fp){
 }
 function _kickBuild(){
   try{ buildCoreSigs(); }catch(e){}                 // colour generator live in ~100ms
-  setTimeout(function(){ buildScaleUniverse(); buildScaleSigs(); }, 60);  // heavy build, deferred a tick
+  setTimeout(function(){
+    buildScaleUniverse();
+    try{ ensureHexaAltsInScaleUniverse(); }catch(e){}
+    buildScaleSigs();
+    try{ renderUniverseRow(); }catch(e){}
+  }, 60);  // heavy build, deferred a tick
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_kickBuild);
 else setTimeout(_kickBuild,0);
@@ -7023,58 +7132,20 @@ function applyWalkEntry(inst, nx){
   }
 }
 // ═══════════════════════════════════════════════════════════════
-// G11DE — decatonic rule-of-11 walk (replaces GLIDE)
-// 5 key styles · m2 exiled = major-side · b5 exiled = minor-side
-// Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz · never 12
-// Mostly hexa (≤3 consecutive); penta + hepta/alts allowed when legal
+// G11DE — lite102
+// 1) Lock Ionian (major) or Aeolian (minor) on tonic
+// 2) Exile only m2 (maj) or b5 (min) → 11-note pool
+// 3) Any penta/hexa/hepta (any root) if notes ⊆ pool AND ≤3 consecutive
+// 4) Voice-lead: same size Δ1 · hexa↔penta/hepta Δ2
 // ═══════════════════════════════════════════════════════════════
 const G11DE = (function(){
   const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-  // Bright → dark harmonic ladder (guides bias, does NOT limit the catalog)
-  const LADDER = [
-    { mode:'LYDIAN',      harm:3,  side:'maj', bright:0, label:'Lydian m3' },
-    { mode:'IONIAN',      harm:8,  side:'maj', bright:1, label:'Ionian m6' },
-    { mode:'MIXOLYDIAN',  harm:1,  side:'maj', bright:2, label:'Mixolydian m2' },
-    { mode:'DORIAN',      harm:6,  side:'min', bright:3, label:'Dorian b5' },
-    { mode:'AEOLIAN',     harm:11, side:'min', bright:4, label:'Aeolian 7' },
-    { mode:'PHRYGIAN',    harm:4,  side:'min', bright:5, label:'Phrygian 3' },
-    { mode:'LOCRIAN',     harm:9,  side:'min', bright:6, label:'Locrian 6' }
-  ];
-  const MAJ_PENTA = [0,2,4,7,9];
-  const MIN_PENTA = [0,3,5,7,10];
-  function coreHex(side, harm){
-    const base = side==='maj' ? MAJ_PENTA.slice() : MIN_PENTA.slice();
-    if(base.indexOf(harm)<0) base.push(harm);
-    return base.sort(function(a,b){return a-b;});
-  }
-  // Priority core hexes (penta + harmonic) — ADDED to the full deca catalog, not exclusive
-  const CORE = {
-    maj: [
-      { mode:'LYDIAN',     harm:3,  semis:coreHex('maj',3),  name:'blues maj hex',    style:'blues',     boost:2.2 },
-      { mode:'IONIAN',     harm:8,  semis:coreHex('maj',8),  name:'classical maj hex', style:'classical', boost:1.8 },
-      { mode:'MIXOLYDIAN', harm:1,  semis:coreHex('maj',1),  name:'mixo backdoor hex', style:'myMaj',     boost:1.8 }
-    ],
-    min: [
-      { mode:'DORIAN',   harm:6,  semis:coreHex('min',6),  name:'blues min hex', style:'blues', boost:2.2 },
-      { mode:'AEOLIAN',  harm:11, semis:coreHex('min',11), name:'aeolian hex',   style:'myMin', boost:1.8 },
-      { mode:'PHRYGIAN', harm:4,  semis:coreHex('min',4),  name:'jog hex',       style:'jazz',  boost:1.8 }
-    ]
-  };
-  try{
-    if(typeof HEX_NAMES_X!=='undefined'){
-      if(HEX_NAMES_X['0,2,3,4,7,9']) CORE.maj[0].name = HEX_NAMES_X['0,2,3,4,7,9'];
-      if(HEX_NAMES_X['0,3,5,6,7,10']) CORE.min[0].name = HEX_NAMES_X['0,3,5,6,7,10'];
-      if(HEX_NAMES_X['0,3,4,5,7,10']) CORE.min[2].name = HEX_NAMES_X['0,3,4,5,7,10'];
-    }
-  }catch(e){}
-
-  // Full 10-note decatonic pools (hundreds of hexes live inside these)
   const STYLES = {
-    myMaj:     { side:'maj', rel:[0,2,4,5,6,7,8,9,10,11], modes:['IONIAN','LYDIAN','MIXOLYDIAN'], label:'TRiCkiSh' },
-    blues:     { side:'maj', rel:[0,2,3,4,5,6,7,9,10,11], modes:['DORIAN','MIXOLYDIAN','IONIAN','LYDIAN'], label:'Blues' },
-    classical: { side:'both', rel:[0,2,3,4,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','MIXOLYDIAN','IONIAN'], label:'Classical' },
-    myMin:     { side:'min', rel:[0,1,2,3,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','PHRYGIAN'], label:'ShAM' },
-    jazz:      { side:'min', rel:[0,1,2,3,4,5,7,8,10,11], modes:['PHRYGIAN','AEOLIAN','DORIAN'], label:'Jazz' }
+    myMaj:     { side:'maj', label:'TRiCkiSh' },
+    blues:     { side:'maj', label:'Blues' },
+    classical: { side:'both', label:'Classical' },
+    myMin:     { side:'min', label:'ShAM' },
+    jazz:      { side:'min', label:'Jazz' }
   };
   const NBR = {
     myMaj:['blues','classical'], blues:['myMaj','classical'],
@@ -7088,224 +7159,269 @@ const G11DE = (function(){
 
   function exiledPc(root, side){
     const R=((root%12)+12)%12;
-    return side==='maj' ? (R+1)%12 : (R+6)%12;
+    return side==='maj' ? (R+1)%12 : (R+6)%12; // m2 or b5
+  }
+  function elevenPool(root, side){
+    const ex = exiledPc(root, side);
+    const set = {};
+    for(let i=0;i<12;i++) if(i!==ex) set[i]=1;
+    return set;
   }
   function maxRun(semis){
     if(!semis||!semis.length) return 0;
-    if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis);
-    const ext=semis.concat(semis.map(function(x){return x+12;}));
+    try{ if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis); }catch(e){}
+    const s=semis.slice().sort(function(a,b){return a-b;});
+    const ext=s.concat(s.map(function(x){return x+12;}));
     let best=1, run=1;
     for(let i=1;i<ext.length;i++){
       if(ext[i]-ext[i-1]===1){ run++; if(run>best) best=run; } else run=1;
     }
-    return Math.min(best, semis.length);
-  }
-  function poolSet(root, stKey){
-    const spec=STYLES[stKey]||STYLES.classical;
-    const set={};
-    (spec.rel||[]).forEach(function(x){ set[(x+root)%12]=1; });
-    return set;
+    return Math.min(best, s.length);
   }
   function inPool(pcs, set){
     for(let i=0;i<(pcs||[]).length;i++) if(!set[pcs[i]]) return false;
     return true;
   }
+  function symDiff(a,b){
+    const A={}, B={};
+    (a||[]).forEach(function(x){ A[x]=1; });
+    (b||[]).forEach(function(x){ B[x]=1; });
+    let n=0;
+    Object.keys(A).forEach(function(k){ if(!B[k]) n++; });
+    Object.keys(B).forEach(function(k){ if(!A[k]) n++; });
+    return n; // total changed membership; voice-lead "note difference" ≈ n/2 for pure swaps
+  }
+  function noteDiff(a,b){
+    // count of pitch classes that differ (symmetric difference size / 2 for equal size)
+    return Math.ceil(symDiff(a,b)/2);
+  }
+  function legalTransition(fromKind, toKind, fromPcs, toPcs){
+    if(!fromPcs||!fromPcs.length) return true;
+    const d = noteDiff(fromPcs, toPcs);
+    const fk = fromKind||'hexa', tk = toKind||'hexa';
+    if(fk===tk) return d===1;                 // penta-penta, hexa-hexa, hepta-hepta
+    // size change by 1
+    if((fk==='hexa'&&(tk==='penta'||tk==='hepta'))||(tk==='hexa'&&(fk==='penta'||fk==='hepta')))
+      return d===2;
+    if((fk==='penta'&&tk==='hepta')||(fk==='hepta'&&tk==='penta'))
+      return d===2 || d===3; // rare; allow 2–3
+    return d<=2;
+  }
   function compat(a,b){
     if(!a||!b||a===b) return true;
     return !FORBIDDEN[a+'|'+b];
   }
+  function kindOfSize(n){
+    if(n<=5) return 'penta';
+    if(n===6) return 'hexa';
+    return 'hepta';
+  }
 
-  // FULL catalog: every legal hex (and some penta/hepta) inside the active decatonic
-  function buildCatalog(root, stKey){
-    const set=poolSet(root, stKey);
-    const spec=STYLES[stKey]||STYLES.classical;
+  // Catalog: any root, any named/universe scale ⊆ 11-pool, ≤3 consecutive
+  function buildCatalog(root, side){
+    const set = elevenPool(root, side);
     const out=[];
     const seen={};
-    function push(o){
-      if(maxRun(o.semis)>3) return;
-      const pcs=o.semis.map(function(x){ return (x+root)%12; });
-      if(!inPool(pcs, set)) return;
-      const fp=pcs.slice().sort(function(a,b){return a-b;}).join(',');
-      if(seen[fp]) return;
-      seen[fp]=1;
-      o.pcs=pcs;
-      out.push(o);
+    function push(relSemis, name, mode, boost, kindHint){
+      if(!relSemis||!relSemis.length) return;
+      const k = kindHint || kindOfSize(relSemis.length);
+      // Try every absolute root for this relative shape
+      for(let R=0;R<12;R++){
+        const pcs = relSemis.map(function(x){ return (x+R)%12; }).sort(function(a,b){return a-b;});
+        // consecutive on the circle in absolute pitch-class space
+        if(maxRun(pcs)>3) continue;
+        if(!inPool(pcs, set)) continue;
+        const fp = pcs.join(',');
+        if(seen[fp]) continue;
+        seen[fp]=1;
+        let nm = name||k;
+        try{
+          if(k==='hexa' && typeof hexAnyName==='function'){ const h=hexAnyName(relSemis); if(h) nm=h; }
+          if(k==='penta' && typeof pentaNameFor==='function'){ const p=pentaNameFor(relSemis.slice().sort(function(a,b){return a-b;}).join(',')); if(p) nm=p; }
+        }catch(e){}
+        out.push({
+          kind:k, mode:mode||'COLOUR', semis:relSemis.slice(), pcs:pcs, name:nm,
+          boost:boost||0.5, absRoot:R
+        });
+      }
     }
 
-    // 1) Priority core hexes (penta + harmonic) when they fit this deca
-    const cores = (spec.side==='min' || stKey==='myMin' || stKey==='jazz') ? CORE.min
-                : (spec.side==='maj' || stKey==='myMaj' || stKey==='blues') ? CORE.maj
-                : CORE.maj.concat(CORE.min);
-    cores.forEach(function(c){
-      push({
-        kind:'hexa', mode:c.mode, semis:c.semis.slice(), name:c.name,
-        style:c.style||stKey, boost:c.boost||2, core:true,
-        bright:(LADDER.find(function(L){return L.mode===c.mode;})||{}).bright
-      });
-    });
-
-    // 2) Hundreds: all mode-exclude hexes + alt-exclude when available
-    (spec.modes||[]).forEach(function(m){
-      const base=(typeof MODE_SEMITONES!=='undefined' && MODE_SEMITONES[m]) ? MODE_SEMITONES[m].slice() : null;
-      if(!base) return;
-      // full hepta occasionally
-      push({ kind:'hepta', mode:m, semis:base.slice(), name:m, style:stKey, boost:0.3,
-        bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
-      // every 1-note exclusion → hex
-      for(let ex=0;ex<base.length;ex++){
-        const semis=base.filter(function(_,i){ return i!==ex; });
-        let nm=m+' ex '+ex;
-        try{
-          if(typeof HEX_NAMES!=='undefined' && HEX_NAMES[m] && HEX_NAMES[m][ex]) nm=HEX_NAMES[m][ex];
-          else if(typeof hexAnyName==='function') nm=hexAnyName(semis)||nm;
-        }catch(e){}
-        push({ kind:'hexa', mode:m, semis:semis, name:nm, style:stKey, boost:0.5, ex:ex,
-          bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
+    // Modes (hepta) + excludes (hexa) + double-excludes (penta) for all 7 modes
+    try{
+      if(typeof MODE_ORDER!=='undefined' && typeof MODE_SEMITONES!=='undefined'){
+        MODE_ORDER.forEach(function(m){
+          const base = MODE_SEMITONES[m]; if(!base) return;
+          push(base.slice(), m, m, 0.35, 'hepta');
+          for(let ex=0;ex<base.length;ex++){
+            const hx = base.filter(function(_,i){ return i!==ex; });
+            let nm = m+' ex '+ex;
+            try{ if(HEX_NAMES&&HEX_NAMES[m]&&HEX_NAMES[m][ex]) nm=HEX_NAMES[m][ex]; }catch(e){}
+            push(hx, nm, m, 0.7, 'hexa');
+            for(let b=ex+1;b<base.length;b++){
+              const pt = base.filter(function(_,i){ return i!==ex && i!==b; });
+              if(pt.length===5) push(pt, 'penta', m, 0.3, 'penta');
+            }
+          }
+        });
       }
-      // pentas: drop 2 from mode
-      for(let a=0;a<base.length;a++){
-        for(let b=a+1;b<base.length;b++){
-          const semis=base.filter(function(_,i){ return i!==a && i!==b; });
-          if(semis.length!==5) continue;
-          let nm='penta';
-          try{ if(typeof pentaNameFor==='function') nm=pentaNameFor(semis.join(','))||nm; }catch(e){}
-          push({ kind:'penta', mode:m, semis:semis, name:nm, style:stKey, boost:0.25,
-            bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
-        }
-      }
-    });
+    }catch(e){}
 
-    // 3) Named non-diatonic hexes from HEX_NAMES_X that sit in the pool
+    // HEXA ALTS (named hex × 8 alts)
+    try{
+      if(window.HEXA_ALTS){
+        Object.keys(window.HEXA_ALTS).forEach(function(fp){
+          const e = window.HEXA_ALTS[fp];
+          push(e.semis.slice(), e.name, e.mode||'COLOUR', 0.85, 'hexa');
+        });
+      }
+    }catch(e){}
+
+    // SCALE_UNIVERSE / HEX_UNIVERSE / HEX_NAMES_X
+    try{
+      if(typeof SCALE_UNIVERSE!=='undefined'){
+        Object.keys(SCALE_UNIVERSE).forEach(function(fp){
+          const e=SCALE_UNIVERSE[fp]; if(!e||!e.semis) return;
+          const n=e.semis.length;
+          if(n<5||n>7) return;
+          push(e.semis.slice(), e._realName||e.name||fp, e.parentMode||'COLOUR', 0.55, kindOfSize(n));
+        });
+      }
+    }catch(e){}
     try{
       if(typeof HEX_NAMES_X!=='undefined'){
         Object.keys(HEX_NAMES_X).forEach(function(fp){
           const semis=fp.split(',').map(Number);
-          if(semis.length!==6) return;
-          push({ kind:'hexa', mode:'COLOUR', semis:semis, name:HEX_NAMES_X[fp], style:stKey, boost:0.6 });
+          push(semis, HEX_NAMES_X[fp], 'COLOUR', 0.75, 'hexa');
         });
       }
     }catch(e){}
 
-    // 4) Universe hexes inside the pool
-    try{
-      if(typeof SCALE_UNIVERSE!=='undefined'){
-        Object.keys(SCALE_UNIVERSE).forEach(function(fp){
-          const e=SCALE_UNIVERSE[fp];
-          if(!e||!e.semis||e.semis.length!==6) return;
-          const nm=e._realName||e.name||fp;
-          push({ kind:'hexa', mode:e.parentMode||'COLOUR', semis:e.semis.slice(), name:nm, style:stKey, boost:0.55 });
-        });
-      }
-    }catch(e){}
-
+    // Prefer hexas in the catalog order
+    out.sort(function(a,b){
+      const ka=a.kind==='hexa'?0:a.kind==='penta'?1:2;
+      const kb=b.kind==='hexa'?0:b.kind==='penta'?1:2;
+      return ka-kb || (b.boost-a.boost);
+    });
     return out;
   }
 
   let side='maj';
-  let style='blues';
-  let brightIdx=1;
+  let style='classical';
   let _lastFp='';
+  let _lastPcs=[];
+  let _lastKind='hexa';
 
-  function detectSideFromMode(mode){
-    const m=(mode||'').toUpperCase();
-    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(m)) return 'min';
-    if(/IONIAN|LYDIAN|MIXOLYDIAN/.test(m)) return 'maj';
+  function detectSide(st){
+    // Prefer explicit minor key / Aeolian home first
+    const key=(st&&st.key)||'C';
+    const mode=((st&&st.mode)||'').toUpperCase();
+    if(/m$/.test(key) || key.indexOf('m')>0) return 'min';
+    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(mode)) return 'min';
+    if(/IONIAN|LYDIAN|MIXOLYDIAN/.test(mode)) return 'maj';
+    // board flags
+    try{
+      if(st&&st.min) return 'min';
+      if(typeof window!=='undefined' && window.__listenHomeMaj===false) return 'min';
+    }catch(e){}
     return side;
   }
   function pickStyle(sideNow, cur){
     const allowed = sideNow==='maj' ? ['myMaj','blues','classical'] : ['classical','myMin','jazz'];
     let pool = allowed.filter(function(s){ return compat(cur,s); });
     if(!pool.length) pool=allowed.slice();
-    if(pool.indexOf(cur)>=0 && Math.random()<0.5) return cur;
-    // neighbour preferred
+    if(pool.indexOf(cur)>=0 && Math.random()<0.55) return cur;
     const nbr=(NBR[cur]||[]).filter(function(s){ return pool.indexOf(s)>=0; });
-    if(nbr.length && Math.random()<0.65) return nbr[Math.floor(Math.random()*nbr.length)];
+    if(nbr.length && Math.random()<0.6) return nbr[Math.floor(Math.random()*nbr.length)];
     return pool[Math.floor(Math.random()*pool.length)];
   }
 
   function next(st){
-    const root = (NOTES.indexOf(st.key)+12)%12;
-    side = detectSideFromMode(st.mode);
-    if(Math.random()<0.32){
-      style = pickStyle(side, style);
-      if(style==='myMaj'||style==='blues') side='maj';
-      else if(style==='myMin'||style==='jazz') side='min';
+    let keyName = (st&&st.key)||'C';
+    // normalize "Em" / "E minor" style keys
+    let root = NOTES.indexOf(keyName);
+    if(root<0){
+      const m = /^([A-G]#?b?)m/i.exec(keyName);
+      if(m){ root = NOTES.indexOf(m[1].replace('b','b')); keyName=m[1]; }
+      if(root<0) root = 0;
     }
-    // drift brightness slowly
-    if(Math.random()<0.45){
-      const band=LADDER.filter(function(L){ return L.side===side; });
-      if(band.length){
-        const cur=band.findIndex(function(L){ return L.bright===brightIdx; });
-        let ni=cur>=0?cur:0;
-        ni=Math.max(0, Math.min(band.length-1, ni+(Math.random()<0.5?-1:1)));
-        brightIdx=band[ni].bright;
+    side = detectSide(st);
+    // Soft style drift inside allowed 11-family
+    if(Math.random()<0.28) style = pickStyle(side, style);
+    if(style==='myMaj'||style==='blues') side='maj';
+    if(style==='myMin'||style==='jazz') side='min';
+
+    const catalog = buildCatalog(root, side);
+    if(!catalog.length){
+      // fallback pure ionian/aeolian
+      const semis = side==='min' ? [0,2,3,5,7,8,10] : [0,2,4,5,7,9,11];
+      const pcs = semis.map(function(x){ return (x+root)%12; });
+      _lastFp=pcs.slice().sort(function(a,b){return a-b;}).join(',');
+      _lastPcs=pcs; _lastKind='hepta';
+      const tonic = NAMES[root]+(side==='min'?'m':'');
+      const exN = NAMES[exiledPc(root, side)];
+      return [NAMES[root], side==='min'?'AEOLIAN':'IONIAN', 'NA', {
+        semis:semis, name:'key '+tonic+' · '+(side==='min'?'Aeolian':'Ionian')+' · '+(side==='maj'?'m2':'b5')+' exiled '+exN,
+        realName: side==='min'?'AEOLIAN':'IONIAN', parentMode: side==='min'?'AEOLIAN':'IONIAN',
+        g11de:{ style:style, side:side, exiled:exN, kind:'hepta', tonic:tonic }
+      }];
+    }
+
+    // Score candidates
+    const prev = _lastPcs||[];
+    const preferHex = Math.random()<0.72;
+    catalog.forEach(function(c){
+      let sc = (c.boost||0) + Math.random()*0.9;
+      if(preferHex && c.kind==='hexa') sc += 1.4;
+      if(c.kind==='penta') sc += 0.35;
+      if(c.kind==='hepta') sc += 0.2;
+      const fp = c.pcs.join(',');
+      if(fp===_lastFp) sc -= 8;
+      if(prev.length){
+        if(!legalTransition(_lastKind, c.kind, prev, c.pcs)) sc -= 12;
+        else {
+          const d = noteDiff(prev, c.pcs);
+          if(d===1) sc += 2.2;
+          else if(d===2) sc += 1.0;
+        }
       }
-    }
-
-    let cands=buildCatalog(root, style);
-    // also allow neighbour deca hexes under rule of 11 (still hundreds)
-    if(Math.random()<0.25){
-      const nbr=(NBR[style]||[])[0];
-      if(nbr && compat(style, nbr)) cands=cands.concat(buildCatalog(root, nbr));
-    }
-    if(!cands.length){
-      const fb=CORE[side][0];
-      const semis=fb.semis.slice();
-      try{ window.ACTIVE_SCALE={root:root, semis:semis}; }catch(e){}
-      return [st.key,'COLOUR','NA',{ semis:semis, name:fb.name, realName:fb.name, parentMode:fb.mode,
-        g11de:{ style:style, side:side, exiled:NAMES[exiledPc(root,side)], kind:'hexa', tonic:NAMES[root]+(side==='min'?'m':'') } }];
-    }
-
-    function fpOf(pcs){ return pcs.slice().sort(function(a,b){return a-b;}).join(','); }
-    const as=window.ACTIVE_SCALE||{};
-    const prevRoot=((as.root!=null?as.root:root)%12+12)%12;
-    const prevPcs=(as.semis||[]).map(function(s){ return (s+prevRoot)%12; });
-    function symDiff(a,b){
-      const A={},B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
-      let d=0; for(const k in A) if(!B[k]) d++; for(const k in B) if(!A[k]) d++; return d;
-    }
-
-    cands.forEach(function(c){
-      let sc = (c.kind==='hexa'?3.2:c.kind==='penta'?1.1:0.5) + (c.boost||0) + Math.random()*0.7;
-      // mild bias toward current brightness — core hexes get their boost, not exclusivity
-      if(c.bright!=null) sc -= Math.abs(c.bright-brightIdx)*0.25;
-      if(c.core) sc += 0.9;
-      const fp=fpOf(c.pcs);
-      if(fp===_lastFp) sc -= 6;
-      if(prevPcs.length){
-        const d=symDiff(prevPcs, c.pcs);
-        if(d===0) sc -= 6;
-        else if(d===1) sc += 1.7;
-        else if(d===2) sc += 0.6;
-      }
-      c.sc=sc;
+      // prefer shapes near home tonic
+      if(c.pcs.indexOf(root)>=0) sc += 0.4;
+      c.sc = sc;
     });
-    cands.sort(function(a,b){ return b.sc-a.sc; });
-    let pick=cands[0];
-    for(let i=0;i<cands.length;i++){
-      if(fpOf(cands[i].pcs)!==_lastFp){ pick=cands[i]; break; }
+    catalog.sort(function(a,b){ return b.sc-a.sc; });
+    let pick = catalog[0];
+    for(let i=0;i<catalog.length;i++){
+      if(catalog[i].pcs.join(',')!==_lastFp &&
+         ( !prev.length || legalTransition(_lastKind, catalog[i].kind, prev, catalog[i].pcs) || i>30 )){
+        pick = catalog[i]; break;
+      }
     }
-    _lastFp=fpOf(pick.pcs);
+    _lastFp = pick.pcs.join(',');
+    _lastPcs = pick.pcs.slice();
+    _lastKind = pick.kind;
 
-    const exN=NAMES[exiledPc(root, side)];
-    const tonic=NAMES[root]+(side==='min'?'m':'');
-    const exileTag=side==='maj'?('m2 exiled '+exN):('b5 exiled '+exN);
-    const lab=(STYLES[style]&&STYLES[style].label)||style;
-    let real=pick.name;
+    const exN = NAMES[exiledPc(root, side)];
+    const tonic = NAMES[root]+(side==='min'?'m':'');
+    const exileTag = (side==='maj'?'m2':'b5')+' exiled '+exN;
+    const lab = (STYLES[style]&&STYLES[style].label)||style;
+    let real = pick.name;
     try{
-      if(typeof hexAnyName==='function'){ const hn=hexAnyName(pick.semis); if(hn) real=hn; }
+      if(window.HEXA_ALTS){
+        // match by relative if possible
+        const rel = pick.semis.slice().sort(function(a,b){return a-b;}).join(',');
+        if(window.HEXA_ALTS[rel]) real = window.HEXA_ALTS[rel].name;
+      }
     }catch(e){}
-    const harmLab=(LADDER.find(function(L){return L.mode===pick.mode;})||{}).label||'';
-    const nm='key '+tonic+' · '+lab+' · '+real+(harmLab?(' · '+harmLab):'')+' · '+exileTag;
-    try{ window.ACTIVE_SCALE={root:root, semis:pick.semis.slice()}; }catch(e){}
-    return [st.key, 'COLOUR', 'NA', {
+    const nm = 'key '+tonic+' · '+lab+' · '+real+' · '+exileTag;
+    try{ window.ACTIVE_SCALE={ root:root, semis:pick.semis.slice(), pcs:pick.pcs.slice() }; }catch(e){}
+    return [NAMES[root], 'COLOUR', 'NA', {
       semis: pick.semis.slice(),
       name: nm,
       realName: real,
-      parentMode: pick.mode||'IONIAN',
+      parentMode: pick.mode|| (side==='min'?'AEOLIAN':'IONIAN'),
       g11de: {
-        style:style, side:side, devil:exN, exiled:exN, kind:pick.kind,
-        tonic:tonic, harm:harmLab||null, bright:pick.bright, core:!!pick.core
+        style:style, side:side, exiled:exN, kind:pick.kind,
+        tonic:tonic, absRoot:pick.absRoot, pcs:pick.pcs.slice()
       }
     }];
   }
@@ -7318,8 +7434,6 @@ const G11DE = (function(){
 
   return {
     next: next,
-    LADDER: LADDER,
-    CORE: CORE,
     STYLES: STYLES,
     DEVIL_MAJ: EXILED_MAJ,
     DEVIL_MIN: EXILED_MIN,
@@ -7328,8 +7442,12 @@ const G11DE = (function(){
     setStyle: function(s){ if(STYLES[s]) style=s; },
     getStyle: function(){ return style; },
     getSide: function(){ return side; },
-    getBright: function(){ return brightIdx; },
-    catalogSize: function(root, st){ return buildCatalog(root||0, st||style).length; }
+    catalogSize: function(root, st){
+      const s = (STYLES[st]&&STYLES[st].side==='min')?'min':(STYLES[st]&&STYLES[st].side==='maj')?'maj':side;
+      return buildCatalog(root||0, s).length;
+    },
+    elevenPool: elevenPool,
+    exiledPc: exiledPc
   };
 })();
 window.G11DE = G11DE;
