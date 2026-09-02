@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite102';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite103';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1159,7 +1159,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
-  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Default source: App + Mic (backing track in app + real guitar). Detects side via m2/b5 exiled (rule of 11), then style + scales every 2 bars. SPICE = strict→loose. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
+  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Ionian/Aeolian first. Major→m2 exiled · Minor→b5 exiled (11 notes). Any penta/hexa/hepta in the pool, ≤3 consecutive. Same voice-lead as G11DE (Δ1 same size, Δ2 size change). App+Mic default. SPICE = strict→loose." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
   <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="Rule of 11: m2 exiled = major key (3 major decas); b5 exiled = minor key (3 minor decas). Key known once m2 or b5 is exiled. Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz. Never 12." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
     <option value="auto" selected>AUTO (5 keys)</option>
     <option value="myMaj">TRiCkiSh Major</option>
@@ -9718,7 +9718,11 @@ updateKeySigDisplay();
     return null; // classical: C or Cm
   }
   function _poolPcs(root, maj){
-    return _activePoolSpec(maj).rel.map(function(x){ return (x+root)%12; });
+    const R=(root|0)%12;
+    const ex = maj ? (R+1)%12 : (R+6)%12;
+    const out=[];
+    for(let i=0;i<12;i++) if(i!==ex) out.push(i);
+    return out;
   }
   function _symDiff(a,b){
     const A={}, B={};
@@ -9747,9 +9751,19 @@ updateKeySigDisplay();
     }
     const R=homeRoot|0;
     const maj=!!homeMaj;
-    const spec=_activePoolSpec(maj);
-    const pool=spec.rel.map(function(x){ return (x+R)%12; });
+    // lite103: same as G11DE — Ionian/Aeolian first; exile only m2 (maj) or b5 (min) → 11-note pool
+    // Any penta/hexa/hepta (any root) if notes ⊆ pool and ≤3 consecutive
+    const _exiled = maj ? (R+1)%12 : (R+6)%12;
+    try{
+      _devilPc=_exiled;
+      const _nn=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      _devilName=_nn[_exiled];
+      _styleFamily=maj?'majSide':'minSide';
+    }catch(e){}
+    const pool=[];
+    for(let i=0;i<12;i++) if(i!==_exiled) pool.push(i);
     const poolSet={}; pool.forEach(function(p){ poolSet[p]=1; });
+    const spec=_activePoolSpec(maj);
     function _semisOf(o){
       if(o.colourSemis && o.colourSemis.length) return o.colourSemis.slice().sort(function(a,b){return a-b;});
       if(o.pcs) return o.pcs.map(function(p){ return (p-R+12)%12; }).sort(function(a,b){return a-b;});
@@ -9891,13 +9905,31 @@ updateKeySigDisplay();
         Object.keys(HEX_NAMES_X).forEach(function(fp){
           const semis=fp.split(',').map(Number);
           if(semis.length!==6) return;
-          const pcs=semis.map(function(x){ return (x+R)%12; });
-          if(!_subsetOfPool(pcs, poolSet)) return;
-          push({mode:'COLOUR', alt:'NA', tag:'hexa:'+HEX_NAMES_X[fp], pcs:pcs,
-            colourSemis:semis.slice(), hexaName:HEX_NAMES_X[fp], kind:'hexa'});
+          for(let absR=0; absR<12; absR++){
+            const pcs=semis.map(function(x){ return (x+absR)%12; });
+            if(!_subsetOfPool(pcs, poolSet)) continue;
+            push({mode:'COLOUR', alt:'NA', tag:'hexa:'+HEX_NAMES_X[fp], pcs:pcs,
+              colourSemis:semis.slice(), hexaName:HEX_NAMES_X[fp], kind:'hexa', absRoot:absR});
+          }
         });
       }catch(e){}
     }
+    // HEXA ALTS (named hex × 8 alts) — any root inside 11-pool
+    try{
+      if(window.HEXA_ALTS){
+        Object.keys(window.HEXA_ALTS).forEach(function(fp){
+          const e=window.HEXA_ALTS[fp];
+          if(!e||!e.semis||e.semis.length!==6) return;
+          for(let absR=0; absR<12; absR++){
+            const pcs=e.semis.map(function(x){ return (x+absR)%12; });
+            if(!_subsetOfPool(pcs, poolSet)) continue;
+            push({mode:'COLOUR', alt:e.alt||'NA', tag:'hexa-alt:'+e.name, pcs:pcs,
+              colourSemis:e.semis.slice(), hexaName:e.name, uniName:e.name, kind:'hexa',
+              parentMode:e.mode||'IONIAN', fromAlt:true, spiceTier:2, absRoot:absR});
+          }
+        });
+      }
+    }catch(e){}
     if(typeof PENTA_SCALES!=='undefined'){
       Object.keys(PENTA_SCALES).forEach(function(nm){
         const base=PENTA_SCALES[nm];
@@ -9917,7 +9949,9 @@ updateKeySigDisplay();
           if(!e||!e.semis) continue;
           const sz=e.semis.length;
           if(sz<5||sz>7) continue;
-          const pcs=e.semis.map(function(x){ return (x+R)%12; });
+          // any absolute root whose notes sit in the 11-pool
+          for(let absR=0; absR<12; absR++){
+          const pcs=e.semis.map(function(x){ return (x+absR)%12; });
           if(!_subsetOfPool(pcs, poolSet)) continue;
           let mode='IONIAN', alt='NA', exIdx=null;
           try{
@@ -9943,8 +9977,10 @@ updateKeySigDisplay();
             kind:(sz===5?'penta':sz===6?'hexa':'hepta'),
             parentMode:mode,
             exIdx:exIdx,
-            uniName:nm
+            uniName:nm,
+            absRoot:absR
           });
+          }
         }
       }
     }catch(e){}
@@ -10353,65 +10389,35 @@ updateKeySigDisplay();
       if(tier>=2 && c.fromAlt){
         sc += 0.08 + sp*1.2; // main spice target: exclude-from-alteration hexas
       }
-      // lite64: transition rules within style (2-bar pick window)
-      //  same size → at most 1 note difference
-      //  hexa → penta = penta is exclude-from-hexa
-      //  hepta → hexa = exclude 1
-      //  hexa → hepta = alteration + include (symDiff ≤ 2)
-      //  hepta → penta = exclude 2 (symDiff ≤ 2)
-      //  also: penta/hexa already capped at ≤3 consecutive chromatics in push()
+      // lite103: same voice-lead as G11DE
+      //  same size → noteDiff 1 (symDiff 2)
+      //  hexa ↔ penta / hepta → noteDiff 2
+      //  pool already 11-note (m2 or b5 exiled); ≤3 consecutive in push()
       if(_lastPickPcs && _lastPickPcs.length){
         const prev=_lastPickPcs;
         const next=c.pcs||[];
-        const diff=_symDiff(prev, next);
+        const sym=_symDiff(prev, next);
+        const noteDiff=Math.ceil(sym/2);
         const prevN=prev.length, nextN=next.length;
         const sameSize=(prevN===nextN);
         let ok=true;
         if(sameSize){
-          // hepta↔hepta / hexa↔hexa / penta↔penta: max 1 note change
-          if(diff>2) ok=false; // symDiff 2 = one note out + one note in
-          else if(diff===0) sc -= 0.35; // force variety
-          else sc += 0.22*(2-diff);
-        } else if(prevN===6 && nextN===5){
-          // hexa → penta: penta must be subset of hexa (exclude only)
-          const set={}; prev.forEach(function(p){ set[p]=1; });
-          ok=next.every(function(p){ return set[p]; }) && diff===1;
-          if(ok) sc += 0.25;
-        } else if(prevN===5 && nextN===6){
-          // penta → hexa: include one note into penta
-          const set={}; next.forEach(function(p){ set[p]=1; });
-          ok=prev.every(function(p){ return set[p]; }) && diff===1;
-          if(ok) sc += 0.20;
-        } else if(prevN===7 && nextN===6){
-          // hepta → hexa: exclude one
-          const set={}; prev.forEach(function(p){ set[p]=1; });
-          ok=next.every(function(p){ return set[p]; }) && diff===1;
-          if(ok) sc += 0.22;
-        } else if(prevN===6 && nextN===7){
-          // hexa → hepta: alteration + include → at most 2 note diff
-          ok=diff<=2;
-          if(ok) sc += 0.15;
-        } else if(prevN===7 && nextN===5){
-          // hepta → penta: exclude two
-          const set={}; prev.forEach(function(p){ set[p]=1; });
-          ok=next.every(function(p){ return set[p]; }) && diff===2;
+          ok = (noteDiff===1); // penta-penta / hexa-hexa / hepta-hepta
+          if(sym===0) ok=false;
+          if(ok) sc += 0.40;
+        } else if((prevN===6 && (nextN===5||nextN===7)) || (nextN===6 && (prevN===5||prevN===7))){
+          ok = (noteDiff===2);
+          if(ok) sc += 0.28;
+        } else if((prevN===5 && nextN===7) || (prevN===7 && nextN===5)){
+          ok = (noteDiff===2 || noteDiff===3);
           if(ok) sc += 0.12;
-        } else if(prevN===5 && nextN===7){
-          // penta → hepta: include two
-          const set={}; next.forEach(function(p){ set[p]=1; });
-          ok=prev.every(function(p){ return set[p]; }) && diff===2;
-          if(ok) sc += 0.10;
         } else {
-          ok=diff<=2;
+          ok = (noteDiff<=2);
         }
-        if(!ok){ return; } // illegal transition — not a candidate (educated path only)
-        // reward smooth 1-note voice-leading
-        if(sameSize && diff===2) sc += 0.35;
-        if(sameSize && diff===0) sc -= 0.55;
+        if(!ok){ return; } // illegal transition
         const id=c.key+'|'+(c.mode)+'|'+(c.alt||'')+'|'+(c.pentaName||c.hexaName||c.tag||'');
         if(id===_lastPickKey) sc -= 0.55;
       } else {
-        // first pick: prefer hexes that cover heard pcs
         if(c.kind==='hexa') sc += 0.12;
       }
       // hard reject illegal consecutive runs on penta/hexa (belt + suspenders)
