@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite94';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite100';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -990,6 +990,13 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <input id="metVol" type="range" min="0" max="100" step="1" style="width:74px;accent-color:#FFDD00;">
     <span id="metVolVal" style="font-size:0.62em;min-width:22px;text-align:right;color:#FFDD00;">45</span>
   </div>
+  <div class="met-grp" id="latGrp" data-tip-title="LATENCY" data-tip="Output latency is read from the device. Mic lag is estimated (or calibrated). TRIM shifts analysis/listen alignment. CAL: play a click — hit a string with it to measure mic lag." style="align-items:center;gap:4px;padding:0 6px;flex-wrap:wrap;">
+    <span style="font-size:0.58em;letter-spacing:1px;color:#67e8f9;">LAT</span>
+    <input id="latTrim" type="range" min="-60" max="80" step="5" value="0" style="width:64px;accent-color:#67e8f9;">
+    <span id="latTrimVal" style="font-size:0.58em;min-width:36px;color:#67e8f9;">0ms</span>
+    <button type="button" id="latCalBtn" style="font-size:0.58em;padding:2px 6px;border-radius:4px;border:1px solid #67e8f9;background:#083344;color:#67e8f9;font-weight:900;cursor:pointer;">CAL</button>
+    <span id="latInfo" style="font-size:0.55em;color:#64748b;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">out · mic</span>
+  </div>
   <div class="met-grp" id="metSig">
     <button data-ts="A" class="active">4/4</button>
     <button data-ts="B">3/4</button>
@@ -1002,7 +1009,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <button data-walk="seq">JIMI</button>
     <button data-walk="dhex" data-tip-title="DACTYLIC HEXAMETER" data-tip="The epic meter as a walk. Each line = 6 feet = 24 bars: feet are DACTYLS (long-short-short) or SPONDEES (long-long), a long syllable holds a scale 2 bars, a short 1 bar. Feet 1-4 lean dactylic, the 5th is (almost) always a dactyl, the 6th always a spondee - so every line lands with weight. Long syllables anchor on consonant scales; shorts pass through 1-note glides.">D.HEX</button>
     <button data-walk="free" data-tip-title="FREE - F# MINOR TRACK" data-tip="The scale SIZE follows the meter: short bars = pentatonic, mid = hexatonic, long = heptatonic. Plays the current key's aeolian (+ dorian/phrygian borrows), so set any minor key. Pair with the FREE time signature (the 61-bar pi progression).">FREE</button>
-    <button data-walk="glide" data-tip-title="G11DE · DECATONIC 11" data-tip="Walk the rule of 11. Major-side (no m2 devil): TRiCkiSh ↔ Blues ↔ Classical. Minor-side (no b5 devil): Classical ↔ ShAM ↔ Jazz. Never 12. Mostly hexatonics ≤3 consecutive; penta/hepta allowed. Knows all 12 keys' devils.">G11DE</button>
+    <button data-walk="glide" data-tip-title="G11DE · DECATONIC 11" data-tip="Full decatonic hex catalog (hundreds) + core penta+harmonic hexes (blues maj/min, classical, jog…). Ladder biases brightness; does not limit the pool. m2/b5 exiled locks side. key C/Cm · style · name · exiled.">G11DE</button>
     <button data-walk="custom" data-tip-title="CUSTOM" data-tip="Define your own scale sequence bar by bar using note count buttons." class="expert-only">CUSTOM</button>
     <button data-walk="chord" data-tip-title="CHORD" data-tip="Auto-select scales that fit a chord progression you define." class="expert-only">CHORD</button>
     <button data-walk="bktrk" data-tip-title="BKTRK · YOUR TRACK" data-tip="Play to your own saved backing track. Loads its key + tempo, plays the audio, and auto-follows its chord changes with similar-note / similar-colour scales." class="expert-only">BKTRK</button>
@@ -1152,8 +1159,8 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
-  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Listen continuously. Each bar picks a matching scale (neighbor modes, penta/hexa, one-note alts). SPICE = strict→loose. BPM updates live. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
-  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="Rule of 11: major-side strictly no m2 (devil=m2); minor-side strictly no b5 (devil=b5). An 11-note set reveals tonic; 12 scatters (use song start/end). Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz. Forbidden pairs union to 12. Manual lock any style." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
+  <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Default source: App + Mic (backing track in app + real guitar). Detects side via m2/b5 exiled (rule of 11), then style + scales every 2 bars. SPICE = strict→loose. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
+  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="Rule of 11: m2 exiled = major key (3 major decas); b5 exiled = minor key (3 minor decas). Key known once m2 or b5 is exiled. Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz. Never 12." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
     <option value="auto" selected>AUTO (5 keys)</option>
     <option value="myMaj">TRiCkiSh Major</option>
     <option value="blues">BLUES</option>
@@ -1161,11 +1168,11 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <option value="myMin">ShAM Minor</option>
     <option value="jazz">JAZZ</option>
   </select>
-  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="FILE = pick an MP3/WAV from your phone (Musicolet library files work). APP = this app only. MIC = speakers on. CAPTURE = browser tab audio. Android blocks web apps from tapping Musicolet’s live output.">
+  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="DEFAULT: App + Mic — hears the in-app backing track AND your real guitar on the mic. Feeds the rule-of-11 (m2 or b5 exiled → side + tonic). FILE = load MP3/WAV. APP only / MIC only / CAPTURE for special cases.">
+    <option value="both" selected>App + Mic (guitar + track)</option>
+    <option value="internal">App audio only</option>
+    <option value="mic">Mic only (speakers on)</option>
     <option value="file">Load audio file</option>
-    <option value="internal">App audio (this app)</option>
-    <option value="mic">Mic (speakers on)</option>
-    <option value="both">App + Mic</option>
     <option value="capture">Capture tab/stream</option>
   </select>
   <input type="file" id="keyFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" style="display:none;">
@@ -6802,16 +6809,162 @@ window.setMetVol=function(v){
   const lbl=document.getElementById('metVolVal'); if(lbl) lbl.textContent=Math.round(_metVol*100);
 };
 window.getMetVol=function(){ return _metVol; };
+
+// lite100: latency trim + calibrate UI
+(function(){
+  function wireLat(){
+    try{
+      var tr=document.getElementById('latTrim');
+      if(tr && !tr.__latWired){
+        tr.__latWired=true;
+        tr.addEventListener('input', function(){
+          if(window.LatencyComp) window.LatencyComp.setTrim(+tr.value||0);
+        });
+      }
+      var cal=document.getElementById('latCalBtn');
+      if(cal && !cal.__latWired){
+        cal.__latWired=true;
+        cal.addEventListener('click', function(){
+          if(window.LatencyComp) window.LatencyComp.startCalibrate();
+        });
+      }
+      if(window.LatencyComp) window.LatencyComp.refresh();
+    }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', wireLat);
+  else wireLat();
+  setTimeout(wireLat, 500);
+})();
+
+
+// ═══════════════════════════════════════════════════════════════
+// LatencyComp — measure + compensate output/input delay (lite100)
+// Techniques: device report, look-ahead schedule, mic offset, user trim
+// ═══════════════════════════════════════════════════════════════
+window.LatencyComp = (function(){
+  let trimMs = 0;
+  let micMs = 45;          // typical phone mic path default
+  let calActive = false;
+  let calClickAt = 0;
+  try{
+    const t = localStorage.getItem('improvs2_lat_trim'); if(t!=null) trimMs = +t||0;
+    const m = localStorage.getItem('improvs2_lat_mic'); if(m!=null) micMs = +m||45;
+  }catch(e){}
+  function ensure(){
+    try{ if(typeof ensureAudio==='function') ensureAudio(); }catch(e){}
+  }
+  function outputSec(){
+    ensure();
+    try{
+      if(!_AC) return 0.02;
+      const b = (_AC.baseLatency|0) || 0;
+      const o = (typeof _AC.outputLatency==='number' ? _AC.outputLatency : 0) || 0;
+      return Math.max(0, b+o);
+    }catch(e){ return 0.02; }
+  }
+  function outputMs(){ return Math.round(outputSec()*1000); }
+  function scheduleLeadSec(){
+    // schedule clicks slightly ahead so they land on the buffer boundary cleanly
+    return Math.max(0.008, Math.min(0.06, outputSec()*0.35 + 0.01));
+  }
+  function micOffsetMs(){ return Math.max(0, Math.min(200, (micMs|0) + (trimMs|0))); }
+  function setTrim(ms){
+    trimMs = Math.max(-80, Math.min(120, +ms||0));
+    try{ localStorage.setItem('improvs2_lat_trim', String(trimMs)); }catch(e){}
+    _refreshUI();
+  }
+  function setMic(ms){
+    micMs = Math.max(0, Math.min(180, +ms||0));
+    try{ localStorage.setItem('improvs2_lat_mic', String(micMs)); }catch(e){}
+    _refreshUI();
+  }
+  function _refreshUI(){
+    try{
+      const el=document.getElementById('latTrimVal');
+      if(el) el.textContent = (trimMs>=0?'+':'')+trimMs+'ms';
+      const tr=document.getElementById('latTrim');
+      if(tr) tr.value = String(trimMs);
+      const info=document.getElementById('latInfo');
+      if(info) info.textContent = 'out ~'+outputMs()+' · mic ~'+micOffsetMs()+'ms';
+    }catch(e){}
+  }
+  // Calibration: play a click, wait for loud mic energy within 300ms
+  function startCalibrate(){
+    ensure();
+    if(!_AC) return;
+    calActive = true;
+    const lead = scheduleLeadSec();
+    const t = _AC.currentTime + lead;
+    calClickAt = performance.now() + lead*1000;
+    try{
+      const o=_AC.createOscillator(), g=_AC.createGain();
+      o.frequency.value=1200;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.7, t+0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
+      o.connect(g); g.connect(_AC.destination);
+      o.start(t); o.stop(t+0.09);
+    }catch(e){}
+    const out=document.getElementById('latInfo');
+    if(out) out.textContent='CAL: tap guitar/string WITH the click...';
+    // arm energy watcher on mic if present
+    setTimeout(function(){ calActive=false; }, 400);
+  }
+  function noteMicEnergy(rms){
+    if(!calActive || rms<0.08) return;
+    const now = performance.now();
+    const lag = Math.max(0, Math.min(180, now - calClickAt));
+    if(lag<8) return; // too early = noise
+    micMs = Math.round(lag);
+    calActive=false;
+    try{ localStorage.setItem('improvs2_lat_mic', String(micMs)); }catch(e){}
+    _refreshUI();
+    const out=document.getElementById('latInfo');
+    if(out) out.textContent='calibrated mic ~'+micMs+'ms';
+  }
+  // corrected wall-clock for LISTEN pitch samples from mic path
+  function stampMic(){
+    return Date.now() - micOffsetMs();
+  }
+  function stampApp(){
+    // app audio is already in-graph; only subtract half output as analysis lag estimate
+    return Date.now() - Math.round(outputMs()*0.35) - Math.max(0, trimMs);
+  }
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(_refreshUI, 400); });
+  setTimeout(_refreshUI, 800);
+  return {
+    outputSec: outputSec,
+    outputMs: outputMs,
+    scheduleLeadSec: scheduleLeadSec,
+    micOffsetMs: micOffsetMs,
+    setTrim: setTrim,
+    setMic: setMic,
+    getTrim: function(){ return trimMs; },
+    getMic: function(){ return micMs; },
+    startCalibrate: startCalibrate,
+    noteMicEnergy: noteMicEnergy,
+    stampMic: stampMic,
+    stampApp: stampApp,
+    refresh: _refreshUI
+  };
+})();
+
 function metClick(accent){
   try{
     const bus=_metBus();
     if(_metVol<=0) return;                       // muted: skip the voice entirely
-    const o=mAudio.createOscillator(), g=mAudio.createGain(), t=mAudio.currentTime;
+    if(!mAudio) mAudio=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+    if(mAudio.state==='suspended') try{ mAudio.resume(); }catch(e){}
+    // lite100: schedule on the audio clock with a small lead so the click lands on a buffer edge
+    const lead = (window.LatencyComp && window.LatencyComp.scheduleLeadSec) ? window.LatencyComp.scheduleLeadSec() : 0.012;
+    const t = mAudio.currentTime + lead;
+    const o=mAudio.createOscillator(), g=mAudio.createGain();
     o.frequency.value=accent?1600:950;
-    g.gain.setValueAtTime(1,t);                  // envelope only; level lives on the bus
-    g.gain.exponentialRampToValueAtTime(0.0018,t+0.06);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(1, t+0.004);
+    g.gain.exponentialRampToValueAtTime(0.0018, t+0.06);
     o.connect(g); g.connect(bus);
-    o.start(t); o.stop(t+0.06);
+    o.start(t); o.stop(t+0.07);
   }catch(e){}
 }
 function applyWalkEntry(inst, nx){
@@ -6842,9 +6995,13 @@ function applyWalkEntry(inst, nx){
     if(u.g11de){
       const st=(u.g11de.style||'');
       const lab=(window.G11DE&&window.G11DE.STYLES&&window.G11DE.STYLES[st]&&window.G11DE.STYLES[st].label)||st;
-      const dvl=u.g11de.devil||'';
+      const ex=u.g11de.exiled||u.g11de.devil||'';
+      const side=u.g11de.side||'';
+      const tonic=nx[0]+(side==='min'?'m':'');
       const base=displayName||(pm+' shape');
-      displayName=base+' · '+lab+(dvl?(' · devil '+dvl):'');
+      // key C/Cm · style · m2|b5 exiled X
+      const exileTag=side==='maj'?('m2 exiled '+ex):(side==='min'?('b5 exiled '+ex):(ex?('exiled '+ex):''));
+      displayName='key '+tonic+' · '+lab+(exileTag?(' · '+exileTag):'')+' · '+base;
     }
     if(!displayName) displayName='Colour Scale';
     MODE_SEMITONES['COLOUR']=semis.slice();
@@ -6867,15 +7024,51 @@ function applyWalkEntry(inst, nx){
 }
 // ═══════════════════════════════════════════════════════════════
 // G11DE — decatonic rule-of-11 walk (replaces GLIDE)
-// 5 key styles · major-side (devil=m2) · minor-side (devil=b5)
+// 5 key styles · m2 exiled = major-side · b5 exiled = minor-side
 // Pairings: TRiCkiSh↔Blues↔Classical | Classical↔ShAM↔Jazz · never 12
 // Mostly hexa (≤3 consecutive); penta + hepta/alts allowed when legal
 // ═══════════════════════════════════════════════════════════════
 const G11DE = (function(){
   const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-  // relative 11-note pools (no devil)
-  const MAJ_SIDE = [0,2,3,4,5,6,7,8,9,10,11]; // no m2
-  const MIN_SIDE = [0,1,2,3,4,5,7,8,9,10,11]; // no b5
+  // Bright → dark harmonic ladder (guides bias, does NOT limit the catalog)
+  const LADDER = [
+    { mode:'LYDIAN',      harm:3,  side:'maj', bright:0, label:'Lydian m3' },
+    { mode:'IONIAN',      harm:8,  side:'maj', bright:1, label:'Ionian m6' },
+    { mode:'MIXOLYDIAN',  harm:1,  side:'maj', bright:2, label:'Mixolydian m2' },
+    { mode:'DORIAN',      harm:6,  side:'min', bright:3, label:'Dorian b5' },
+    { mode:'AEOLIAN',     harm:11, side:'min', bright:4, label:'Aeolian 7' },
+    { mode:'PHRYGIAN',    harm:4,  side:'min', bright:5, label:'Phrygian 3' },
+    { mode:'LOCRIAN',     harm:9,  side:'min', bright:6, label:'Locrian 6' }
+  ];
+  const MAJ_PENTA = [0,2,4,7,9];
+  const MIN_PENTA = [0,3,5,7,10];
+  function coreHex(side, harm){
+    const base = side==='maj' ? MAJ_PENTA.slice() : MIN_PENTA.slice();
+    if(base.indexOf(harm)<0) base.push(harm);
+    return base.sort(function(a,b){return a-b;});
+  }
+  // Priority core hexes (penta + harmonic) — ADDED to the full deca catalog, not exclusive
+  const CORE = {
+    maj: [
+      { mode:'LYDIAN',     harm:3,  semis:coreHex('maj',3),  name:'blues maj hex',    style:'blues',     boost:2.2 },
+      { mode:'IONIAN',     harm:8,  semis:coreHex('maj',8),  name:'classical maj hex', style:'classical', boost:1.8 },
+      { mode:'MIXOLYDIAN', harm:1,  semis:coreHex('maj',1),  name:'mixo backdoor hex', style:'myMaj',     boost:1.8 }
+    ],
+    min: [
+      { mode:'DORIAN',   harm:6,  semis:coreHex('min',6),  name:'blues min hex', style:'blues', boost:2.2 },
+      { mode:'AEOLIAN',  harm:11, semis:coreHex('min',11), name:'aeolian hex',   style:'myMin', boost:1.8 },
+      { mode:'PHRYGIAN', harm:4,  semis:coreHex('min',4),  name:'jog hex',       style:'jazz',  boost:1.8 }
+    ]
+  };
+  try{
+    if(typeof HEX_NAMES_X!=='undefined'){
+      if(HEX_NAMES_X['0,2,3,4,7,9']) CORE.maj[0].name = HEX_NAMES_X['0,2,3,4,7,9'];
+      if(HEX_NAMES_X['0,3,5,6,7,10']) CORE.min[0].name = HEX_NAMES_X['0,3,5,6,7,10'];
+      if(HEX_NAMES_X['0,3,4,5,7,10']) CORE.min[2].name = HEX_NAMES_X['0,3,4,5,7,10'];
+    }
+  }catch(e){}
+
+  // Full 10-note decatonic pools (hundreds of hexes live inside these)
   const STYLES = {
     myMaj:     { side:'maj', rel:[0,2,4,5,6,7,8,9,10,11], modes:['IONIAN','LYDIAN','MIXOLYDIAN'], label:'TRiCkiSh' },
     blues:     { side:'maj', rel:[0,2,3,4,5,6,7,9,10,11], modes:['DORIAN','MIXOLYDIAN','IONIAN','LYDIAN'], label:'Blues' },
@@ -6892,37 +7085,23 @@ const G11DE = (function(){
     'myMaj|myMin':1,'myMin|myMaj':1,'myMaj|jazz':1,'jazz|myMaj':1,
     'blues|jazz':1,'jazz|blues':1,'blues|myMin':1,'myMin|blues':1
   };
-  // Devil table: major-side tonic → m2; minor-side tonic → b5
-  function devil(root, side){
+
+  function exiledPc(root, side){
     const R=((root%12)+12)%12;
     return side==='maj' ? (R+1)%12 : (R+6)%12;
-  }
-  function devilName(root, side){ return NAMES[devil(root, side)]; }
-  // All 12 keys — major-side devil (m2) and minor-side devil (b5)
-  const DEVIL_MAJ = {}; const DEVIL_MIN = {};
-  for(let r=0;r<12;r++){
-    DEVIL_MAJ[NAMES[r]] = NAMES[(r+1)%12];
-    DEVIL_MIN[NAMES[r]+'m'] = NAMES[(r+6)%12];
-  }
-  let style = 'classical';
-  let side = 'maj'; // 'maj' | 'min'
-  function compat(a,b){
-    if(!a||!b||a===b) return true;
-    if(FORBIDDEN[a+'|'+b]) return false;
-    return true;
   }
   function maxRun(semis){
     if(!semis||!semis.length) return 0;
     if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis);
-    const ext=semis.concat(semis.map(x=>x+12));
+    const ext=semis.concat(semis.map(function(x){return x+12;}));
     let best=1, run=1;
     for(let i=1;i<ext.length;i++){
       if(ext[i]-ext[i-1]===1){ run++; if(run>best) best=run; } else run=1;
     }
     return Math.min(best, semis.length);
   }
-  function poolSet(root, st){
-    const spec=STYLES[st]||STYLES.classical;
+  function poolSet(root, stKey){
+    const spec=STYLES[stKey]||STYLES.classical;
     const set={};
     (spec.rel||[]).forEach(function(x){ set[(x+root)%12]=1; });
     return set;
@@ -6931,141 +7110,226 @@ const G11DE = (function(){
     for(let i=0;i<(pcs||[]).length;i++) if(!set[pcs[i]]) return false;
     return true;
   }
-  function detectSide(stKey, mode){
-    const m=(mode||'').toUpperCase();
-    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(m)) return 'min';
-    if(/IONIAN|LYDIAN|MIXOLYDIAN/.test(m)) return 'maj';
-    if(stKey==='myMin'||stKey==='jazz') return 'min';
-    if(stKey==='myMaj'||stKey==='blues') return 'maj';
-    return side;
+  function compat(a,b){
+    if(!a||!b||a===b) return true;
+    return !FORBIDDEN[a+'|'+b];
   }
-  function pickStyle(sideNow, cur){
-    const allowed = sideNow==='maj'
-      ? ['myMaj','blues','classical']
-      : ['classical','myMin','jazz'];
-    let pool = allowed.filter(function(s){ return compat(cur, s) && ((NBR[cur]||[]).indexOf(s)>=0 || s===cur); });
-    if(!pool.length) pool = allowed.slice();
-    // stay often; neighbour sometimes
-    if(pool.indexOf(cur)>=0 && Math.random()<0.55) return cur;
-    return pool[Math.floor(Math.random()*pool.length)];
-  }
-  function buildHexas(root, stKey){
+
+  // FULL catalog: every legal hex (and some penta/hepta) inside the active decatonic
+  function buildCatalog(root, stKey){
     const set=poolSet(root, stKey);
     const spec=STYLES[stKey]||STYLES.classical;
     const out=[];
-    const modes=spec.modes||['IONIAN'];
-    modes.forEach(function(m){
-      const base=(typeof MODE_SEMITONES!=='undefined' && MODE_SEMITONES[m]) ? MODE_SEMITONES[m].slice() : [0,2,4,5,7,9,11];
-      // hepta if legal
-      const pcs7=base.map(function(x){ return (x+root)%12; });
-      if(inPool(pcs7, set) && maxRun(base)<=3){
-        out.push({kind:'hepta', mode:m, alt:'NA', semis:base.slice(), pcs:pcs7, name:m});
-      }
-      // hexas = exclude 1
+    const seen={};
+    function push(o){
+      if(maxRun(o.semis)>3) return;
+      const pcs=o.semis.map(function(x){ return (x+root)%12; });
+      if(!inPool(pcs, set)) return;
+      const fp=pcs.slice().sort(function(a,b){return a-b;}).join(',');
+      if(seen[fp]) return;
+      seen[fp]=1;
+      o.pcs=pcs;
+      out.push(o);
+    }
+
+    // 1) Priority core hexes (penta + harmonic) when they fit this deca
+    const cores = (spec.side==='min' || stKey==='myMin' || stKey==='jazz') ? CORE.min
+                : (spec.side==='maj' || stKey==='myMaj' || stKey==='blues') ? CORE.maj
+                : CORE.maj.concat(CORE.min);
+    cores.forEach(function(c){
+      push({
+        kind:'hexa', mode:c.mode, semis:c.semis.slice(), name:c.name,
+        style:c.style||stKey, boost:c.boost||2, core:true,
+        bright:(LADDER.find(function(L){return L.mode===c.mode;})||{}).bright
+      });
+    });
+
+    // 2) Hundreds: all mode-exclude hexes + alt-exclude when available
+    (spec.modes||[]).forEach(function(m){
+      const base=(typeof MODE_SEMITONES!=='undefined' && MODE_SEMITONES[m]) ? MODE_SEMITONES[m].slice() : null;
+      if(!base) return;
+      // full hepta occasionally
+      push({ kind:'hepta', mode:m, semis:base.slice(), name:m, style:stKey, boost:0.3,
+        bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
+      // every 1-note exclusion → hex
       for(let ex=0;ex<base.length;ex++){
         const semis=base.filter(function(_,i){ return i!==ex; });
-        if(maxRun(semis)>3) continue;
-        const pcs=semis.map(function(x){ return (x+root)%12; });
-        if(!inPool(pcs, set)) continue;
-        let nm=null;
+        let nm=m+' ex '+ex;
         try{
           if(typeof HEX_NAMES!=='undefined' && HEX_NAMES[m] && HEX_NAMES[m][ex]) nm=HEX_NAMES[m][ex];
-          if(!nm && typeof hexAnyName==='function') nm=hexAnyName(semis);
-          if(!nm && typeof SCALE_UNIVERSE!=='undefined'){
-            const e=SCALE_UNIVERSE[semis.join(',')];
-            if(e&&(e._realName||e.name)) nm=e._realName||e.name;
-          }
+          else if(typeof hexAnyName==='function') nm=hexAnyName(semis)||nm;
         }catch(e){}
-        if(!nm) nm=m+' ex '+ex;
-        out.push({kind:'hexa', mode:m, alt:'NA', semis:semis, pcs:pcs, name:nm, ex:ex});
+        push({ kind:'hexa', mode:m, semis:semis, name:nm, style:stKey, boost:0.5, ex:ex,
+          bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
       }
-      // pentas from mode (drop 2) — sparse
-      if(Math.random()<0.35){
-        for(let a=0;a<base.length;a++){
-          for(let b=a+1;b<base.length;b++){
-            const semis=base.filter(function(_,i){ return i!==a && i!==b; });
-            if(semis.length!==5 || maxRun(semis)>3) continue;
-            const pcs=semis.map(function(x){ return (x+root)%12; });
-            if(!inPool(pcs, set)) continue;
-            let nm='penta';
-            try{ if(typeof pentaNameFor==='function') nm=pentaNameFor(semis.join(','))||nm; }catch(e){}
-            out.push({kind:'penta', mode:m, alt:'NA', semis:semis, pcs:pcs, name:nm});
-          }
+      // pentas: drop 2 from mode
+      for(let a=0;a<base.length;a++){
+        for(let b=a+1;b<base.length;b++){
+          const semis=base.filter(function(_,i){ return i!==a && i!==b; });
+          if(semis.length!==5) continue;
+          let nm='penta';
+          try{ if(typeof pentaNameFor==='function') nm=pentaNameFor(semis.join(','))||nm; }catch(e){}
+          push({ kind:'penta', mode:m, semis:semis, name:nm, style:stKey, boost:0.25,
+            bright:(LADDER.find(function(L){return L.mode===m;})||{}).bright });
         }
       }
     });
+
+    // 3) Named non-diatonic hexes from HEX_NAMES_X that sit in the pool
+    try{
+      if(typeof HEX_NAMES_X!=='undefined'){
+        Object.keys(HEX_NAMES_X).forEach(function(fp){
+          const semis=fp.split(',').map(Number);
+          if(semis.length!==6) return;
+          push({ kind:'hexa', mode:'COLOUR', semis:semis, name:HEX_NAMES_X[fp], style:stKey, boost:0.6 });
+        });
+      }
+    }catch(e){}
+
+    // 4) Universe hexes inside the pool
+    try{
+      if(typeof SCALE_UNIVERSE!=='undefined'){
+        Object.keys(SCALE_UNIVERSE).forEach(function(fp){
+          const e=SCALE_UNIVERSE[fp];
+          if(!e||!e.semis||e.semis.length!==6) return;
+          const nm=e._realName||e.name||fp;
+          push({ kind:'hexa', mode:e.parentMode||'COLOUR', semis:e.semis.slice(), name:nm, style:stKey, boost:0.55 });
+        });
+      }
+    }catch(e){}
+
     return out;
   }
+
+  let side='maj';
+  let style='blues';
+  let brightIdx=1;
   let _lastFp='';
+
+  function detectSideFromMode(mode){
+    const m=(mode||'').toUpperCase();
+    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(m)) return 'min';
+    if(/IONIAN|LYDIAN|MIXOLYDIAN/.test(m)) return 'maj';
+    return side;
+  }
+  function pickStyle(sideNow, cur){
+    const allowed = sideNow==='maj' ? ['myMaj','blues','classical'] : ['classical','myMin','jazz'];
+    let pool = allowed.filter(function(s){ return compat(cur,s); });
+    if(!pool.length) pool=allowed.slice();
+    if(pool.indexOf(cur)>=0 && Math.random()<0.5) return cur;
+    // neighbour preferred
+    const nbr=(NBR[cur]||[]).filter(function(s){ return pool.indexOf(s)>=0; });
+    if(nbr.length && Math.random()<0.65) return nbr[Math.floor(Math.random()*nbr.length)];
+    return pool[Math.floor(Math.random()*pool.length)];
+  }
+
   function next(st){
     const root = (NOTES.indexOf(st.key)+12)%12;
-    side = detectSide(style, st.mode);
-    if(Math.random()<0.35){
+    side = detectSideFromMode(st.mode);
+    if(Math.random()<0.32){
       style = pickStyle(side, style);
       if(style==='myMaj'||style==='blues') side='maj';
       else if(style==='myMin'||style==='jazz') side='min';
     }
-    let cands = buildHexas(root, style);
-    // also try neighbour style if thin
-    if(cands.length<4){
+    // drift brightness slowly
+    if(Math.random()<0.45){
+      const band=LADDER.filter(function(L){ return L.side===side; });
+      if(band.length){
+        const cur=band.findIndex(function(L){ return L.bright===brightIdx; });
+        let ni=cur>=0?cur:0;
+        ni=Math.max(0, Math.min(band.length-1, ni+(Math.random()<0.5?-1:1)));
+        brightIdx=band[ni].bright;
+      }
+    }
+
+    let cands=buildCatalog(root, style);
+    // also allow neighbour deca hexes under rule of 11 (still hundreds)
+    if(Math.random()<0.25){
       const nbr=(NBR[style]||[])[0];
-      if(nbr) cands = cands.concat(buildHexas(root, nbr));
+      if(nbr && compat(style, nbr)) cands=cands.concat(buildCatalog(root, nbr));
     }
     if(!cands.length){
-      const m = side==='maj'?'IONIAN':'AEOLIAN';
-      const base=(MODE_SEMITONES[m]||[0,2,4,5,7,9,11]).slice();
-      const semis=base.filter(function(_,i){ return i!==4; });
-      const out=[st.key,'COLOUR','NA',{ semis:semis, name:'G11DE '+m+' hex', realName:'G11DE', parentMode:m }];
-      try{ window.ACTIVE_SCALE={root:root, semis:semis.slice()}; }catch(e){}
-      return out;
+      const fb=CORE[side][0];
+      const semis=fb.semis.slice();
+      try{ window.ACTIVE_SCALE={root:root, semis:semis}; }catch(e){}
+      return [st.key,'COLOUR','NA',{ semis:semis, name:fb.name, realName:fb.name, parentMode:fb.mode,
+        g11de:{ style:style, side:side, exiled:NAMES[exiledPc(root,side)], kind:'hexa', tonic:NAMES[root]+(side==='min'?'m':'') } }];
     }
-    const as = window.ACTIVE_SCALE || {};
-    const prevRoot = ((as.root!=null?as.root:root)%12+12)%12;
-    const prevPcs = (as.semis||[]).map(function(s){ return (s+prevRoot)%12; });
+
+    function fpOf(pcs){ return pcs.slice().sort(function(a,b){return a-b;}).join(','); }
+    const as=window.ACTIVE_SCALE||{};
+    const prevRoot=((as.root!=null?as.root:root)%12+12)%12;
+    const prevPcs=(as.semis||[]).map(function(s){ return (s+prevRoot)%12; });
     function symDiff(a,b){
-      const A={}, B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
+      const A={},B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
       let d=0; for(const k in A) if(!B[k]) d++; for(const k in B) if(!A[k]) d++; return d;
     }
-    function fpOf(pcs){ return pcs.slice().sort(function(a,b){return a-b;}).join(','); }
+
     cands.forEach(function(c){
-      c.sc = (c.kind==='hexa'?3:c.kind==='penta'?1.2:0.6) + Math.random()*0.8;
+      let sc = (c.kind==='hexa'?3.2:c.kind==='penta'?1.1:0.5) + (c.boost||0) + Math.random()*0.7;
+      // mild bias toward current brightness — core hexes get their boost, not exclusivity
+      if(c.bright!=null) sc -= Math.abs(c.bright-brightIdx)*0.25;
+      if(c.core) sc += 0.9;
       const fp=fpOf(c.pcs);
-      if(fp===_lastFp) c.sc -= 5.0; // never stick on same set
+      if(fp===_lastFp) sc -= 6;
       if(prevPcs.length){
         const d=symDiff(prevPcs, c.pcs);
-        if(d===0) c.sc -= 5.0;
-        else if(d===1) c.sc += 1.6;
-        else if(d===2) c.sc += 0.9;
-        else c.sc -= 0.2;
+        if(d===0) sc -= 6;
+        else if(d===1) sc += 1.7;
+        else if(d===2) sc += 0.6;
       }
+      c.sc=sc;
     });
     cands.sort(function(a,b){ return b.sc-a.sc; });
-    // first non-identical
     let pick=cands[0];
     for(let i=0;i<cands.length;i++){
       if(fpOf(cands[i].pcs)!==_lastFp){ pick=cands[i]; break; }
     }
     _lastFp=fpOf(pick.pcs);
-    const dvl = devilName(root, side);
-    const label = (STYLES[style]&&STYLES[style].label)||style;
-    const nm = pick.name+' · '+label+' · devil '+dvl;
+
+    const exN=NAMES[exiledPc(root, side)];
+    const tonic=NAMES[root]+(side==='min'?'m':'');
+    const exileTag=side==='maj'?('m2 exiled '+exN):('b5 exiled '+exN);
+    const lab=(STYLES[style]&&STYLES[style].label)||style;
+    let real=pick.name;
+    try{
+      if(typeof hexAnyName==='function'){ const hn=hexAnyName(pick.semis); if(hn) real=hn; }
+    }catch(e){}
+    const harmLab=(LADDER.find(function(L){return L.mode===pick.mode;})||{}).label||'';
+    const nm='key '+tonic+' · '+lab+' · '+real+(harmLab?(' · '+harmLab):'')+' · '+exileTag;
     try{ window.ACTIVE_SCALE={root:root, semis:pick.semis.slice()}; }catch(e){}
     return [st.key, 'COLOUR', 'NA', {
       semis: pick.semis.slice(),
       name: nm,
-      realName: pick.name,
+      realName: real,
       parentMode: pick.mode||'IONIAN',
-      g11de: { style:style, side:side, devil:dvl, kind:pick.kind }
+      g11de: {
+        style:style, side:side, devil:exN, exiled:exN, kind:pick.kind,
+        tonic:tonic, harm:harmLab||null, bright:pick.bright, core:!!pick.core
+      }
     }];
   }
+
+  const EXILED_MAJ={}, EXILED_MIN={};
+  for(let r=0;r<12;r++){
+    EXILED_MAJ[NAMES[r]]=NAMES[(r+1)%12];
+    EXILED_MIN[NAMES[r]+'m']=NAMES[(r+6)%12];
+  }
+
   return {
     next: next,
-    DEVIL_MAJ: DEVIL_MAJ,
-    DEVIL_MIN: DEVIL_MIN,
+    LADDER: LADDER,
+    CORE: CORE,
     STYLES: STYLES,
+    DEVIL_MAJ: EXILED_MAJ,
+    DEVIL_MIN: EXILED_MIN,
+    EXILED_MAJ: EXILED_MAJ,
+    EXILED_MIN: EXILED_MIN,
     setStyle: function(s){ if(STYLES[s]) style=s; },
     getStyle: function(){ return style; },
-    getSide: function(){ return side; }
+    getSide: function(){ return side; },
+    getBright: function(){ return brightIdx; },
+    catalogSize: function(root, st){ return buildCatalog(root||0, st||style).length; }
   };
 })();
 window.G11DE = G11DE;
@@ -8014,6 +8278,8 @@ document.getElementById('recDot').addEventListener('click',function(){
   }catch(e){}
 })
 function buildGradeHtml(g){
+  try{ if(window.__normalizeHowieJudge) g=window.__normalizeHowieJudge(g); }catch(e){}
+
   function gc(gr){ return gr==='S'?'#FFDD00':gr&&gr[0]==='A'?'#00CC66':gr==='B'?'#78D4EF':gr==='C'?'#FF8844':'#F0483A'; }
   const wbtn='background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:3px;padding:0 6px;font-size:1em;cursor:pointer;line-height:1.6;flex-shrink:0;';
   const wlbl='color:#ffd700;font-size:0.78em;min-width:30px;text-align:center;flex-shrink:0;';
@@ -9015,9 +9281,10 @@ updateKeySigDisplay();
     const nbr=_STYLE_NBR[from]||[];
     return nbr.indexOf(to)>=0;
   }
-  // ── lite82: major-side / minor-side (11 notes), devil note, true tonic ──
-  // Major-side: 1 2 m3 3 4 b5 5 m6 6 m7 7  → devil = m2 (tonic+1)
-  // Minor-side: 1 m2 2 m3 3 4 5 m6 6 m7 7  → devil = b5 (tonic+6)
+  // ── major-side / minor-side (11 notes), exiled note, true tonic ──
+  // m2 exiled → major key (3 major decas: TRiCkiSh, Blues, Classical)
+  // b5 exiled → minor key (3 minor decas: Classical, ShAM, Jazz)
+  // Ionian+Aeolian mixed until m2 or b5 is clearly exiled
   // 11 reveals tonic; 12 (both m2 and b5 used) scatters key → start/resolve
   const _MAJ11_REL = [0,2,3,4,5,6,7,8,9,10,11]; // no m2
   const _MIN11_REL = [0,1,2,3,4,5,7,8,9,10,11]; // no b5
@@ -9290,9 +9557,23 @@ updateKeySigDisplay();
       const s=window.__listenKeySeed;
       if(s&&s.key) seed=' · label '+(s.maj?s.key:s.key+'m')+(s.src?(' via '+s.src):'');
     }catch(e){}
-    if(!_devilName) return seed;
-    const fam=_styleFamily==='majSide'?'major-side':(_styleFamily==='minSide'?'minor-side':'side');
-    return seed+' · devil '+_devilName+' ('+fam+')';
+    // key C/Cm · style · m2|b5 exiled
+    let keyTag='';
+    if(_homeRoot!=null){
+      const root=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][_homeRoot];
+      keyTag=' · key '+(_homeMaj?root:root+'m');
+    }
+    let styleTag='';
+    try{
+      const st=_getKeyStyle();
+      const lab=(_STYLE_LABEL&&_STYLE_LABEL[st])?_STYLE_LABEL[st]:st;
+      if(lab) styleTag=' · '+lab;
+    }catch(e){}
+    if(!_devilName) return seed+keyTag+styleTag;
+    const exile = (_styleFamily==='majSide') ? ('m2 exiled '+_devilName)
+                : (_styleFamily==='minSide') ? ('b5 exiled '+_devilName)
+                : ('exiled '+_devilName);
+    return seed+keyTag+styleTag+' · '+exile;
   }
   function _getKeyStyle(){
     try{
@@ -10212,13 +10493,29 @@ updateKeySigDisplay();
   let _listenBarsLeft=2;
 
 
-  function collectPitch(analyser){
+  function collectPitch(analyser, srcKind){
     const buf=new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(buf);
+    // mic calibrate: watch RMS
+    try{
+      if(srcKind==='mic' && window.LatencyComp && window.LatencyComp.noteMicEnergy){
+        let sum=0; for(let i=0;i<buf.length;i+=8) sum+=buf[i]*buf[i];
+        const rms=Math.sqrt(sum/(buf.length/8));
+        window.LatencyComp.noteMicEnergy(rms);
+      }
+    }catch(e){}
     const freq=autoCorrelate(buf, _AC.sampleRate);
     if(freq>40 && freq<1600){ // include low E fundamentals
       pitchHistory.push(freqToMidi(freq));
-      pitchTimestamps.push(Date.now());
+      // lite100: latency-compensated timestamps so mic guitar aligns with app BT in the 11-note frame
+      let stamp=Date.now();
+      try{
+        if(window.LatencyComp){
+          if(srcKind==='mic') stamp=window.LatencyComp.stampMic();
+          else if(srcKind==='app'||srcKind==='internal') stamp=window.LatencyComp.stampApp();
+        }
+      }catch(e){}
+      pitchTimestamps.push(stamp);
       if(pitchHistory.length>3000){ pitchHistory.shift(); pitchTimestamps.shift(); }
     }
   }
@@ -10241,21 +10538,21 @@ updateKeySigDisplay();
     ensureAudio();                                              // creates _AC / _MASTER if needed
     if(_AC && _AC.state==='suspended'){ try{ await _AC.resume(); }catch(e){} }
     const srcEl=document.getElementById('selKeySource');
-    const src=srcEl?srcEl.value:'internal';
+    const src=srcEl?srcEl.value:'both';
     if(src==='file') out.textContent='pick an audio file...';
     else if(src==='internal') out.textContent='app audio only — play in THIS app, or Load file / Mic for external songs';
     else if(src==='mic') out.textContent='mic on — play song on SPEAKERS (not headphones)...';
-    else if(src==='both') out.textContent='app + mic...';
+    else if(src==='both') out.textContent='app + mic — play BT in app + real guitar into mic · 11-note listen...';
     else if(src==='capture') out.textContent='pick a tab/window and tick Share audio...';
     else out.textContent='estimating tempo...';
 
     if(src==='internal'||src==='both'){
-      // lite69: hear FULL app mix — BK is on _BKGAIN→_MASTERCLIP, NOT on _MASTER
-      keyAnInt=_AC.createAnalyser(); keyAnInt.fftSize=2048;
+      // Full app mix (backing track + instrument bus) → chroma / pitch for rule-of-11
+      keyAnInt=_AC.createAnalyser(); keyAnInt.fftSize=4096; keyAnInt.minDecibels=-90; keyAnInt.maxDecibels=-10;
       try{ if(_MASTER) _MASTER.connect(keyAnInt); }catch(e){}
       try{ if(_BKGAIN) _BKGAIN.connect(keyAnInt); }catch(e){}
       try{ if(_MASTERCLIP) _MASTERCLIP.connect(keyAnInt); }catch(e){}
-      keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnInt); },80));
+      keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnInt,'app'); },70));
       // Soft tempo seed: prefer playing track BPM, else metronome (refine from audio)
       try{
         let ab=0;
@@ -10273,11 +10570,14 @@ updateKeySigDisplay();
           : 'mic blocked: open via https:// or localhost (not content://)';
       } else {
         try{
-          keyMicStream=await navigator.mediaDevices.getUserMedia({audio:true});
+          keyMicStream=await navigator.mediaDevices.getUserMedia({
+            audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+          });
           const micSrc=_AC.createMediaStreamSource(keyMicStream);
-          keyAnMic=_AC.createAnalyser(); keyAnMic.fftSize=2048;
+          keyAnMic=_AC.createAnalyser(); keyAnMic.fftSize=4096; keyAnMic.minDecibels=-90; keyAnMic.maxDecibels=-10;
           micSrc.connect(keyAnMic);
-          keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnMic); },110));
+          keyTimers.push(setInterval(()=>{ if(keyDetectActive) collectPitch(keyAnMic,'mic'); },70));
+          if(src==='both' && out) out.textContent='app + mic live — guitar + track · rule of 11';
         }catch(e){
           var reqMic=function(){
             if(out) out.textContent='requesting mic access...';
@@ -10285,7 +10585,7 @@ updateKeySigDisplay();
               keyMicStream=s;
               var ms=_AC.createMediaStreamSource(s);
               keyAnMic=_AC.createAnalyser(); keyAnMic.fftSize=2048; ms.connect(keyAnMic);
-              keyTimers.push(setInterval(function(){ if(keyDetectActive) collectPitch(keyAnMic); },110));
+              keyTimers.push(setInterval(function(){ if(keyDetectActive) collectPitch(keyAnMic,'mic'); },110));
               if(out) out.textContent='listening...';
             }).catch(function(err){
               if(out) out.innerHTML='Allow microphone to detect key — <a href="#" id="keyMicAllow" style="color:#6ee7b7;font-weight:900;text-decoration:underline;">TAP TO ALLOW</a>';
@@ -12859,6 +13159,99 @@ window.AdManager = window.AdManager || {
   bannerReady: function(){ return false; }, onFeatureOpen: function(){}
 };
 window.Scoring = window.Scoring || { gradeFrom: function(){ return {score:0,grade:'F',aura:0}; } };
+
+// ── lite98: Howie consistency — cannot F when peers give S/A+; 2× S/A+ → min B;
+//    diversify critiques (not metronome-only).
+(function(){
+  function _rank(gr){
+    var m={S:7,'A+':6,A:5,'A-':4,'B+':3.5,B:3,'B-':2.5,C:2,D:1,F:0};
+    return m[gr]!=null?m[gr]:1;
+  }
+  function _bump(gr, min){
+    return _rank(gr)>=_rank(min)?gr:min;
+  }
+  function _isHowie(j){
+    if(!j) return false;
+    var id=String(j.id||'').toLowerCase();
+    var nm=String(j.name||'').toLowerCase();
+    return id==='howie' || nm.indexOf('howie')>=0;
+  }
+  function _elite(gr){ return gr==='S' || gr==='A+'; }
+  window.__normalizeHowieJudge=function(g){
+    try{
+      if(!g||!g.judges||!g.judges.length) return g;
+      var others=[], howie=null;
+      g.judges.forEach(function(j){
+        if(_isHowie(j)) howie=j; else others.push(j);
+      });
+      if(!howie) return g;
+      var eliteN=0;
+      others.forEach(function(j){ if(_elite(j.grade)) eliteN++; });
+      var anyHigh=others.some(function(j){
+        return _elite(j.grade) || j.grade==='A' || j.grade==='A-';
+      });
+      // Rules:
+      // 1) If any S or A+ among peers → Howie cannot give F (or D)
+      // 2) If 2+ of S or A+ → Howie must give B or higher
+      if(eliteN>=2){
+        howie.grade=_bump(howie.grade,'B');
+        if((howie.score|0)<70) howie.score=70;
+      } else if(eliteN>=1 || anyHigh){
+        if(_rank(howie.grade)<_rank('C')){
+          howie.grade='C';
+          if((howie.score|0)<55) howie.score=55;
+        }
+      }
+      // Critique: never metronome-only contradiction
+      var c=String(howie.comment||'');
+      var metroOnly=/metronome|tempo|timing|click|bpm/i.test(c) &&
+        !/phras|note|scale|feel|tone|dynamic|colour|color|bend|vibrato|space|silence|melody|harmony|interval|hex|penta/i.test(c);
+      if(metroOnly || !c.trim()){
+        var alts=[
+          'Time is secondary — commit to the phrase and finish the colour of the scale.',
+          'Beyond the pocket: the note choices need clearer harmonic intent.',
+          'Rhythm is only one axis. Open the endings and let the tension resolve.',
+          'Lock time if you must, but the real gap is conviction in the line.',
+          'I hear the clock. I need to hear the music — stronger scale colour, cleaner closes.'
+        ];
+        // if peers are strong, Howie should acknowledge that rather than contradict
+        if(eliteN>=1){
+          alts=[
+            'The others are right on the music. Tighten the pocket without losing that colour.',
+            'Strong work overall — my only note is finish phrases cleaner; the grade stands with the panel.',
+            'I will not tank this. The playing carries. Polish the time and it is elite.',
+            'Fair marks from the panel. Stay on that harmonic path; time is the polish, not the point.'
+          ];
+        }
+        howie.comment=alts[Math.floor(Math.random()*alts.length)];
+      }
+      // coach line too if present and metro-only
+      if(howie.coach && /metronome|tempo only/i.test(howie.coach) && eliteN>=1){
+        howie.coach='Match the panel: keep the colour, refine the time.';
+      }
+    }catch(e){}
+    return g;
+  };
+  // Wrap Scoring.gradeFrom whenever scoring module loads
+  function _wrapScoring(){
+    try{
+      if(!window.Scoring || typeof window.Scoring.gradeFrom!=='function') return;
+      if(window.Scoring.__howieWrapped) return;
+      var orig=window.Scoring.gradeFrom.bind(window.Scoring);
+      window.Scoring.gradeFrom=function(){
+        var g=orig.apply(window.Scoring, arguments);
+        return window.__normalizeHowieJudge(g||{});
+      };
+      window.Scoring.__howieWrapped=true;
+    }catch(e){}
+  }
+  _wrapScoring();
+  document.addEventListener('module-loaded', function(ev){
+    try{ if(ev&&ev.detail&&ev.detail.name==='scoring') _wrapScoring(); }catch(e){}
+  });
+  setInterval(_wrapScoring, 2000);
+})();
+
 window.Tokens = window.Tokens || { balance: function(){ return 0; }, spend: function(){ return false; }, add: function(){} };
 window.__ensureAds = function(){
   if(window.__MODULES && window.__MODULES.ads && !window.__MODULES.ads.isStub) return Promise.resolve(window.__MODULES.ads);
@@ -18254,7 +18647,7 @@ window.__ensureMultiplayer = function(){
      broker, since GitHub Pages can't broker a live connection by itself) and hear each
      other's notes in real time, with the backing track roughly synced on join. -->
 <!-- v861-lite40: JAM pinned under MIDDLE board crest (sig2) — 3STR + 4STR; lowest safe spot -->
-<button id="btnKeyHeartBoard" data-tip-title="HEART · MATCH" data-tip="Tap when the suggested LISTEN scale matches the track. Trains for next play." style="position:fixed;right:10px;top:28%;z-index:8501;background:#7f1d1d;color:#fecaca;border:1px solid #f87171;border-radius:999px;width:40px;height:40px;font-size:1.15em;font-weight:900;cursor:pointer;line-height:1;padding:0;box-shadow:0 0 10px #f8717166;">♥</button>
+<button id="btnKeyHeartBoard" data-tip-title="HEART · MATCH" data-tip="Tap when the suggested LISTEN scale matches the track. Trains for next play." style="position:fixed;right:10px;left:auto;top:22%;z-index:8501;background:#7f1d1d;color:#fecaca;border:1px solid #f87171;border-radius:999px;width:40px;height:40px;font-size:1.15em;font-weight:900;cursor:pointer;line-height:1;padding:0;box-shadow:0 0 10px #f8717166;">♥</button>
 <div id="jamBtn" style="position:fixed;right:10px;left:auto;top:45%;bottom:auto;z-index:8500;background:#7c3aed;color:#fff;
   font-weight:900;font-size:0.72em;padding:8px 14px 8px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.4);
   cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.65em;font-weight:900;line-height:16px;text-align:center;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">0</span></div>
@@ -18310,41 +18703,23 @@ window.__ensureMultiplayer = function(){
       var hb=document.getElementById('btnKeyHeartBoard');
       if(!hb) return;
       var p=activePrefix();
-      // Between TOP two fretboard segments (box1 / box2), on the RIGHT near crests
       var b1=document.getElementById(p+'box1');
       var b2=document.getElementById(p+'box2');
-      var s1=document.getElementById(p+'sig1');
-      var s2=document.getElementById(p+'sig2');
-      if(!b1||!b2) return;
-      var r1=b1.getBoundingClientRect();
-      var r2=b2.getBoundingClientRect();
-      if(r1.width<12||r2.width<12) return;
-      var hbW=hb.offsetWidth||40;
       var hbH=hb.offsetHeight||40;
-      // vertical: in the gap between segment 1 bottom and segment 2 top; if overlapping, mid of both
-      var gapMid=(r1.bottom+r2.top)/2;
-      if(r2.top-r1.bottom<hbH+4) gapMid=r1.bottom+4;
-      var top=gapMid-hbH/2;
-      // horizontal: right side of the two boards (near badges)
-      var rightEdge=Math.max(r1.right, r2.right);
-      try{
-        if(s1){ var sr1=s1.getBoundingClientRect(); if(sr1.width>8) rightEdge=Math.max(rightEdge, sr1.left-4); }
-        if(s2){ var sr2=s2.getBoundingClientRect(); if(sr2.width>8) rightEdge=Math.max(rightEdge, Math.min(rightEdge, sr2.left-4)); }
-      }catch(e){}
-      // Prefer just left of the crest badges on the right of top two segments
-      var crestLeft=null;
-      try{
-        if(s1){ var a=s1.getBoundingClientRect(); if(a.width>8) crestLeft=a.left; }
-        if(s2){ var b=s2.getBoundingClientRect(); if(b.width>8) crestLeft=(crestLeft==null?b.left:Math.min(crestLeft,b.left)); }
-      }catch(e){}
-      var left;
-      if(crestLeft!=null) left=crestLeft-hbW-6;
-      else left=rightEdge-hbW-8;
-      left=Math.max(8, Math.min(left, window.innerWidth-hbW-8));
-      top=Math.max(6, Math.min(top, window.innerHeight-hbH-8));
+      // Fixed to viewport RIGHT edge — never rides the board scroll
+      var top=Math.round(window.innerHeight*0.22);
+      if(b1&&b2){
+        var r1=b1.getBoundingClientRect();
+        var r2=b2.getBoundingClientRect();
+        if(r1.height>12&&r2.height>12){
+          var gapMid=(r1.bottom+r2.top)/2;
+          top=gapMid-hbH/2;
+        }
+      }
+      top=Math.max(8, Math.min(top, window.innerHeight-hbH-8));
       hb.style.position='fixed';
-      hb.style.left=left+'px';
-      hb.style.right='auto';
+      hb.style.left='auto';
+      hb.style.right='10px';
       hb.style.top=top+'px';
       hb.style.bottom='auto';
       hb.style.zIndex='8501';
