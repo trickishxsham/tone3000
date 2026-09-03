@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite103';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite104';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -4502,7 +4502,9 @@ function createInstance(prefix, chordsAlwaysOn){
 
   function getColor(e){return SEMI_COLOR[e.absSemi];}
   function getIntLabel(e){return viewMode==='cionian'?CI_INT[e.absSemi]:e.intName;}
-  // lite89: each of 3 segments can sit in its own octave window (start fret 0–22)
+  // lite104: each of 3 segments can sit in its own octave window (start fret 0–22).
+  // If the natural start is above the 12th fret, 50/50 keep it OR drop one octave
+  // (e.g. start 16 → 16 or 4). Prefer lower coverage so 234/654 are not stuck high.
   let segOctOffset = {};
   function randomizeSegOctaves(){
     try{
@@ -4511,20 +4513,42 @@ function createInstance(prefix, chordsAlwaysOn){
       const ki=NOTES.indexOf(currentKey);
       const next={};
       shapes.forEach(function(sh){
-        const base=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-        const opts=[];
-        [-24,-12,0,12,24].forEach(function(off){
+        // Natural placement (no per-seg offset yet)
+        let base=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
+        // Clamp into a sensible neck window first
+        while(base>22) base-=12;
+        while(base<0) base+=12;
+        // Candidates: this octave, and ±1 octave if still on neck (0–22)
+        const cands=[];
+        [0,-12,12,-24,24].forEach(function(off){
           const st=base+off;
-          if(st>=0 && st<=22) opts.push(off);
+          if(st>=0 && st<=22) cands.push({off:off, st:st});
         });
-        if(!opts.length){
-          let st=base;
-          while(st>22) st-=12;
-          while(st<0) st+=12;
-          next[sh]=st-base;
-        } else {
-          next[sh]=opts[Math.floor(Math.random()*opts.length)];
+        if(!cands.length){ next[sh]=0; return; }
+        // Primary rule: if natural start >12, 50/50 keep vs drop one octave
+        const hi=cands.find(function(c){ return c.off===0 && c.st>12; });
+        const lo=cands.find(function(c){ return c.off===-12 && c.st>=0 && c.st<=12; });
+        if(hi && lo){
+          next[sh]=(Math.random()<0.5) ? hi.off : lo.off;
+          // Map back relative to original unclamped base for getStart
+          // getStart uses: C_START+ki+octOffset+extra — so extra must equal chosen st - (C_START+ki+octOffset)
+          const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
+          const chosen=base+(next[sh]|0);
+          next[sh]=chosen-natural;
+          return;
         }
+        // Otherwise bias hard toward lower frets (start <=12 preferred ~70%)
+        const low=cands.filter(function(c){ return c.st<=12; });
+        const high=cands.filter(function(c){ return c.st>12; });
+        let pick;
+        if(low.length && high.length){
+          pick=(Math.random()<0.70)? low[Math.floor(Math.random()*low.length)]
+                                   : high[Math.floor(Math.random()*high.length)];
+        } else {
+          pick=cands[Math.floor(Math.random()*cands.length)];
+        }
+        const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
+        next[sh]=pick.st-natural;
       });
       segOctOffset=next;
     }catch(e){ segOctOffset={}; }
