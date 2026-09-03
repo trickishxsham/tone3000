@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite104';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite105';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -7213,23 +7213,54 @@ const G11DE = (function(){
     let n=0;
     Object.keys(A).forEach(function(k){ if(!B[k]) n++; });
     Object.keys(B).forEach(function(k){ if(!A[k]) n++; });
-    return n; // total changed membership; voice-lead "note difference" ≈ n/2 for pure swaps
+    return n;
   }
   function noteDiff(a,b){
-    // count of pitch classes that differ (symmetric difference size / 2 for equal size)
     return Math.ceil(symDiff(a,b)/2);
   }
+  // HARD smoothness: same size = exactly 1 note swap; size±1 = 1 note diff + include/exclude (Δ2)
   function legalTransition(fromKind, toKind, fromPcs, toPcs){
     if(!fromPcs||!fromPcs.length) return true;
-    const d = noteDiff(fromPcs, toPcs);
+    const sym = symDiff(fromPcs, toPcs);
+    if(sym===0) return false;
+    const d = Math.ceil(sym/2);
     const fk = fromKind||'hexa', tk = toKind||'hexa';
-    if(fk===tk) return d===1;                 // penta-penta, hexa-hexa, hepta-hepta
-    // size change by 1
+    if(fk===tk) return d===1 && sym===2; // one out, one in
+    // hexa ↔ penta/hepta: one size step via include/exclude (±1) plus optional 1-note move → Δ2
     if((fk==='hexa'&&(tk==='penta'||tk==='hepta'))||(tk==='hexa'&&(fk==='penta'||fk==='hepta')))
       return d===2;
     if((fk==='penta'&&tk==='hepta')||(fk==='hepta'&&tk==='penta'))
-      return d===2 || d===3; // rare; allow 2–3
-    return d<=2;
+      return d===2;
+    return false;
+  }
+  // Formula label when scale has no real name: Mode +ALT ex INTERVAL
+  function formulaName(c){
+    if(!c) return 'shape';
+    let nm = (c.name||'').trim();
+    const isNamed = nm && !/^(penta|hexa|hepta|COLOUR|#|[0-9,]+$)/i.test(nm)
+      && !/^#[0-9A-Fa-f]{6}$/.test(nm)
+      && nm.indexOf(',')<0;
+    // Already Parent +ALT or established name
+    if(isNamed && !/^[A-Z]+ ex [0-9]+$/i.test(nm)) return nm;
+    const mode = (c.mode&&c.mode!=='COLOUR')?c.mode:(c.parentMode||'IONIAN');
+    const modeT = mode.charAt(0)+mode.slice(1).toLowerCase();
+    let alt = c.alt||'NA';
+    // derive exclude interval from parent mode if possible
+    let exLab = '';
+    try{
+      const base = (typeof MODE_SEMITONES!=='undefined' && MODE_SEMITONES[mode]) ? MODE_SEMITONES[mode] : null;
+      if(base && c.semis && c.semis.length < base.length){
+        const set={}; c.semis.forEach(function(s){ set[s]=1; });
+        const missing = base.filter(function(s){ return !set[s]; });
+        if(missing.length===1 && typeof CI_INT!=='undefined') exLab = ' ex '+CI_INT[missing[0]];
+        else if(missing.length===2 && typeof CI_INT!=='undefined')
+          exLab = ' ex '+CI_INT[missing[0]]+'+'+CI_INT[missing[1]];
+      }
+    }catch(e){}
+    if(alt && alt!=='NA') return modeT+' +'+alt+exLab;
+    if(exLab) return modeT+exLab;
+    if(nm) return nm;
+    return modeT+' '+ (c.kind||'shape');
   }
   function compat(a,b){
     if(!a||!b||a===b) return true;
@@ -7390,36 +7421,31 @@ const G11DE = (function(){
       }];
     }
 
-    // Score candidates
+    // Score candidates — HARD smoothness (illegal transitions dropped)
     const prev = _lastPcs||[];
     const preferHex = Math.random()<0.72;
+    const legal = [];
     catalog.forEach(function(c){
+      if(prev.length && !legalTransition(_lastKind, c.kind, prev, c.pcs)) return;
+      const fp = c.pcs.join(',');
+      if(fp===_lastFp) return;
       let sc = (c.boost||0) + Math.random()*0.9;
       if(preferHex && c.kind==='hexa') sc += 1.4;
       if(c.kind==='penta') sc += 0.35;
       if(c.kind==='hepta') sc += 0.2;
-      const fp = c.pcs.join(',');
-      if(fp===_lastFp) sc -= 8;
       if(prev.length){
-        if(!legalTransition(_lastKind, c.kind, prev, c.pcs)) sc -= 12;
-        else {
-          const d = noteDiff(prev, c.pcs);
-          if(d===1) sc += 2.2;
-          else if(d===2) sc += 1.0;
-        }
+        const d = noteDiff(prev, c.pcs);
+        if(d===1) sc += 2.5;
+        else if(d===2) sc += 1.2;
       }
-      // prefer shapes near home tonic
       if(c.pcs.indexOf(root)>=0) sc += 0.4;
       c.sc = sc;
+      legal.push(c);
     });
-    catalog.sort(function(a,b){ return b.sc-a.sc; });
-    let pick = catalog[0];
-    for(let i=0;i<catalog.length;i++){
-      if(catalog[i].pcs.join(',')!==_lastFp &&
-         ( !prev.length || legalTransition(_lastKind, catalog[i].kind, prev, catalog[i].pcs) || i>30 )){
-        pick = catalog[i]; break;
-      }
-    }
+    // If nothing legal, allow any in-pool non-repeat (first bar / stuck)
+    const pool = legal.length ? legal : catalog.filter(function(c){ return c.pcs.join(',')!==_lastFp; });
+    pool.sort(function(a,b){ return b.sc-a.sc; });
+    const pick = pool[0] || catalog[0];
     _lastFp = pick.pcs.join(',');
     _lastPcs = pick.pcs.slice();
     _lastKind = pick.kind;
@@ -7428,14 +7454,20 @@ const G11DE = (function(){
     const tonic = NAMES[root]+(side==='min'?'m':'');
     const exileTag = (side==='maj'?'m2':'b5')+' exiled '+exN;
     const lab = (STYLES[style]&&STYLES[style].label)||style;
-    let real = pick.name;
+    let real = formulaName(pick);
     try{
       if(window.HEXA_ALTS){
-        // match by relative if possible
         const rel = pick.semis.slice().sort(function(a,b){return a-b;}).join(',');
         if(window.HEXA_ALTS[rel]) real = window.HEXA_ALTS[rel].name;
       }
+      if(typeof hexAnyName==='function'){
+        const hn=hexAnyName(pick.semis);
+        if(hn && !/ex /i.test(hn)) real=hn;
+      }
     }catch(e){}
+    // Unnamed → force formula (Mode +ALT ex INTERVAL)
+    if(!real || real==='penta' || real==='hexa' || real==='shape' || /^[0-9,]+$/.test(real) || /^#/.test(real))
+      real = formulaName(pick);
     const nm = 'key '+tonic+' · '+lab+' · '+real+' · '+exileTag;
     try{ window.ACTIVE_SCALE={ root:root, semis:pick.semis.slice(), pcs:pick.pcs.slice() }; }catch(e){}
     return [NAMES[root], 'COLOUR', 'NA', {
@@ -10413,10 +10445,7 @@ updateKeySigDisplay();
       if(tier>=2 && c.fromAlt){
         sc += 0.08 + sp*1.2; // main spice target: exclude-from-alteration hexas
       }
-      // lite103: same voice-lead as G11DE
-      //  same size → noteDiff 1 (symDiff 2)
-      //  hexa ↔ penta / hepta → noteDiff 2
-      //  pool already 11-note (m2 or b5 exiled); ≤3 consecutive in push()
+      // lite105: HARD smoothness — 1 note difference; size change = +include/exclude (Δ2)
       if(_lastPickPcs && _lastPickPcs.length){
         const prev=_lastPickPcs;
         const next=c.pcs||[];
@@ -10425,20 +10454,16 @@ updateKeySigDisplay();
         const prevN=prev.length, nextN=next.length;
         const sameSize=(prevN===nextN);
         let ok=true;
-        if(sameSize){
-          ok = (noteDiff===1); // penta-penta / hexa-hexa / hepta-hepta
-          if(sym===0) ok=false;
-          if(ok) sc += 0.40;
-        } else if((prevN===6 && (nextN===5||nextN===7)) || (nextN===6 && (prevN===5||prevN===7))){
+        if(sym===0) ok=false;
+        else if(sameSize) ok = (noteDiff===1 && sym===2);
+        else if((prevN===6 && (nextN===5||nextN===7)) || (nextN===6 && (prevN===5||prevN===7)))
           ok = (noteDiff===2);
-          if(ok) sc += 0.28;
-        } else if((prevN===5 && nextN===7) || (prevN===7 && nextN===5)){
-          ok = (noteDiff===2 || noteDiff===3);
-          if(ok) sc += 0.12;
-        } else {
-          ok = (noteDiff<=2);
-        }
-        if(!ok){ return; } // illegal transition
+        else if((prevN===5 && nextN===7) || (prevN===7 && nextN===5))
+          ok = (noteDiff===2);
+        else ok=false;
+        if(!ok){ return; }
+        if(sameSize) sc += 0.45;
+        else sc += 0.30;
         const id=c.key+'|'+(c.mode)+'|'+(c.alt||'')+'|'+(c.pentaName||c.hexaName||c.tag||'');
         if(id===_lastPickKey) sc -= 0.55;
       } else {
