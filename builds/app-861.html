@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite105';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite106';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -4508,48 +4508,52 @@ function createInstance(prefix, chordsAlwaysOn){
   let segOctOffset = {};
   function randomizeSegOctaves(){
     try{
-      const modeKey=C_START[currentMode]?currentMode:(C_START['IONIAN']?'IONIAN':Object.keys(C_START)[0]);
-      const shapes=Object.keys(C_START[modeKey]||{});
+      // Prefer COLOUR parent map if present, else current mode
+      const modeKey=(C_START['COLOUR']&&currentMode==='COLOUR')?'COLOUR'
+        :(C_START[currentMode]?currentMode:(C_START['IONIAN']?'IONIAN':Object.keys(C_START)[0]));
+      const shapes=Object.keys(C_START[modeKey]||C_START['IONIAN']||{});
       const ki=NOTES.indexOf(currentKey);
+      const prev=segOctOffset||{};
       const next={};
       shapes.forEach(function(sh){
-        // Natural placement (no per-seg offset yet)
-        let base=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-        // Clamp into a sensible neck window first
+        const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
+        let base=natural;
         while(base>22) base-=12;
         while(base<0) base+=12;
-        // Candidates: this octave, and ±1 octave if still on neck (0–22)
         const cands=[];
         [0,-12,12,-24,24].forEach(function(off){
           const st=base+off;
-          if(st>=0 && st<=22) cands.push({off:off, st:st});
+          if(st>=0 && st<=22) cands.push({st:st, extra:st-natural});
         });
         if(!cands.length){ next[sh]=0; return; }
-        // Primary rule: if natural start >12, 50/50 keep vs drop one octave
-        const hi=cands.find(function(c){ return c.off===0 && c.st>12; });
-        const lo=cands.find(function(c){ return c.off===-12 && c.st>=0 && c.st<=12; });
-        if(hi && lo){
-          next[sh]=(Math.random()<0.5) ? hi.off : lo.off;
-          // Map back relative to original unclamped base for getStart
-          // getStart uses: C_START+ki+octOffset+extra — so extra must equal chosen st - (C_START+ki+octOffset)
-          const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-          const chosen=base+(next[sh]|0);
-          next[sh]=chosen-natural;
-          return;
-        }
-        // Otherwise bias hard toward lower frets (start <=12 preferred ~70%)
+        // Prefer lower neck; if start>12 always offer octave-down 50/50
         const low=cands.filter(function(c){ return c.st<=12; });
         const high=cands.filter(function(c){ return c.st>12; });
-        let pick;
-        if(low.length && high.length){
-          pick=(Math.random()<0.70)? low[Math.floor(Math.random()*low.length)]
-                                   : high[Math.floor(Math.random()*high.length)];
+        let pool;
+        if(high.length && low.length){
+          // 55% low, 45% high when both exist
+          pool = (Math.random()<0.55) ? low : high;
         } else {
-          pick=cands[Math.floor(Math.random()*cands.length)];
+          pool = cands;
         }
-        const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-        next[sh]=pick.st-natural;
+        // Prefer a different window than last time on this segment
+        const prevExtra = prev[sh];
+        let choices = pool.filter(function(c){ return c.extra!==prevExtra; });
+        if(!choices.length) choices = pool;
+        const pick = choices[Math.floor(Math.random()*choices.length)];
+        next[sh]=pick.extra;
       });
+      // Guarantee at least one segment moved vs previous
+      try{
+        const same = shapes.every(function(sh){ return (next[sh]|0)===(prev[sh]|0); });
+        if(same && shapes.length){
+          const sh = shapes[Math.floor(Math.random()*shapes.length)];
+          const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
+          let base=natural; while(base>22) base-=12; while(base<0) base+=12;
+          const alt = [base-12, base+12, base-24, base+24].find(function(st){ return st>=0 && st<=22; });
+          if(alt!=null) next[sh]=alt-natural;
+        }
+      }catch(e){}
       segOctOffset=next;
     }catch(e){ segOctOffset={}; }
   }
@@ -5448,12 +5452,16 @@ function createInstance(prefix, chordsAlwaysOn){
     //   scale wherever one exists); any single −/+ token lives on the crest below it.
     let name=currentMode;
     try{
-      const r=resolveScaleLabel();
-      if(r && r.name){
-        // strip the leading key — the crest already shows the root glyph.
-        // (plain prefix slice, NOT a regex: a key like "Bb" would escape to \b)
-        name = (r.name.indexOf(currentKey+' ')===0) ? r.name.slice(currentKey.length+1) : r.name;
-      } else if(pentaName){ name=pentaName; }
+      if(currentMode==='COLOUR' && MODE_FULL['COLOUR']){
+        name = MODE_FULL['COLOUR'];
+        const parts=String(name).split(' · ');
+        name = parts.length>1 ? parts[parts.length-1] : name;
+      } else {
+        const r=resolveScaleLabel();
+        if(r && r.name){
+          name = (r.name.indexOf(currentKey+' ')===0) ? r.name.slice(currentKey.length+1) : r.name;
+        } else if(pentaName){ name=pentaName; }
+      }
     }catch(e){ name=currentMode; }
     // Fit the mode name onto the banner ribbon (single line; shrink to fit width).
     const fit=(()=>{
@@ -5963,6 +5971,8 @@ function createInstance(prefix, chordsAlwaysOn){
                    //   to match the badge exactly (walk capture/playback) can just use it.
                    penta: (pentaName && !includeSet.length) ? pentaName : null}),
     getMix:()=>signatureColors(buildScale()).mix,
+    randomizeSegOctaves: randomizeSegOctaves,
+    getSegStarts:()=>{ try{ return {s123:getStart('s123'), s234:getStart('s234'), s456:getStart('s456')}; }catch(e){ return {}; } },
     setScale:(k,m,a,p,incs)=>{
       pentaName=null; octManual=false;
       currentKey=k; currentMode=m; expandedMode=m;
@@ -7136,23 +7146,45 @@ function applyWalkEntry(inst, nx){
       const exileTag=side==='maj'?('m2 exiled '+ex):(side==='min'?('b5 exiled '+ex):(ex?('exiled '+ex):''));
       displayName='key '+tonic+' · '+lab+(exileTag?(' · '+exileTag):'')+' · '+base;
     }
-    if(!displayName) displayName='Colour Scale';
+    if(!displayName || displayName==='Colour Scale' || displayName==='COLOUR'){
+      try{
+        const mode = (u.parentMode||pm||'IONIAN');
+        const modeT = mode.charAt(0)+mode.slice(1).toLowerCase();
+        let alt = u.alt||'NA';
+        let exLab = '';
+        const base = (MODE_SEMITONES[mode]||[]).slice();
+        if(base.length && semis.length < base.length){
+          const set={}; semis.forEach(function(s){ set[s]=1; });
+          const miss = base.filter(function(s){ return !set[s]; });
+          if(miss.length && typeof CI_INT!=='undefined')
+            exLab = ' ex '+miss.map(function(s){ return CI_INT[s]; }).join('+');
+        }
+        displayName = (alt&&alt!=='NA') ? (modeT+' +'+alt+exLab) : (modeT+(exLab||' shape'));
+      }catch(e){ displayName = (pm||'Mode')+' shape'; }
+    }
     MODE_SEMITONES['COLOUR']=semis.slice();
     MODE_INT_NAMES['COLOUR']=semis.map(function(x){return CI_INT[((x%12)+12)%12];});
     MODE_FULL['COLOUR']=displayName;
     const parent=u.parentMode||pm;
     if(C_START[parent]) C_START['COLOUR']=C_START[parent];
-    // move each segment to a random legal octave window 0–22
-    try{ if(typeof randomizeSegOctaves==='function') randomizeSegOctaves(); }catch(e){}
+    else if(C_START['IONIAN']) C_START['COLOUR']=C_START['IONIAN'];
+    // setScale first, then per-instance octave randomize (was broken: randomizeSegOctaves not in global scope)
     inst.setScale(nx[0],'COLOUR','NA');
+    try{ if(inst.randomizeSegOctaves) inst.randomizeSegOctaves(); }catch(e){}
+    try{ inst.setScale(nx[0],'COLOUR','NA'); }catch(e){} // repaint with new segment starts
     try{
-      // force banner/crest refresh with the resolved name
-      if(typeof updateAll==='function') updateAll();
-      else if(typeof renderShapesNow==='function') renderShapesNow();
+      const btn=document.getElementById((inst.prefix||'')+'btnCIonian');
+      if(btn){
+        let lab=displayName;
+        const parts=String(lab).split(' · ');
+        if(parts.length>1) lab=parts[parts.length-1];
+        btn.textContent=(nx[0]+' '+lab).slice(0,48);
+      }
     }catch(e){}
   } else {
-    try{ if(typeof randomizeSegOctaves==='function') randomizeSegOctaves(); }catch(e){}
     inst.setScale(nx[0],nx[1],nx[2],nx[4]);
+    try{ if(inst.randomizeSegOctaves) inst.randomizeSegOctaves(); }catch(e){}
+    try{ inst.setScale(nx[0],nx[1],nx[2],nx[4]); }catch(e){}
   }
 }
 // ═══════════════════════════════════════════════════════════════
