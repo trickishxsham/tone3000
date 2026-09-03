@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite106';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite107';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1009,7 +1009,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <button data-walk="seq">JIMI</button>
     <button data-walk="dhex" data-tip-title="DACTYLIC HEXAMETER" data-tip="The epic meter as a walk. Each line = 6 feet = 24 bars: feet are DACTYLS (long-short-short) or SPONDEES (long-long), a long syllable holds a scale 2 bars, a short 1 bar. Feet 1-4 lean dactylic, the 5th is (almost) always a dactyl, the 6th always a spondee - so every line lands with weight. Long syllables anchor on consonant scales; shorts pass through 1-note glides.">D.HEX</button>
     <button data-walk="free" data-tip-title="FREE - F# MINOR TRACK" data-tip="The scale SIZE follows the meter: short bars = pentatonic, mid = hexatonic, long = heptatonic. Plays the current key's aeolian (+ dorian/phrygian borrows), so set any minor key. Pair with the FREE time signature (the 61-bar pi progression).">FREE</button>
-    <button data-walk="glide" data-tip-title="G11DE · 11-NOTE" data-tip="Ionian/Aeolian first. Major→exile m2 · Minor→exile b5. Any penta/hexa/hepta (any root) in the 11, ≤3 consecutive. Voice-lead: same size Δ1 · hexa↔penta/hepta Δ2. HEXA ALTS included.">G11DE</button>
+    <button data-walk="glide" data-tip-title="G11DE · JIMI+11" data-tip="JIMI free neck walk + 11-note rules. Major→exile m2 · Minor→exile b5. ≤3 consecutive. Hexa↔hexa Δ1 · size change Δ2. Segments jump freely 0–22.">G11DE</button>
     <button data-walk="custom" data-tip-title="CUSTOM" data-tip="Define your own scale sequence bar by bar using note count buttons." class="expert-only">CUSTOM</button>
     <button data-walk="chord" data-tip-title="CHORD" data-tip="Auto-select scales that fit a chord progression you define." class="expert-only">CHORD</button>
     <button data-walk="bktrk" data-tip-title="BKTRK · YOUR TRACK" data-tip="Play to your own saved backing track. Loads its key + tempo, plays the audio, and auto-follows its chord changes with similar-note / similar-colour scales." class="expert-only">BKTRK</button>
@@ -4507,53 +4507,37 @@ function createInstance(prefix, chordsAlwaysOn){
   // (e.g. start 16 → 16 or 4). Prefer lower coverage so 234/654 are not stuck high.
   let segOctOffset = {};
   function randomizeSegOctaves(){
+    // lite107: free neck like JIMI — each segment independently starts anywhere 0–22
+    // so the walk moves around the fretboard every scale change.
     try{
-      // Prefer COLOUR parent map if present, else current mode
-      const modeKey=(C_START['COLOUR']&&currentMode==='COLOUR')?'COLOUR'
-        :(C_START[currentMode]?currentMode:(C_START['IONIAN']?'IONIAN':Object.keys(C_START)[0]));
-      const shapes=Object.keys(C_START[modeKey]||C_START['IONIAN']||{});
+      const modeKey=(C_START[currentMode]&&currentMode) || (C_START['COLOUR']&&'COLOUR') || 'IONIAN';
+      const shapes=Object.keys(C_START[modeKey]||C_START['IONIAN']||{s123:0,s234:0,s456:0});
       const ki=NOTES.indexOf(currentKey);
       const prev=segOctOffset||{};
       const next={};
       shapes.forEach(function(sh){
         const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-        let base=natural;
-        while(base>22) base-=12;
-        while(base<0) base+=12;
+        let span=6;
+        try{ if(typeof getSpan==='function') span=getSpan(sh)||6; }catch(e){}
+        const maxStart=Math.max(0, 22-(span-1));
+        // candidates: every start 0..maxStart, prefer different from previous
+        const prevSt = (natural+(prev[sh]|0));
         const cands=[];
-        [0,-12,12,-24,24].forEach(function(off){
-          const st=base+off;
-          if(st>=0 && st<=22) cands.push({st:st, extra:st-natural});
-        });
-        if(!cands.length){ next[sh]=0; return; }
-        // Prefer lower neck; if start>12 always offer octave-down 50/50
-        const low=cands.filter(function(c){ return c.st<=12; });
-        const high=cands.filter(function(c){ return c.st>12; });
-        let pool;
-        if(high.length && low.length){
-          // 55% low, 45% high when both exist
-          pool = (Math.random()<0.55) ? low : high;
-        } else {
-          pool = cands;
+        for(let st=0; st<=maxStart; st++){
+          // slight bias: 0-12 preferred (~65%)
+          const w = (st<=12) ? 2.0 : 1.0;
+          cands.push({st:st, extra:st-natural, w:w});
         }
-        // Prefer a different window than last time on this segment
-        const prevExtra = prev[sh];
-        let choices = pool.filter(function(c){ return c.extra!==prevExtra; });
-        if(!choices.length) choices = pool;
-        const pick = choices[Math.floor(Math.random()*choices.length)];
+        if(!cands.length){ next[sh]=0; return; }
+        // avoid same start as last time when possible
+        let pool=cands.filter(function(c){ return c.st!==prevSt && c.extra!==(prev[sh]|0); });
+        if(!pool.length) pool=cands;
+        // weighted pick
+        let tot=0; pool.forEach(function(c){ tot+=c.w; });
+        let r=Math.random()*tot, pick=pool[0];
+        for(let i=0;i<pool.length;i++){ r-=pool[i].w; if(r<=0){ pick=pool[i]; break; } }
         next[sh]=pick.extra;
       });
-      // Guarantee at least one segment moved vs previous
-      try{
-        const same = shapes.every(function(sh){ return (next[sh]|0)===(prev[sh]|0); });
-        if(same && shapes.length){
-          const sh = shapes[Math.floor(Math.random()*shapes.length)];
-          const natural=(C_START[modeKey][sh]|0)+ki+(octOffset|0);
-          let base=natural; while(base>22) base-=12; while(base<0) base+=12;
-          const alt = [base-12, base+12, base-24, base+24].find(function(st){ return st>=0 && st<=22; });
-          if(alt!=null) next[sh]=alt-natural;
-        }
-      }catch(e){}
       segOctOffset=next;
     }catch(e){ segOctOffset={}; }
   }
@@ -7184,7 +7168,16 @@ function applyWalkEntry(inst, nx){
   } else {
     inst.setScale(nx[0],nx[1],nx[2],nx[4]);
     try{ if(inst.randomizeSegOctaves) inst.randomizeSegOctaves(); }catch(e){}
-    try{ inst.setScale(nx[0],nx[1],nx[2],nx[4]); }catch(e){}
+    try{ inst.setScale(nx[0],nx[1],nx[2],nx[4]); }catch(e){} // repaint free neck
+    try{
+      // Keep button in sync with real mode name (not stuck COLOUR)
+      const btn=document.getElementById((inst.prefix||'')+'btnCIonian');
+      if(btn){
+        const m=nx[1]||'';
+        const al=(nx[2]&&nx[2]!=='NA')?(' +'+nx[2]):'';
+        btn.textContent=(nx[0]+' '+m+al).slice(0,48);
+      }
+    }catch(e){}
   }
 }
 // ═══════════════════════════════════════════════════════════════
@@ -7541,8 +7534,103 @@ const G11DE = (function(){
 window.G11DE = G11DE;
 // G11DE walk step (data-walk still "glide" for compatibility)
 function nextScaleGlide(st){
-  try{ return G11DE.next(st); }catch(e){
+  // lite107: G11DE = JIMI free walk (nextScaleSeq) + 11-note exile rules
+  // Prefer real mode/alt returns so C_START moves the neck like JIMI.
+  try{
+    const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const key = (st&&st.key)||'C';
+    let root = NOTES.indexOf(key);
+    if(root<0){
+      const m=/^([A-G]#?b?)/i.exec(key);
+      root = m ? NOTES.indexOf(m[1]) : 0;
+      if(root<0) root=0;
+    }
+    const mode=((st&&st.mode)||'IONIAN').toUpperCase();
+    let side='maj';
+    if(/AEOLIAN|DORIAN|PHRYGIAN|LOCRIAN/.test(mode) || /m$/i.test(key)) side='min';
+    if(window.G11DE && typeof window.G11DE.getSide==='function'){
+      try{ const gs=window.G11DE.getSide(); if(gs==='maj'||gs==='min') side=gs; }catch(e){}
+    }
+    const exile = side==='maj' ? (root+1)%12 : (root+6)%12;
+    function inEleven(pcs){
+      for(let i=0;i<(pcs||[]).length;i++) if(pcs[i]===exile) return false;
+      return true;
+    }
+    function okConsec(semis){
+      try{ if(typeof maxConsecutiveRun==='function') return maxConsecutiveRun(semis)<=3; }catch(e){}
+      return true;
+    }
+    function symD(a,b){
+      const A={},B={}; (a||[]).forEach(function(x){A[x]=1;}); (b||[]).forEach(function(x){B[x]=1;});
+      let n=0; Object.keys(A).forEach(function(k){if(!B[k])n++;}); Object.keys(B).forEach(function(k){if(!A[k])n++;});
+      return n;
+    }
+    const curPcs = (function(){
+      try{ return buildScalePure(root, st.mode||'IONIAN', st.alt||'NA'); }catch(e){ return []; }
+    })();
+    const curN = curPcs.length||7;
+    // Target size bias: mostly hexa
+    let target = 6;
+    if(Math.random()<0.18) target=5;
+    else if(Math.random()<0.22) target=7;
+    target = (typeof bridgeSize==='function') ? bridgeSize(curN, target) : target;
+
+    // Draw candidates from nextScaleSeq / nextScale style UNIVERSE
+    let best=null, bestSc=-1e9;
+    const tries = (typeof UNIVERSE!=='undefined' && UNIVERSE.length) ? UNIVERSE : [];
+    // Shuffle sample for speed
+    const sample=[];
+    if(tries.length){
+      for(let i=0;i<Math.min(tries.length, 400);i++){
+        sample.push(tries[(Math.random()*tries.length)|0]);
+      }
+    }
+    for(let i=0;i<sample.length;i++){
+      const u=sample[i];
+      if(!u||!u.set) continue;
+      const pcs=[...u.set];
+      if(pcs.length<5||pcs.length>7) continue;
+      if(target && Math.abs(pcs.length-target)>1 && Math.random()<0.7) continue;
+      if(!inEleven(pcs)) continue;
+      // relative semis from u.key
+      const rk=NOTES.indexOf(u.key); if(rk<0) continue;
+      const semis=pcs.map(function(p){return (p-rk+12)%12;}).sort(function(a,b){return a-b;});
+      if(!okConsec(semis)) continue;
+      // voice-lead
+      if(curPcs.length){
+        const sym=symD(curPcs, pcs);
+        if(sym===0) continue;
+        const d=Math.ceil(sym/2);
+        const same=pcs.length===curN;
+        if(same && !(d===1 && sym===2)) continue;
+        if(!same && d!==2) continue;
+      }
+      let sc = (u.common?1.2:0.4) + (u.rar||0.2) + Math.random()*0.8;
+      if(pcs.length===6) sc += 1.2;
+      if(u.mode && u.mode!=='COLOUR') sc += 0.5; // prefer real modes → neck moves via C_START
+      if(u.key===key) sc += 0.35;
+      if(sc>bestSc){ bestSc=sc; best=u; }
+    }
+
+    if(best){
+      try{ if(typeof _seqRemember==='function') _seqRemember(best.key, best.mode, best.alt); }catch(e){}
+      // Prefer real mode return so JIMI-style C_START positions apply
+      if(best.mode && best.mode!=='COLOUR'){
+        return [best.key, best.mode, best.alt||'NA', best.isUniverse?best:null];
+      }
+      if(best.isUniverse||best.semis){
+        return [best.key, 'COLOUR', 'NA', best];
+      }
+      return [best.key, best.mode||'IONIAN', best.alt||'NA'];
+    }
+    // Fallback: pure G11DE catalog
+    if(window.G11DE && typeof window.G11DE.next==='function')
+      return window.G11DE.next(st);
     return [st.key, st.mode||'IONIAN', st.alt||'NA'];
+  }catch(e){
+    try{ return G11DE.next(st); }catch(e2){
+      return [st.key, st.mode||'IONIAN', st.alt||'NA'];
+    }
   }
 }
 
