@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite109';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite112';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8803,36 +8803,58 @@ updateKeySigDisplay();
     jazz:       { maj:false, degs:[1,4,11] }
   };
   function _inferStyleFromHist(hist, ionian, aeolian){
+    // lite111: style AFTER hepta key is known.
+    // Exile m2 → MAJOR side only (myMaj, blues, classical-as-major) — never 4th deca.
+    // Exile b5 → MINOR side only (myMin, jazz, classical-as-minor).
+    // 3 decatonics share the hepta; residuals pick which of the three.
     const tot=hist.reduce(function(a,b){return a+b;},0);
     if(tot<0.0001) return _autoStyle||'myMaj';
     const I=(ionian!=null)?(ionian|0):0;
     const A=(aeolian!=null)?(aeolian|0):((I+9)%12);
-    const F=(I+5)%12; // C Ionian / A Aeolian -> F blues
+    const F=(I+5)%12; // Blues tonic = Ionian + P4
     function e(R, degs){
       let s=0; degs.forEach(function(d){ s+=(hist[(R+d)%12]||0); });
       return s/(tot||1);
     }
     function pc(R){ return (hist[R]||0)/tot; }
-    const cands=[
-      {st:'myMaj', sc: 1.10*e(I,[6,8,10]) + 0.35*pc(I) - 0.18*pc((I+3)%12) - 0.10*pc((I+1)%12)},
-      {st:'blues', sc: 1.05*e(F,[3,6,10]) + 0.42*pc(F) + 0.16*pc(I) - 0.24*pc(A) - 0.12*pc((F+1)%12)},
-      {st:'classical', sc: 1.00*e(I,[3,8,10]) + 0.22*pc(I) + 0.22*pc(A) - 0.12*pc((I+6)%12)},
-      {st:'myMin', sc: 1.10*e(A,[1,9,11]) + 0.38*pc(A) - 0.12*pc((A+4)%12)},
-      {st:'jazz', sc: 1.10*e(A,[1,4,11]) + 0.38*pc(A) + 0.08*pc((A+1)%12) - 0.10*pc((A+6)%12)}
-    ];
+    // Prefer live exile from _inferHome; fall back to residual weights at Ionian
+    let exile=_exileKind;
+    if(exile!=='m2' && exile!=='b5'){
+      const m2w=pc((I+1)%12), b5w=pc((I+6)%12);
+      if(m2w>b5w*1.05 && m2w>0.015) exile='b5';
+      else if(b5w>m2w*1.05 && b5w>0.015) exile='m2';
+      else exile=(pc(A)>pc(I)*1.05)?'b5':'m2';
+    }
+    let cands;
+    if(exile==='m2'){
+      // MAJOR side — 3 decas only
+      cands=[
+        {st:'myMaj', sc: 1.15*e(I,[6,8,10]) + 0.40*pc(I) - 0.20*pc((I+3)%12) - 0.12*pc((I+1)%12)},
+        {st:'blues', sc: 1.10*e(F,[3,6,10]) + 0.45*pc(F) + 0.18*pc(I) - 0.22*pc(A)},
+        {st:'classical', sc: 1.00*e(I,[3,8,10]) + 0.28*pc(I) + 0.18*pc(A) - 0.14*pc((I+6)%12)}
+      ];
+    } else {
+      // MINOR side — 3 decas only
+      cands=[
+        {st:'myMin', sc: 1.15*e(A,[1,9,11]) + 0.42*pc(A) - 0.14*pc((A+4)%12)},
+        {st:'jazz', sc: 1.12*e(A,[1,4,11]) + 0.40*pc(A) + 0.10*pc((A+1)%12) - 0.12*pc((A+6)%12)},
+        {st:'classical', sc: 1.00*e(A,[4,9,11]) + 0.30*pc(A) + 0.18*pc(I) - 0.12*pc((I+6)%12)}
+      ];
+    }
     cands.sort(function(a,b){ return b.sc-a.sc; });
     const best=cands[0], second=cands[1]?cands[1].sc:-99;
     if(!_autoStyle || (Date.now()-(_autoStyleAt||0))>3500 || best.sc>=second*1.04 || best.sc>0.08){
       _autoStyle=best.st; _autoStyleAt=Date.now();
     }
     const st=_autoStyle||best.st;
-    if(st==='myMaj'){ _homeRoot=I; _homeMaj=true; }
-    else if(st==='blues'){ _homeRoot=F; _homeMaj=true; }
-    else if(st==='classical'){
-      if(pc(A)>pc(I)*1.08){ _homeRoot=A; _homeMaj=false; }
+    // Lock major/minor naming from exile side; remember hepta key
+    if(exile==='m2'){
+      if(st==='blues'){ _homeRoot=F; _homeMaj=true; }
       else { _homeRoot=I; _homeMaj=true; }
+    } else {
+      _homeRoot=A; _homeMaj=false;
     }
-    else { _homeRoot=A; _homeMaj=false; }
+    _heptaKey=I;
     return st;
   }
   function _getKeyStyle(){
@@ -9101,50 +9123,102 @@ updateKeySigDisplay();
   }
   let _homeRoot=null, _homeMaj=true, _homeSetAt=0, _lastPickKey='', _lastPickPcs=null, _lastPickKind=null;
   let _iaIonian=null, _iaAeolian=null;
-  // lite60: phased listen — tempo → 2 bars Ionian/Aeolian → decatonic → hold 2 bars
+  // lite112: staged listen
+  //   tempo → penta (2 bars) → hepta (build notes) → style (few bars) → locked
   let _listenPhase='tempo', _listenPhaseAt=0, _barsAccumStart=0;
+  let _heptaKey=null, _exileKind=null;
+  let _pentaRoot=null, _pentaMaj=true, _pentaLocked=false;
+  let _heptaLocked=false, _styleLocked=false;
   function _inferHome(hist, keyPlain){
+    // lite112 stages (driven by _listenPhase / lock flags):
+    //   penta: major vs minor pentatonic only (after 2 full bars)
+    //   hepta: build 1 note at a time → Lyd/Ion/Mix or Dor/Aeo/Phry → hex → Ionian/Aeolian LOCK
+    //   style: take a few bars, then guesstimate one of 3 decas on the exile side
+    //   locked: hold key; style already chosen
     const tot=hist.reduce(function(a,b){return a+b;},0);
     if(tot<0.0001) return;
-
-    const majP=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
-    const minP=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
-    const avg=function(arr){ return arr.reduce(function(x,y){return x+y;},0)/arr.length; };
-    const hMean=avg(hist);
-    function pearson(prof, rot){
-      const pMean=avg(prof);
-      let num=0, dh=0, dp=0;
-      for(let i=0;i<12;i++){
-        const aa=hist[i]-hMean, bb=prof[(i-rot+12)%12]-pMean;
-        num+=aa*bb; dh+=aa*aa; dp+=bb*bb;
-      }
-      return (dh>0&&dp>0)?num/Math.sqrt(dh*dp):-1;
+    function pc(R){ return (hist[((R%12)+12)%12]||0)/tot; }
+    function sumAt(R, degs){
+      let s=0; for(let i=0;i<degs.length;i++) s+=pc(R+degs[i]); return s;
     }
 
-    let bestR=0, bestMaj=true, bestSc=-2;
+    // ── Step 1: major vs minor PENTATONIC ──
+    let bestPentaR=0, bestPentaMaj=true, bestPentaSc=-1;
     for(let R=0;R<12;R++){
-      const mj=pearson(majP, R) + 0.30*((hist[R]||0)/tot);
-      const mn=pearson(minP, R) + 0.30*((hist[R]||0)/tot);
-      if(mj>bestSc){ bestSc=mj; bestR=R; bestMaj=true; }
-      if(mn>bestSc){ bestSc=mn; bestR=R; bestMaj=false; }
+      const majSc=0.30*pc(R)+0.22*pc(R+2)+0.22*pc(R+4)+0.18*pc(R+7)+0.18*pc(R+9)
+                 -0.15*pc(R+3)-0.10*pc(R+1);
+      const minSc=0.30*pc(R)+0.24*pc(R+3)+0.18*pc(R+5)+0.18*pc(R+7)+0.18*pc(R+10)
+                 -0.15*pc(R+4)-0.08*pc(R+1);
+      if(majSc>bestPentaSc){ bestPentaSc=majSc; bestPentaR=R; bestPentaMaj=true; }
+      if(minSc>bestPentaSc){ bestPentaSc=minSc; bestPentaR=R; bestPentaMaj=false; }
     }
-    const ionian=bestMaj ? bestR : (bestR+3)%12;
-    const aeolian=bestMaj ? (bestR+9)%12 : bestR;
-    if(_iaIonian==null){
-      _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now();
-    } else if(ionian!==_iaIonian){
-      if((Date.now()-_homeSetAt)>5000 && bestSc>0.25){
-        _iaIonian=ionian; _iaAeolian=aeolian; _homeSetAt=Date.now();
-        _lastPickPcs=null; _lastPickKey='';
-        _autoStyle=null;
-      }
-    } else if(bestSc>0.15){
-      _homeSetAt=Math.max(_homeSetAt, Date.now()-2500);
+    if(!bestPentaMaj){
+      const iR=(bestPentaR+5)%12;
+      const vSc=0.30*pc(bestPentaR)+0.24*pc(bestPentaR+3)+0.18*pc(bestPentaR+7);
+      const iSc=0.30*pc(iR)+0.24*pc(iR+3)+0.18*pc(iR+7)+0.12*pc(iR+10);
+      if(iSc>=vSc*0.85 && pc(iR)>0.02) bestPentaR=iR;
     }
-    if(_homeRoot==null){ _homeRoot=bestR; _homeMaj=bestMaj; }
 
-    if(_isStyleAuto() && _iaIonian!=null){
-      _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
+    // Until penta is locked, only publish soft penta guess — no style yet
+    if(!_pentaLocked){
+      _pentaRoot=bestPentaR; _pentaMaj=bestPentaMaj;
+      _homeRoot=bestPentaR; _homeMaj=bestPentaMaj;
+      return;
+    }
+    // Keep penta fixed once locked (2 full bars of evidence)
+    bestPentaR=_pentaRoot; bestPentaMaj=_pentaMaj;
+
+    // ── Steps 2–4: modes → hex colour → Ionian/Aeolian ──
+    let ionian, aeolian, bestSc=bestPentaSc;
+    if(bestPentaMaj){
+      const R=bestPentaR;
+      const lyd=sumAt(R,[0,2,4,6,7,9,11]);
+      const ion=sumAt(R,[0,2,4,5,7,9,11]);
+      const mix=sumAt(R,[0,2,4,5,7,9,10]);
+      bestSc=Math.max(lyd,ion,mix);
+      ionian=R; aeolian=(R+9)%12;
+    } else {
+      const R=bestPentaR;
+      const dor=sumAt(R,[0,2,3,5,7,9,10]);
+      const aeo=sumAt(R,[0,2,3,5,7,8,10]);
+      const phr=sumAt(R,[0,1,3,5,7,8,10]);
+      bestSc=Math.max(dor,aeo,phr);
+      aeolian=R; ionian=(R+3)%12;
+    }
+
+    // Exile m2 XOR b5 at Ionian (side decision; style still deferred)
+    const m2w=pc(ionian+1), b5w=pc(ionian+6);
+    let exile='m2';
+    if(m2w>b5w*1.05 && m2w>0.015) exile='b5';
+    else if(b5w>m2w*1.05 && b5w>0.015) exile='m2';
+    else if(m2w>0.02) exile='b5';
+    else if(b5w>0.02) exile='m2';
+    else exile=bestPentaMaj ? 'm2' : 'b5';
+    _exileKind=exile;
+
+    if(!_heptaLocked){
+      // soft update while building hepta — do not run style yet
+      _iaIonian=ionian; _iaAeolian=aeolian; _heptaKey=ionian;
+      _homeRoot=bestPentaMaj?ionian:aeolian; _homeMaj=bestPentaMaj;
+      _homeSetAt=Date.now();
+      return;
+    }
+
+    // Hepta locked — freeze ionian/aeolian pair
+    ionian=_iaIonian; aeolian=_iaAeolian; _heptaKey=ionian;
+
+    // ── Steps 5–6: style only when phase allows (or already locked) ──
+    if(_styleLocked || _listenPhase==='style' || _listenPhase==='locked'){
+      if(_isStyleAuto()){
+        _inferStyleFromHist(hist, ionian, aeolian);
+      } else {
+        // manual style still respects hepta + exile side for home naming
+        if(exile==='m2'){ _homeRoot=ionian; _homeMaj=true; }
+        else { _homeRoot=aeolian; _homeMaj=false; }
+      }
+    } else {
+      // hepta known, style still pending
+      _homeRoot=bestPentaMaj?ionian:aeolian; _homeMaj=bestPentaMaj;
     }
   }
   function _pickMatchingScale(hist, spice){
@@ -9263,7 +9337,9 @@ updateKeySigDisplay();
         }
         if(!ok) sc -= 1.2; // hard prefer legal transitions
         const id=c.key+'|'+(c.mode)+'|'+(c.alt||'')+'|'+(c.pentaName||c.hexaName||c.tag||'');
-        if(id===_lastPickKey) sc -= 0.45;
+        // lite110: with lots of pitch data, REWARD sticking (was −0.45 → endless second-guess)
+        const nP=(typeof pitchHistory!=='undefined' && pitchHistory)?pitchHistory.length:0;
+        if(id===_lastPickKey) sc += (nP>400 ? 0.22 : -0.12);
       }
       // hard reject illegal consecutive runs on penta/hexa (belt + suspenders)
       if((c.kind==='penta'||c.kind==='hexa') && c.colourSemis && typeof maxConsecutiveRun==='function'){
@@ -9274,7 +9350,10 @@ updateKeySigDisplay();
     scored.sort(function(a,b){ return b.sc-a.sc; });
     if(!scored.length || scored[0].sc<-0.15) return null;
     const top=scored[0].sc;
-    let cluster=scored.filter(function(x){ return x.sc>=top-0.14; }).slice(0,12);
+    // lite110: tighter cluster when data is rich → fewer random flips
+    const nPitch2=(typeof pitchHistory!=='undefined' && pitchHistory)?pitchHistory.length:0;
+    const band=nPitch2>600 ? 0.06 : 0.14;
+    let cluster=scored.filter(function(x){ return x.sc>=top-band; }).slice(0, nPitch2>600?5:12);
     const hexas=cluster.filter(function(x){ return x.c.kind==='hexa'; });
     const altHex=hexas.filter(function(x){ return x.c.fromAlt; });
     const sp2=spice||0;
@@ -9292,7 +9371,8 @@ updateKeySigDisplay();
       cluster=hexas.concat(cluster.filter(function(x){ return x.c.kind!=='hexa'; })).slice(0,12);
     }
     let pick=cluster[0];
-    if(cluster.length>1){
+    // With abundant data and a clear winner, skip weighted random — commit
+    if(cluster.length>1 && !(nPitch2>500 && (top - (cluster[1]?cluster[1].sc:top-1))>0.08)){
       const w=cluster.map(function(x){
         return Math.max(0.04, x.sc-top+0.18)
           +(x.c.kind==='hexa'?0.14:0)
@@ -9526,7 +9606,9 @@ updateKeySigDisplay();
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
     _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
     _homeRoot=null; _homeMaj=true; _homeSetAt=0; _lastPickKey='';
-    _iaIonian=null; _iaAeolian=null;
+    _iaIonian=null; _iaAeolian=null; _heptaKey=null; _exileKind=null;
+    _pentaRoot=null; _pentaMaj=true; _pentaLocked=false;
+    _heptaLocked=false; _styleLocked=false;
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
     chromaHist=new Array(12).fill(0); chromaAt=0;
     ensureAudio();                                              // creates _AC / _MASTER if needed
@@ -9716,11 +9798,11 @@ updateKeySigDisplay();
                    || (appBpm && keyAnInt && elapsed>800);
         if(ready && useBpm){
           if(!lockedBpm) lockedBpm=Math.round(useBpm);
-          _listenPhase='bars';
+          _listenPhase='penta';
           _listenPhaseAt=now;
           _barsAccumStart=now;
           pitchHistory=[]; pitchTimestamps=[];
-          out.textContent='tempo ~'+Math.round(useBpm)+' BPM · listening 2 bars...';
+          out.textContent='tempo ~'+Math.round(useBpm)+' BPM · 2 bars for penta...';
         } else {
           out.textContent='estimating tempo'+(useBpm?(' ~'+Math.round(useBpm)):(bpm?(' ~'+bpm):''))+'...';
         }
@@ -9732,6 +9814,8 @@ updateKeySigDisplay();
         const lastT=pitchTimestamps[pitchTimestamps.length-1];
         if(now-lastT>9000){
           _homeRoot=null; _barChoice=null; _barUntil=0;
+          _pentaRoot=null; _pentaLocked=false; _heptaLocked=false; _styleLocked=false;
+          _iaIonian=null; _iaAeolian=null; _heptaKey=null; _exileKind=null;
           _listenPhase='tempo'; _listenPhaseAt=now;
           lastBpmReads=[]; lockedBpm=0; _bpmEma=null;
           out.textContent='paused · estimating tempo...';
@@ -9739,27 +9823,28 @@ updateKeySigDisplay();
         }
       }
 
-      // ── Phase 2: accumulate first 2 bars, then Ionian/Aeolian → decatonic ──
+      const oneBarMs=Math.max(1600, Math.min(8000, beatMs*4));
+      const fourBarsMs=Math.max(6400, Math.min(32000, beatMs*16));
+      const namesPC=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
       function _fallbackScale(){
-        const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
         const R=(_homeRoot!=null)?_homeRoot:0;
         const st=_getKeyStyle();
         const spec=(_POOLS[st]||_POOLS.myMaj);
         if(st==='blues'){
           const semis=[0,3,5,6,7,10];
-          return {root:R, key:names[R], mode:'COLOUR', alt:'NA', tag:'hexa:blues-min',
+          return {root:R, key:namesPC[R], mode:'COLOUR', alt:'NA', tag:'hexa:blues-min',
             pcs:semis.map(function(x){return (x+R)%12;}), kind:'hexa',
             colourSemis:semis.slice(), hexaName:'blues min hex', uniName:'blues min hex'};
         }
         const mode=spec.keyMode||(_homeMaj?'IONIAN':'AEOLIAN');
         const pcs=(spec.rel||[0,2,4,5,7,9,11]).map(function(x){ return (x+R)%12; });
-        return {root:R, key:names[R], mode:mode, alt:'NA', tag:'key-mode',
+        return {root:R, key:namesPC[R], mode:mode, alt:'NA', tag:'key-mode',
           pcs:pcs, kind:'hepta', colourSemis:(spec.rel||[]).slice()};
       }
       function _commitBar(hist){
         _inferHome(hist, null);
         if(_homeRoot==null){
-          // chroma-or-pitch still weak: pick strongest PC as tonic, Ionian vs Aeolian by 3 vs 4
           const tot=hist.reduce(function(a,b){return a+b;},0)||1;
           let bestI=0, bestV=-1;
           for(let i=0;i<12;i++) if(hist[i]>bestV){ bestV=hist[i]; bestI=i; }
@@ -9770,37 +9855,112 @@ updateKeySigDisplay();
           _iaIonian=_homeMaj?bestI:(bestI+3)%12;
           _iaAeolian=_homeMaj?(bestI+9)%12:bestI;
         }
-        if(_isStyleAuto()) _inferStyleFromHist(hist, _iaIonian!=null?_iaIonian:_homeRoot, _iaAeolian);
+        // Only apply scales to board once hepta is known (and style preferably locked)
+        if(!_heptaLocked) return;
+        if(_isStyleAuto() && _styleLocked) _inferStyleFromHist(hist, _iaIonian!=null?_iaIonian:_homeRoot, _iaAeolian);
         let pick=_pickMatchingScale(hist, spice) || _fallbackScale();
         if(pick){
           _barChoice=pick;
-          _barUntil=now+twoBarsMs;
+          const nP3=(typeof pitchHistory!=='undefined' && pitchHistory)?pitchHistory.length:0;
+          const holdMs=(nP3>500)? Math.max(twoBarsMs, Math.min(24000, beatMs*16)) : twoBarsMs;
+          _barUntil=now+holdMs;
           const follow=document.getElementById('keyFollowScale');
           if(follow && follow.checked) _applyListenScale(pick);
         }
       }
 
-      if(_listenPhase==='bars'){
+      // ── Phase: penta — first 2 full bars → major/minor pentatonic only ──
+      if(_listenPhase==='bars' || _listenPhase==='penta'){
+        _listenPhase='penta';
         const elapsed=now-_barsAccumStart;
         const recent=_recentPitches(twoBarsMs);
         const hist=_liveHist();
         const tot=hist.reduce(function(a,b){return a+b;},0);
         const left=Math.max(0, Math.ceil((twoBarsMs-elapsed)/1000));
+        _inferHome(hist, null); // soft penta only
         if(elapsed<twoBarsMs && tot<0.002 && recent.length<6){
           out.textContent='tempo ~'+useBpm+' BPM · 2 bars ('+left+'s) · chroma';
           return;
         }
         if(elapsed<twoBarsMs){
-          out.textContent='tempo ~'+useBpm+' BPM · 2 bars ('+left+'s) · hearing';
+          const pr=(_pentaRoot!=null)?namesPC[_pentaRoot]:'?';
+          const pm=_pentaMaj?'maj':'min';
+          out.textContent='tempo ~'+useBpm+' BPM · 2 bars ('+left+'s) · penta ~'+pr+' '+pm;
           return;
         }
-        // 2 bars elapsed — COMMIT tonic + style + first scale
+        // 2 full bars done → LOCK penta, start building hepta one note at a time
+        _inferHome(hist, null);
+        _pentaLocked=true; _pentaRoot=_pentaRoot!=null?_pentaRoot:_homeRoot; _pentaMaj=_homeMaj;
+        _listenPhase='hepta';
+        _listenPhaseAt=now;
+        _barsAccumStart=now;
+        const pr=namesPC[_pentaRoot], pm=_pentaMaj?'MAJOR':'MINOR';
+        out.textContent='PENTA locked '+pr+' '+pm+' · building key…';
+        return;
+      }
+
+      // ── Phase: hepta — next ~2 bars, build modes→hex→Ionian/Aeolian ──
+      if(_listenPhase==='hepta'){
+        const elapsed=now-_barsAccumStart;
+        const hist=_liveHist();
+        _inferHome(hist, null);
+        const left=Math.max(0, Math.ceil((twoBarsMs-elapsed)/1000));
+        const pr=namesPC[_pentaRoot!=null?_pentaRoot:0];
+        const pm=_pentaMaj?'maj':'min';
+        const hk=(_heptaKey!=null)?namesPC[_heptaKey]:'?';
+        const aeo=(_iaAeolian!=null)?namesPC[_iaAeolian]:'?';
+        if(elapsed<twoBarsMs){
+          out.textContent='penta '+pr+' '+pm+' · building hepta ('+left+'s) · ~'+hk+'/'+aeo
+            +(_exileKind?(' · exile '+_exileKind):'');
+          return;
+        }
+        // Confident hepta lock
+        _heptaLocked=true;
+        if(_iaIonian==null){
+          _iaIonian=_pentaMaj?_pentaRoot:((_pentaRoot+3)%12);
+          _iaAeolian=_pentaMaj?((_pentaRoot+9)%12):_pentaRoot;
+        }
+        _heptaKey=_iaIonian;
+        _homeRoot=_pentaMaj?_iaIonian:_iaAeolian;
+        _homeMaj=_pentaMaj;
+        _listenPhase='style';
+        _listenPhaseAt=now;
+        _barsAccumStart=now;
+        out.textContent='KEY '+namesPC[_homeRoot]+(_homeMaj?'':'m')
+          +' · hepta '+namesPC[_iaIonian]+'/'+namesPC[_iaAeolian]
+          +(_exileKind?(' · exile '+_exileKind):'')+' · listening for style…';
+        return;
+      }
+
+      // ── Phase: style — few bars, then guesstimate one of 3 decas ──
+      if(_listenPhase==='style'){
+        const elapsed=now-_barsAccumStart;
+        const hist=_liveHist();
+        // keep refining exile/home; style inference runs soft until lock
+        _inferHome(hist, null);
+        if(_isStyleAuto()) _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
+        const left=Math.max(0, Math.ceil((fourBarsMs-elapsed)/1000));
+        const st=_getKeyStyle();
+        const stName=(_STYLE_LABEL&&_STYLE_LABEL[st])?_STYLE_LABEL[st]:st;
+        if(elapsed<fourBarsMs){
+          out.textContent='key '+namesPC[_homeRoot]+(_homeMaj?'':'m')
+            +' · hepta '+namesPC[_iaIonian]+' · style ~'+stName+' ('+left+'s)'
+            +(_exileKind?(' · exile '+_exileKind):'');
+          return;
+        }
+        // Confident style lock
+        _styleLocked=true;
+        if(_isStyleAuto()) _inferStyleFromHist(hist, _iaIonian, _iaAeolian);
         _commitBar(hist);
         _listenPhase='locked';
         _listenPhaseAt=now;
+        out.textContent='KEY '+namesPC[_homeRoot]+(_homeMaj?'':'m')
+          +' · '+(( _STYLE_LABEL&&_STYLE_LABEL[_getKeyStyle()])||_getKeyStyle())
+          +' locked · exile '+(_exileKind||'?');
+        return;
       }
 
-      // ── Phase 3: locked — change scale every 2 bars of 4/4 ──
+      // ── Phase: locked — change scale every 2–4 bars ──
       const recent=_recentPitches(twoBarsMs);
       const hist=_liveHist();
       if(_listenPhase==='locked' && (now>=_barUntil || !_barChoice)){
@@ -9809,7 +9969,7 @@ updateKeySigDisplay();
 
       const ch=_barChoice;
       const _st=_getKeyStyle();
-      const _nm=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      const _nm=namesPC;
       let scaleLbl='—';
       if(ch){
         scaleLbl=ch.key+' '+(ch.uniName||ch.hexaName||ch.pentaName||
@@ -9823,12 +9983,15 @@ updateKeySigDisplay();
         const forceMin=(_st==='myMin'||_st==='jazz');
         const keyName=forceMaj?root:(forceMin?(root+'m'):(_homeMaj?root:(root+'m')));
         const stName=(_STYLE_LABEL&&_STYLE_LABEL[_st])?_STYLE_LABEL[_st]:_st;
-        homeLbl=' · key of '+keyName+' · '+stName;
+        const hepta=(_heptaKey!=null)?_nm[_heptaKey]:'';
+        const ex=_exileKind?(' · exile '+_exileKind):'';
+        homeLbl=' · key of '+keyName+' · '+stName+(hepta?(' · hepta '+hepta):'')+ex;
       }
       const bPart = useBpm ? ('  ·  ~'+useBpm+' BPM') : '';
       const holdLeft=(_barUntil>now)?Math.max(0,Math.ceil((_barUntil-now)/1000)):0;
-      const hold=(_listenPhase==='locked' && holdLeft)?(' · 2 bars '+holdLeft+'s'):'';
-      const phase=(_listenPhase==='bars')?' · deciding':(_listenPhase==='tempo'?' · tempo':'');
+      const hold=(_listenPhase==='locked' && holdLeft)?(' · hold '+holdLeft+'s'):'';
+      const phaseMap={tempo:' · tempo', penta:' · penta', hepta:' · hepta', style:' · style', locked:''};
+      const phase=phaseMap[_listenPhase]||'';
       out.textContent=scaleLbl+homeLbl+bPart+hold+phase+'  ('+recent.length+'/'+pitchHistory.length+')';
     },400));
   }
