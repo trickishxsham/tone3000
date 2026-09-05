@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite116';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite117';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9152,6 +9152,37 @@ updateKeySigDisplay();
   let _pentaRoot=null, _pentaMaj=true, _pentaLocked=false;
   let _heptaLocked=false, _styleLocked=false;
   let _barsSinceResolve=0; // lite116: resolve to home key every 11 bars
+  function _trackKeyPrior(){
+    // When app is playing a pack track that already declares key, use it as hard prior.
+    // Screenshot case: RESTLESS KEY E MINOR — must not drift to F#m.
+    try{
+      const bt=(window.BackingTracks&&window.BackingTracks.getCurrentTrack&&window.BackingTracks.getCurrentTrack())
+            || window.__lastBkTrack || null;
+      if(!bt || bt.key==null) return null;
+      const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      const aliases={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#','CB':'B','FB':'E',
+                     'C#':'C#','D#':'D#','F#':'F#','G#':'G#','A#':'A#'};
+      let k=String(bt.key).trim().toUpperCase().replace(/\s+/g,'');
+      k=k.replace(/MINOR$|MIN$|M$/,''); // strip trailing minor markers from key string if any
+      if(aliases[k]) k=aliases[k];
+      let idx=names.indexOf(k);
+      if(idx<0){
+        // try "Em" / "F#m" style
+        const m=String(bt.key).trim().match(/^([A-G][#b]?)(m|min|minor)?$/i);
+        if(m){
+          let kk=m[1].toUpperCase().replace('B','b');
+          if(kk.length===2 && kk[1]==='B') kk=kk[0]+'#'; // unlikely
+          const map={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
+          kk=map[kk]||kk;
+          idx=names.indexOf(kk);
+          if(idx>=0) return {root:idx, maj:!(m[2]||bt.min), from:'track'};
+        }
+        return null;
+      }
+      const maj=!(bt.min===true || bt.min===1 || /min/i.test(String(bt.mode||bt.quality||'')));
+      return {root:idx, maj:maj, from:'track'};
+    }catch(e){ return null; }
+  }
   function _inferHome(hist, keyPlain){
     // lite112 stages (driven by _listenPhase / lock flags):
     //   penta: major vs minor pentatonic only (after 2 full bars)
@@ -9166,29 +9197,51 @@ updateKeySigDisplay();
     }
 
     // ── Step 1: major vs minor PENTATONIC ──
+    // Track prior wins when app is playing a labeled pack track (RESTLESS = Em, not F#m).
+    const prior=_trackKeyPrior();
     let bestPentaR=0, bestPentaMaj=true, bestPentaSc=-1;
     for(let R=0;R<12;R++){
       const majSc=0.30*pc(R)+0.22*pc(R+2)+0.22*pc(R+4)+0.18*pc(R+7)+0.18*pc(R+9)
                  -0.15*pc(R+3)-0.10*pc(R+1);
-      const minSc=0.30*pc(R)+0.24*pc(R+3)+0.18*pc(R+5)+0.18*pc(R+7)+0.18*pc(R+10)
-                 -0.15*pc(R+4)-0.08*pc(R+1);
+      // minor: emphasize tonic+m3+p5; penalize cases where R is only the 2nd of a stronger minor
+      let minSc=0.32*pc(R)+0.26*pc(R+3)+0.18*pc(R+5)+0.20*pc(R+7)+0.16*pc(R+10)
+               -0.16*pc(R+4)-0.08*pc(R+1);
+      // anti-ii: if (R-2) minor triad is stronger, R is often just the 2nd of that key (F# in Em)
+      const homeCand=(R+10)%12; // R is major 2nd above homeCand
+      const homeTri=0.30*pc(homeCand)+0.24*pc(homeCand+3)+0.18*pc(homeCand+7);
+      const thisTri=0.30*pc(R)+0.24*pc(R+3)+0.18*pc(R+7);
+      if(homeTri>thisTri*1.05 && pc(homeCand)>0.03) minSc -= 0.22;
       if(majSc>bestPentaSc){ bestPentaSc=majSc; bestPentaR=R; bestPentaMaj=true; }
       if(minSc>bestPentaSc){ bestPentaSc=minSc; bestPentaR=R; bestPentaMaj=false; }
     }
     if(!bestPentaMaj){
+      // V-of-i correction (B in Em)
       const iR=(bestPentaR+5)%12;
       const vSc=0.30*pc(bestPentaR)+0.24*pc(bestPentaR+3)+0.18*pc(bestPentaR+7);
       const iSc=0.30*pc(iR)+0.24*pc(iR+3)+0.18*pc(iR+7)+0.12*pc(iR+10);
       if(iSc>=vSc*0.85 && pc(iR)>0.02) bestPentaR=iR;
+      // ii-of-i correction (F# in Em): if candidate is major 2nd above a stronger minor tonic
+      const i2=(bestPentaR+10)%12;
+      const i2Sc=0.30*pc(i2)+0.24*pc(i2+3)+0.18*pc(i2+7)+0.10*pc(i2+10);
+      const curSc=0.30*pc(bestPentaR)+0.24*pc(bestPentaR+3)+0.18*pc(bestPentaR+7);
+      if(i2Sc>=curSc*0.90 && pc(i2)>0.025) bestPentaR=i2;
+    }
+    // Hard prior from playing track metadata
+    if(prior){
+      bestPentaR=prior.root; bestPentaMaj=prior.maj; bestPentaSc=Math.max(bestPentaSc, 1.0);
     }
 
     // Until penta is locked, only publish soft penta guess — no style yet
     if(!_pentaLocked){
-      _pentaRoot=bestPentaR; _pentaMaj=bestPentaMaj;
-      _homeRoot=bestPentaR; _homeMaj=bestPentaMaj;
+      if(prior){ _pentaRoot=prior.root; _pentaMaj=prior.maj; }
+      else { _pentaRoot=bestPentaR; _pentaMaj=bestPentaMaj; }
+      _homeRoot=_pentaRoot; _homeMaj=_pentaMaj;
       return;
     }
-    // Keep penta fixed once locked (2 full bars of evidence)
+    // Keep penta fixed once locked — track prior can still correct a bad early lock once
+    if(prior && (_pentaRoot!==prior.root || _pentaMaj!==prior.maj)){
+      _pentaRoot=prior.root; _pentaMaj=prior.maj;
+    }
     bestPentaR=_pentaRoot; bestPentaMaj=_pentaMaj;
 
     // ── Steps 2–4: modes → hex colour → Ionian/Aeolian ──
@@ -9987,6 +10040,8 @@ updateKeySigDisplay();
         }
         // 4 full bars done → LOCK penta, then build hepta one note at a time
         _inferHome(hist, null);
+        const _pr=_trackKeyPrior();
+        if(_pr){ _pentaRoot=_pr.root; _pentaMaj=_pr.maj; _homeRoot=_pr.root; _homeMaj=_pr.maj; }
         _pentaLocked=true; _pentaRoot=_pentaRoot!=null?_pentaRoot:_homeRoot; _pentaMaj=_homeMaj;
         _listenPhase='hepta';
         _listenPhaseAt=now;
