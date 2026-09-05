@@ -3,7 +3,7 @@
 // Improv scoring, judges, AURA, tokens, gems, track packs economy.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861-lite44-combined';
+var MODULE_VERSION = '4.9.8.861-lite45-combined';
 
 // §SCORING ─── IMPROV SCORING + AURA SYSTEM ──────────────────────
 const Scoring = (function(){
@@ -1716,14 +1716,13 @@ const BackingTracks = (function(){
   //   up in a note table, missed, and fell back to index 0 -> every minor track in every
   //   pack drove a C-major I-IV-V progression into the scale-follow engine.
   function parseKey(t){
-    // v745: tracks.json writes minor as a suffix ("Em","F#m","Amin"). An explicit
-    //   t.min===true also counts. Never let t.min===false override a minor suffix —
-    //   the jam propose path used to force min:false for every track without a min
-    //   field, which turned Restless (Em) into E major.
+    // v745/lite119: trailing m OR M is ALWAYS minor (EM=Em, gM=Gm, Gm=Gm).
+    //   Bare letter = major only with no m/M suffix. t.min===true also counts;
+    //   never let t.min===false override a minor suffix.
     const raw=String((t&&t.key)||'C').trim();
-    const fromKey=/min$/i.test(raw) || /^[A-G](?:#|b)?m$/i.test(raw);
+    const fromKey=/(?:min|minor|m)$/i.test(raw) || /^[A-G](?:#|b)?[mM]$/.test(raw);
     const min=fromKey || t.min===true;
-    return { root: raw.replace(/(?:maj|min|m)$/i,''), min: min };
+    return { root: raw.replace(/(?:maj|minor|min|m)$/i,''), min: min };
   }
   function updateNowPlaying(t){
     const np=document.getElementById('btNowPlaying');
