@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite117';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite119';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9153,34 +9153,39 @@ updateKeySigDisplay();
   let _heptaLocked=false, _styleLocked=false;
   let _barsSinceResolve=0; // lite116: resolve to home key every 11 bars
   function _trackKeyPrior(){
-    // When app is playing a pack track that already declares key, use it as hard prior.
-    // Screenshot case: RESTLESS KEY E MINOR — must not drift to F#m.
+    // Key suffix rule (user): m OR M after the root is ALWAYS minor.
+    //   EM = E minor, gM = G minor, Gm = G minor, F#m = F# minor.
+    //   Bare "E" / "G" = major only when there is no m/M suffix.
+    // Same idea as scoring.parseKey, but M is never read as "major".
     try{
       const bt=(window.BackingTracks&&window.BackingTracks.getCurrentTrack&&window.BackingTracks.getCurrentTrack())
             || window.__lastBkTrack || null;
       if(!bt || bt.key==null) return null;
+      const raw=String(bt.key).trim();
+      // trailing m/M/min/minor (any case) → minor. "EM","Gm","gM","F#M","Amin" all minor.
+      const fromKey=/(?:min|minor|m)$/i.test(raw) || /^[A-G](?:#|b)?[mM]$/.test(raw);
+      const isMin=fromKey || bt.min===true || bt.min===1;
+      // strip minor markers only (never treat leftover M as major quality)
+      let root=raw.replace(/(?:minor|min|m)$/i,'').trim();
+      const aliases={'Db':'C#','Eb':'D#','Gb':'F#','Ab':'G#','Bb':'A#','Cb':'B','Fb':'E',
+                     'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#',
+                     'db':'C#','eb':'D#','gb':'F#','ab':'G#','bb':'A#'};
+      if(aliases[root]) root=aliases[root];
+      // normalize letter case: first char upper, accidental preserved
+      root=root.charAt(0).toUpperCase()+(root.length>1?root.slice(1):'');
+      if(root.length===2 && root[1]==='b') root=aliases[root]||root;
       const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-      const aliases={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#','CB':'B','FB':'E',
-                     'C#':'C#','D#':'D#','F#':'F#','G#':'G#','A#':'A#'};
-      let k=String(bt.key).trim().toUpperCase().replace(/\s+/g,'');
-      k=k.replace(/MINOR$|MIN$|M$/,''); // strip trailing minor markers from key string if any
-      if(aliases[k]) k=aliases[k];
-      let idx=names.indexOf(k);
+      let idx=names.indexOf(root);
       if(idx<0){
-        // try "Em" / "F#m" style
-        const m=String(bt.key).trim().match(/^([A-G][#b]?)(m|min|minor)?$/i);
+        const m=String(raw).trim().match(/^([A-Ga-g])([#b])?[mM]?(?:in(?:or)?)?$/);
         if(m){
-          let kk=m[1].toUpperCase().replace('B','b');
-          if(kk.length===2 && kk[1]==='B') kk=kk[0]+'#'; // unlikely
-          const map={'DB':'C#','EB':'D#','GB':'F#','AB':'G#','BB':'A#'};
-          kk=map[kk]||kk;
+          let kk=m[1].toUpperCase()+(m[2]||'');
+          if(m[2]==='b') kk=aliases[m[1].toUpperCase()+'b']||kk;
           idx=names.indexOf(kk);
-          if(idx>=0) return {root:idx, maj:!(m[2]||bt.min), from:'track'};
         }
-        return null;
       }
-      const maj=!(bt.min===true || bt.min===1 || /min/i.test(String(bt.mode||bt.quality||'')));
-      return {root:idx, maj:maj, from:'track'};
+      if(idx<0) return null;
+      return {root:idx, maj:!isMin, from:'track', raw:raw};
     }catch(e){ return null; }
   }
   function _inferHome(hist, keyPlain){
@@ -9263,9 +9268,12 @@ updateKeySigDisplay();
     }
 
     // Exile m2 XOR b5 at Ionian (side decision; style still deferred)
+    // Track prior polarity is hard: Em → minor side (exile b5), not TRiCkiSh Major
     const m2w=pc(ionian+1), b5w=pc(ionian+6);
     let exile='m2';
-    if(m2w>b5w*1.05 && m2w>0.015) exile='b5';
+    if(prior){
+      exile=prior.maj ? 'm2' : 'b5';
+    } else if(m2w>b5w*1.05 && m2w>0.015) exile='b5';
     else if(b5w>m2w*1.05 && b5w>0.015) exile='m2';
     else if(m2w>0.02) exile='b5';
     else if(b5w>0.02) exile='m2';
