@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite108';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite109';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1161,11 +1161,11 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <option value="myMin">ShAM Minor</option>
     <option value="jazz">JAZZ</option>
   </select>
-  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="FILE = pick an MP3/WAV from your phone (Musicolet library files work). APP = this app only. MIC = speakers on. CAPTURE = browser tab audio. Android blocks web apps from tapping Musicolet’s live output.">
+  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="DEFAULT: App + Mic — hears the in-app backing track AND your real guitar on the mic. Feeds the rule-of-11 (m2 or b5 exiled → side + tonic). FILE = load MP3/WAV. APP only / MIC only / CAPTURE for special cases.">
+    <option value="both" selected>App + Mic (guitar + track)</option>
+    <option value="internal">App audio only</option>
+    <option value="mic">Mic only (speakers on)</option>
     <option value="file">Load audio file</option>
-    <option value="internal">App audio (this app)</option>
-    <option value="mic">Mic (speakers on)</option>
-    <option value="both">App + Mic</option>
     <option value="capture">Capture tab/stream</option>
   </select>
   <input type="file" id="keyFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" style="display:none;">
