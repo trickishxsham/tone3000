@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite136';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite138';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -6858,6 +6858,11 @@ function metTick(){
     } else {
       walkAdvance();
     }
+    // Listen KEY/BPM follow: apply staged scale on the 1 only (no mid-bar flash)
+    try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
+  } else if(beat===0 && mCount===0){
+    // first downbeat of session
+    try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
   }
   mCount++;
   if(!isFinite(mBeats)||mBeats<1) mBeats=4;      // v676: a poisoned meter can't kill the bar counter
@@ -10117,6 +10122,8 @@ function _getKeyStyle(){
     return out;
   }
   let _barChoice=null, _barUntil=0, _lastFollowKey='';
+  // lite137: decide scale during the bar; APPLY only on metronome beat 1 (never mid-bar flash)
+  let _pendingListenScale=null, _listenAppliedBar=-1, _listenDecideBar=-1;
 
   function collectPitch(analyser){
     if(!analyser || !_AC) return;
@@ -10173,11 +10180,11 @@ function _getKeyStyle(){
     if(btn){ btn.textContent='⏹ STOP'; btn.style.background='#dc2626'; }   // listen state on the in-block button
     keyDetectActive=true; pitchHistory=[]; pitchTimestamps=[];
     lastKeyReads=[]; lastBpmReads=[]; keyLocked=false; lockedKey=''; lockedBpm=0;
-    _barChoice=null; _barUntil=0; _bpmEma=null; energyHistory=[];
+    _barChoice=null; _barUntil=0; _pendingListenScale=null; _listenAppliedBar=-1; _listenDecideBar=-1; _bpmEma=null; energyHistory=[];
     _homeRoot=null; _homeMaj=true; _homeSetAt=0; _lastPickKey='';
     _iaIonian=null; _iaAeolian=null; _heptaKey=null; _exileKind=null;
     _pentaRoot=null; _pentaMaj=true; _pentaLocked=false;
-    _heptaLocked=false; _styleLocked=false; _barsSinceResolve=0; _barObs=[]; _walkBars=0;
+    _heptaLocked=false; _styleLocked=false; _barsSinceResolve=0; _barObs=[]; _walkBars=0; _walkPhase='home'; _walkAway=0; _walkBackLeft=0;
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
     chromaHist=new Array(12).fill(0); chromaAt=0;
     ensureAudio();                                              // creates _AC / _MASTER if needed
@@ -10475,48 +10482,76 @@ function _getKeyStyle(){
           }
         }
 
-        // count bars toward home resolve (starts once we know home, style or not)
+        // lite138: start ionian/aeolian → wander up to 8 scale-changes → 8 changes to return smoothly
+        // → on return pick legal decatonic (11 notes, never 12) → wander again. Genre-bend the 6 styles.
+        function _isHomeKeyScale(sc){
+          if(!sc || _homeRoot==null) return false;
+          if(sc.resolve) return true;
+          if(sc.root!==_homeRoot) return false;
+          if(sc.mode==='IONIAN'||sc.mode==='AEOLIAN') return true;
+          if(sc.tag&&String(sc.tag).indexOf('home')>=0) return true;
+          return false;
+        }
+        function _forceHomeSmooth(){
+          const forms=['hexa','hepta','penta'];
+          if(_lastPickKind==='penta') forms.unshift('penta','hexa','hepta');
+          else if(_lastPickKind==='hepta') forms.unshift('hepta','hexa','penta');
+          const seen={}, ordered=[];
+          forms.forEach(function(f){ if(!seen[f]){ seen[f]=1; ordered.push(f); } });
+          let cand=null;
+          for(let fi=0;fi<ordered.length;fi++){
+            const c=_homeResolveScale(ordered[fi]);
+            if(_lastPickPcs && _lastPickPcs.length){
+              if(_symDiff(_lastPickPcs, c.pcs)<=5){ cand=c; break; }
+            } else { cand=c; break; }
+          }
+          return cand||_homeResolveScale('hepta');
+        }
+        function _pickLegalDeca(){
+          // Must keep 11-note rule: never open all 12. Stay in swap table / group.
+          const cur=_getKeyStyle()||_autoStyle||(_homeMaj?'myMaj':'classical');
+          let rels=_relatedStyles(cur).slice();
+          if(cur==='classical'){
+            // more maj → blues; more min → sham/jazz
+            rels=['blues','myMin','jazz'];
+          }
+          // filter: new style must not union with current to 12 pcs at home root
+          const H=_homeRoot!=null?_homeRoot:0;
+          const curP=_POOLS[cur];
+          rels=rels.filter(function(st){
+            const P=_POOLS[st]; if(!P) return false;
+            if(_STYLE_GROUP[st] && _STYLE_GROUP[cur] && _STYLE_GROUP[st]!==_STYLE_GROUP[cur]){
+              // blues↔classical is the allowed cross for lean maj/min on same tonic
+              if(!((cur==='classical'&&st==='blues')||(cur==='blues'&&st==='classical'))) return false;
+            }
+            if(!curP) return true;
+            const set={};
+            curP.rel.forEach(function(d){ set[(H+d)%12]=1; });
+            P.rel.forEach(function(d){ set[(H+d)%12]=1; });
+            let n=0; for(let i=0;i<12;i++) if(set[i]) n++;
+            return n<=11; // 11-note rule
+          });
+          if(!rels.length) return cur;
+          if(cur==='classical'){
+            const r=Math.random();
+            if(r<0.40 && rels.indexOf('blues')>=0) return 'blues';
+            if(r<0.70 && rels.indexOf('myMin')>=0) return 'myMin';
+            if(rels.indexOf('jazz')>=0) return 'jazz';
+          }
+          return rels[Math.floor(Math.random()*rels.length)];
+        }
+
         if(_homeRoot!=null){
           _barsSinceResolve=(_barsSinceResolve||0)+1;
-          if(_barsSinceResolve>=11){
-            // Every 11 bars: resolve HOME to original ionian/aeolian (or hexa/penta of those 7 notes).
-            // Optionally soft-swap to a RELATED deca in the same group (min trio interchangeable;
-            // maj group limited). Never cross maj↔min group (would use all 12 / lose exile).
-            const forms=['hexa','hepta','penta'];
-            if(_lastPickKind==='penta') forms.unshift('penta','hexa','hepta');
-            else if(_lastPickKind==='hepta') forms.unshift('hepta','hexa','penta');
-            const seen={}, ordered=[];
-            forms.forEach(function(f){ if(!seen[f]){ seen[f]=1; ordered.push(f); } });
-            for(let fi=0;fi<ordered.length;fi++){
-              const cand=_homeResolveScale(ordered[fi]);
-              if(_lastPickPcs && _lastPickPcs.length){
-                const diff=_symDiff(_lastPickPcs, cand.pcs);
-                if(diff<=5){ pick=cand; break; }
-              } else { pick=cand; break; }
-            }
-            if(!pick || !pick.resolve) pick=_homeResolveScale('hepta');
-            // From Classical Em: next resolve may go more major (blues) or more minor (ShAM/jazz).
-            // Same for other styles via _STYLE_SWAP. Home scale still ionian/aeolian/hexa/penta of key.
-            if(_isStyleAuto()){
-              const cur=_getKeyStyle()||_autoStyle||'classical';
-              const rels=_relatedStyles(cur);
-              if(rels.length && Math.random()<0.45){
-                let nxt=rels[Math.floor(Math.random()*rels.length)];
-                // classical bias: 40% blues (more maj), 60% sham/jazz (more min)
-                if(cur==='classical'){
-                  const r=Math.random();
-                  if(r<0.40) nxt='blues';
-                  else nxt=(r<0.70)?'myMin':'jazz';
-                }
-                _autoStyle=nxt;
-                if(!_styleLocked) _styleLocked=true;
-                if(_STYLE_GROUP[nxt]==='min') _exileKind='b5';
-                else if(nxt==='blues'||nxt==='myMaj') _exileKind=(_homeMaj?_exileKind:'b5');
-              }
-            }
-            _barsSinceResolve=0;
+          // Phase machine on scale changes (applied picks), not wall clock alone
+          if(!_walkPhase || _walkPhase==='home'){
+            _walkPhase='out'; _walkAway=0; _walkBackLeft=0;
           }
+          // If observe already forced a home resolve pick, handle below after pick is set
         }
+
+        // After we have a candidate pick, track away/return
+        // (hook runs after pick selection — patch continued below)
 
         // Between resolves: prefer hex wander INSIDE locked deca (10-note boundary)
         if(!pick || (pick && !pick.resolve && pick.kind==='hepta' && (_barsSinceResolve||0)>2 && (_barsSinceResolve||0)<10)){
@@ -10536,17 +10571,73 @@ function _getKeyStyle(){
             if(home) pick=home;
           }
         }
+        // ── 8-out / 8-back enforcement on the chosen scale ──
+        if(pick && _homeRoot!=null){
+          const atHome=_isHomeKeyScale(pick);
+          if(_walkPhase==='out'){
+            if(!atHome){
+              _walkAway=(_walkAway||0)+1;
+              if(_walkAway>=8){
+                _walkPhase='return';
+                _walkBackLeft=8;
+              }
+            } else {
+              _walkAway=0; // still touching home
+            }
+          } else if(_walkPhase==='return'){
+            if(atHome || (_walkBackLeft||0)<=1){
+              // Arrived (or last chance) → force smooth home if needed
+              if(!atHome) pick=_forceHomeSmooth();
+              // Legal decatonic for the next cycle (11-note rule)
+              if(_isStyleAuto()){
+                const nxt=_pickLegalDeca();
+                _autoStyle=nxt;
+                _styleLocked=true;
+                if(_STYLE_GROUP[nxt]==='min') _exileKind='b5';
+              }
+              _walkPhase='out';
+              _walkAway=0;
+              _walkBackLeft=0;
+              _barsSinceResolve=0;
+            } else {
+              // Pull toward home: bias next pick to home forms
+              _walkBackLeft=(_walkBackLeft||8)-1;
+              if((_walkBackLeft||0)<=3){
+                const home=_forceHomeSmooth();
+                // prefer home if transition not too hard
+                if(home && (!_lastPickPcs || _symDiff(_lastPickPcs, home.pcs)<=6))
+                  pick=home;
+              }
+            }
+          }
+        }
+
         if(pick){
-          _barChoice=pick;
+          // Hold current segments until downbeat — only stage the next scale
+          _pendingListenScale=pick;
           _lastPickKey=pick.key+'|'+(pick.mode)+'|'+(pick.alt||'')+'|'+(pick.pentaName||pick.hexaName||pick.tag||'');
           _lastPickPcs=(pick.pcs||[]).slice();
           _lastPickKind=pick.kind;
           _barUntil=now+oneBarMs;
-          const follow=document.getElementById('keyFollowScale');
-          if(follow && follow.checked) _applyListenScale(pick);
+          if(!_barChoice) _barChoice=pick;
         }
         _walkBars=(_walkBars||0)+1;
       }
+
+      // Apply pending listen scale exactly once per bar on metronome beat 1
+      function _flushListenScaleOnDownbeat(){
+        if(!_pendingListenScale) return;
+        const barNo=(typeof mBarNo==='number')?mBarNo:-1;
+        if(barNo>=0 && barNo===_listenAppliedBar) return; // already applied this bar
+        const pick=_pendingListenScale;
+        _pendingListenScale=null;
+        _barChoice=pick;
+        _listenAppliedBar=barNo;
+        const follow=document.getElementById('keyFollowScale');
+        if(follow && follow.checked) _applyListenScale(pick);
+      }
+      // Expose for metTick
+      window.__flushListenScaleOnDownbeat=_flushListenScaleOnDownbeat;
 
       // ── Phase: walk — every FULL bar offer a scale; refine key from observations ──
       // tempo already done → walk immediately (no waiting for 10 notes to play scales)
@@ -10563,8 +10654,24 @@ function _getKeyStyle(){
         const barHist=_histFromPitches(barPitches.length?barPitches:[]);
         // use bar hist if enough notes, else full live hist
         const useHist=(barPitches.length>=4)?barHist:hist;
-        if(now>=_barUntil || !_barChoice){
+        // Decide once per bar; APPLY only on metronome beat 1 (met dots / mBarPos).
+        const barNo=(typeof mBarNo==='number')?mBarNo:-1;
+        const metOn=(typeof mPlaying!=='undefined' && mPlaying);
+        if(metOn){
+          const lastBeat=Math.max(0,(mBeats|0)-1);
+          const onLast=(typeof mBarPos==='number' && mBarPos===lastBeat);
+          if(!_barChoice || (onLast && barNo!==_listenDecideBar)){
+            _commitBar(useHist); // stages _pendingListenScale only
+            _listenDecideBar=barNo;
+          }
+        } else if(now>=_barUntil || !_barChoice){
           _commitBar(useHist);
+          if(_pendingListenScale){
+            _barChoice=_pendingListenScale;
+            const follow=document.getElementById('keyFollowScale');
+            if(follow && follow.checked) _applyListenScale(_pendingListenScale);
+            _pendingListenScale=null;
+          }
         }
         // status
         const ch=_barChoice;
@@ -10580,13 +10687,16 @@ function _getKeyStyle(){
           homeLbl=' · key of '+root+(_homeMaj?'':'m');
           if(_iaIonian!=null) homeLbl+=' · hepta '+namesPC[_iaIonian]+'/'+namesPC[_iaAeolian];
         }
-        if(_styleLocked){
+        if(_styleLocked || _autoStyle){
           const st=_getKeyStyle();
           const stName=(_STYLE_LABEL&&_STYLE_LABEL[st])?_STYLE_LABEL[st]:st;
-          homeLbl+=' · '+stName+' (wandered)';
+          homeLbl+=' · '+stName;
         } else {
           homeLbl+=' · notes '+u.n+'/11';
         }
+        if(_walkPhase==='out') homeLbl+=' · out '+(_walkAway||0)+'/8';
+        else if(_walkPhase==='return') homeLbl+=' · return in '+(_walkBackLeft||0);
+        else homeLbl+=' · home';
         if(_exileKind) homeLbl+=' · exile '+_exileKind;
         const bPart=useBpm?(' · ~'+useBpm+' BPM'):'';
         const holdLeft=(_barUntil>now)?Math.max(0,Math.ceil((_barUntil-now)/1000)):0;
