@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite126';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite133';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1153,13 +1153,14 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
   <button id="btnKeyDetect" data-tip-title="LISTEN KEY/BPM" data-tip="Listen continuously. Each bar picks a matching scale (neighbor modes, penta/hexa, one-note alts). SPICE = strict→loose. BPM updates live. Tap again to stop." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#16a34a; color:#fff; border:none; border-radius:3px;">🎵 LISTEN KEY/BPM</button>
-  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="AUTO picks among 5 ten-note keys (most major→most minor): TRiCkiSh Major, Blues, Classical, ShAM Minor, Jazz. Jazz is darkest (Phrygian colour). Manual lock any style." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
-    <option value="auto" selected>AUTO (5 keys)</option>
+  <select id="selKeyStyle" data-tip-title="KEY STYLE" data-tip="AUTO among 6 decas (pairs): TRiCkiSh Major↔ShAM Minor, Blues↔Classical, Jazz Major↔Jazz Minor. At 11 unique notes the exile (m2 or b5) is declared." style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#fbbf24; border:1px solid #f59e0b66; font-weight:700;">
+    <option value="auto" selected>AUTO (6 keys)</option>
     <option value="myMaj">TRiCkiSh Major</option>
     <option value="blues">BLUES</option>
     <option value="classical">CLASSICAL</option>
+    <option value="jazzMaj">JAZZ MAJOR</option>
     <option value="myMin">ShAM Minor</option>
-    <option value="jazz">JAZZ</option>
+    <option value="jazz">JAZZ MINOR</option>
   </select>
   <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="DEFAULT: App + Mic — hears the in-app backing track AND your real guitar on the mic. Feeds the rule-of-11 (m2 or b5 exiled → side + tonic). FILE = load MP3/WAV. APP only / MIC only / CAPTURE for special cases.">
     <option value="both" selected>App + Mic (guitar + track)</option>
@@ -1717,6 +1718,8 @@ const STRING_OPEN = {1:4,2:11,3:7,4:2,5:9,6:4};
 const STRING_MIDI = {1:64,2:59,3:55,4:50,5:45,6:40}; // E4 B3 G3 D3 A2 E2
 // 49 hexatonics — each mode minus one note; indexed by excluded scale-degree.
 // (placeholder 'NEW ...' names kept as-is, to be renamed once colours are seen)
+// Named hexas = mode minus 1. Alt path: Kumud (=Ionian−p4) + HI (=raise 5→m6) = same set dual-name.
+// Some hexas have TWO named relationships (mode-ex AND alt+hex). Both valid.
 const HEX_NAMES={
   IONIAN    :['MAJOR HEX EX 1','GENUS SECUNDUM','LYDIAN HEX','KUMUD','HAMSA VINODINI','VILASINI','MAJOR DIATONIC'],
   DORIAN    :['DORIAN HEX EX 1','PENTA ADD6','MIXO HEX','MANAVI','SRIRANJANI','MINOR HEX','SUDDHA BANGALA'],
@@ -8743,33 +8746,64 @@ updateKeySigDisplay();
   // Blues          = Dorian pole + b5 (Lyd harm m3 tension; never pure Phrygian)
   // ShAM Minor     = Aeolian + m2 + maj6 + maj7
   // Jazz           = Phrygian pole + maj3 + maj7 (darkest)
-  const _STYLE_ORDER = ['myMaj','blues','classical','myMin','jazz']; // major → minor
+  // lite132: SIX DECAS — pairs built the same (major form / minor form)
+  // TRiCkiSh Major↔ShAM Minor | Blues↔Classical | Jazz Major↔Jazz Minor
+  // At 11 unique notes → declare exile (missing chromatic, usually m2 or b5).
+  const _STYLE_ORDER = ['myMaj','blues','classical','jazzMaj','myMin','jazz'];
   const _STYLE_LABEL = {
     myMaj:'TRiCkiSh Major', blues:'Blues', classical:'Classical',
-    myMin:'ShAM Minor', jazz:'Jazz'
+    jazzMaj:'Jazz Major', myMin:'ShAM Minor', jazz:'Jazz Minor'
   };
-  // Signature / harmonic interval degrees (from mode tonic)
+  // Interchange groups (legal resolve swaps). NEVER mix maj-group with min-group
+  // or you hit all 12 / lose exile / key goes vague.
+  // Min trio share NO b5 (11 notes total) — fully interchangeable.
+  // Maj group: related but Jazz Major must not be stacked with both others at once.
+  const _STYLE_GROUP = {
+    myMaj: 'maj', blues: 'maj', jazzMaj: 'maj',
+    classical: 'min', jazz: 'min', myMin: 'min'
+  };
+  const _STYLE_SWAP = {
+    myMaj:   ['blues','jazzMaj'],
+    blues:   ['myMaj'],
+    jazzMaj: ['myMaj'],
+    classical:['jazz','myMin'],
+    jazz:    ['classical','myMin'],
+    myMin:   ['classical','jazz']
+  };
+  const _STYLE_PAIR = {myMaj:'myMin', myMin:'myMaj', blues:'classical', classical:'blues', jazzMaj:'jazz', jazz:'jazzMaj'};
   const _MODE_SIG = {
-    IONIAN:{sig:11, harm:8},      // 7 , m6
-    AEOLIAN:{sig:8, harm:11},     // m6, 7
-    DORIAN:{sig:9, harm:6},       // 6 , b5
-    LOCRIAN:{sig:6, harm:9},      // b5, 6
-    MIXOLYDIAN:{sig:4, harm:1},   // 3 , m2
-    PHRYGIAN:{sig:1, harm:4},     // m2, 3
-    LYDIAN:{sig:6, harm:3}        // #4/b5 dual area; harm m3 (dorian sig)
+    IONIAN:{sig:11, harm:8}, AEOLIAN:{sig:8, harm:11}, DORIAN:{sig:9, harm:6},
+    LOCRIAN:{sig:6, harm:9}, MIXOLYDIAN:{sig:4, harm:1}, PHRYGIAN:{sig:1, harm:4}, LYDIAN:{sig:6, harm:3}
   };
+  // Exact 10-note pools + two exiles each (user lite133)
+  // TRiCkiSh Major: 1 2 3 4 b5 5 m6 6 m7 7 — no m2 no m3
+  // Jazz Major:     1 m2 2 3 4 5 m6 6 m7 7 — no m3 no b5
+  // Blues:          1 2 m3 3 4 b5 5 6 m7 7 — no m2 no m6
+  // Classical:      1 2 m3 3 4 5 m6 6 m7 7 — no m2 no b5
+  // Jazz Minor:     1 m2 2 m3 3 4 5 m6 m7 7 — no b5 no 6
+  // ShAM Minor:     1 m2 2 m3 4 5 m6 6 m7 7 — no 3 no b5
   const _POOLS = {
-    // TRiCkiSh Major @ Ionian: 1 2 3 4 b5 5 m6 6 m7 7  (exile m2)
-    myMaj:      { rel:[0,2,4,5,6,7,8,9,10,11], modes:['IONIAN','LYDIAN','MIXOLYDIAN'], keyMode:'IONIAN', sig:[6,8,10], label:'Δ10', majness:1.0 },
-    // Blues @ IV of Ionian (Dorian pole): 1 2 m3 3 4 b5 5 6 m7 7
-    blues:      { rel:[0,2,3,4,5,6,7,9,10,11], modes:['LYDIAN','IONIAN','MIXOLYDIAN','DORIAN'], keyMode:'DORIAN', sig:[3,6,9], label:'Bl10', majness:0.55 },
-    // Classical = Ionian+Aeolian mix: 1 2 m3 3 4 5 m6 6 m7 7  (no m2, no b5)
-    classical:  { rel:[0,2,3,4,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','MIXOLYDIAN','IONIAN'], keyMode:'AEOLIAN', sig:[3,8,11], label:'Cl10', majness:0.30 },
-    // ShAM Minor @ Aeolian: 1 m2 2 m3 4 5 m6 6 m7 7
-    myMin:      { rel:[0,1,2,3,5,7,8,9,10,11], modes:['AEOLIAN','DORIAN','PHRYGIAN'], keyMode:'AEOLIAN', sig:[1,9,11], label:'m10', majness:0.25 },
-    // Jazz @ Phrygian colour: 1 m2 2 m3 3 4 5 m6 m7 7
-    jazz:       { rel:[0,1,2,3,4,5,7,8,10,11], modes:['PHRYGIAN','AEOLIAN','DORIAN'], keyMode:'PHRYGIAN', sig:[1,4,11], label:'Jz10', majness:0.0 }
+    myMaj:    { rel:[0,2,4,5,6,7,8,9,10,11], exile:[1,3],   group:'maj', pair:'myMin', keyMode:'IONIAN',  sig:[6,8,10], label:'Δ10', majness:1.0 },
+    blues:    { rel:[0,2,3,4,5,6,7,9,10,11], exile:[1,8],   group:'maj', pair:'classical', keyMode:'IONIAN', sig:[3,6,9], label:'Bl10', majness:0.55 },
+    jazzMaj:  { rel:[0,1,2,4,5,7,8,9,10,11], exile:[3,6],   group:'maj', pair:'jazz', keyMode:'IONIAN',  sig:[1,8,10], label:'JzM10', majness:0.85 },
+    classical:{ rel:[0,2,3,4,5,7,8,9,10,11], exile:[1,6],   group:'min', pair:'blues', keyMode:'AEOLIAN', sig:[3,8,11], label:'Cl10', majness:0.30 },
+    jazz:     { rel:[0,1,2,3,4,5,7,8,10,11], exile:[6,9],   group:'min', pair:'jazzMaj', keyMode:'AEOLIAN', sig:[1,4,11], label:'Jz10', majness:0.0 },
+    myMin:    { rel:[0,1,2,3,5,7,8,9,10,11], exile:[4,6],   group:'min', pair:'myMaj', keyMode:'AEOLIAN', sig:[1,9,11], label:'m10', majness:0.25 }
   };
+  function _poolSetForStyle(st, root){
+    const P=_POOLS[st]; if(!P) return null;
+    const R=(root!=null)?(root|0):0;
+    const set={}; P.rel.forEach(function(d){ set[(R+d)%12]=1; });
+    return set;
+  }
+  function _pcsInPool(pcs, poolSet){
+    if(!poolSet||!pcs) return true;
+    for(let i=0;i<pcs.length;i++){ if(!poolSet[pcs[i]]) return false; }
+    return true;
+  }
+  function _relatedStyles(st){
+    return (_STYLE_SWAP[st]||[]).slice();
+  }
   let _autoStyle='myMaj', _autoStyleAt=0;
   function _scorePoolAtRoot(hist, tot, rel, R){
     const set={}; rel.forEach(function(x){ set[(x+R)%12]=1; });
@@ -8895,53 +8929,54 @@ updateKeySigDisplay();
     }
     _exileKind=exile;
 
+    // At 11 unique notes declare exile = the missing chromatic vs Ionian
+    if(u.n>=11){
+      let missing=-1;
+      for(let i=0;i<12;i++){ if(!((u.mask>>i)&1)){ missing=i; break; } }
+      if(missing>=0){
+        const relM=(missing-I+12)%12;
+        if(relM===1) exile='m2';
+        else if(relM===6) exile='b5';
+        else exile=(pc(I+1)<=pc(I+6))?'m2':'b5';
+        _exileKind=exile;
+      }
+    }
     const majPools=[
       {st:'myMaj', root:I, rel:_POOLS.myMaj.rel},
-      {st:'blues', root:F, rel:_POOLS.blues.rel},
-      {st:'classical', root:I, rel:_POOLS.classical.rel}
+      {st:'blues', root:I, rel:_POOLS.blues.rel},
+      {st:'classical', root:I, rel:_POOLS.classical.rel},
+      {st:'jazzMaj', root:I, rel:_POOLS.jazzMaj.rel}
     ];
     const minPools=[
       {st:'myMin', root:A, rel:_POOLS.myMin.rel},
       {st:'jazz', root:A, rel:_POOLS.jazz.rel},
-      {st:'classical', root:A, rel:_POOLS.classical.rel}
+      {st:'classical', root:A, rel:_POOLS.classical.rel},
+      {st:'blues', root:A, rel:_POOLS.blues.rel}
     ];
-    // Signature dual bonuses (from mode dual table)
-    // Ionian sig7 ↔ Aeolian harm7; Aeolian sig m6 ↔ Ionian harm m6
-    // Dorian sig6 ↔ Locrian harm6 / Dorian harm b5 ↔ Locrian sig b5
-    // Mixo sig3 ↔ Phrygian harm3; Phrygian sig m2 ↔ Mixo harm m2
-    // Classical = ionian+aeolian mix (both 3rds + both 7ths, no m2 no b5)
     const side=(exile==='m2')?majPools:minPools;
     let best=null, bestSc=-99;
     side.forEach(function(p){
+      if(!_POOLS[p.st]) return;
       let sc=scorePool(p.root, p.rel);
       if(p.st==='myMaj'){
-        // TRiCkiSh Major: ionian side + b5/m6/m7; exile m2
         sc += 0.35*sigMass(I, [6,8,10]) - 0.25*pc(I+1);
       } else if(p.st==='blues'){
-        // Blues: dorian pole + b5 (dorian harm); m3 tension (lydian harm)
-        sc += 0.30*sigMass(F, [3,6,9]) - 0.20*pc(F+1);
+        sc += 0.30*sigMass(p.root, [3,6,9]) - 0.20*pc(p.root+1) - 0.15*pc(p.root+8);
       } else if(p.st==='classical'){
-        // Classical: ionian+aeolian mixed — both 3rds, both 7ths; NO m2, NO b5
-        const mix = sigMass(I,[4,11]) + sigMass(A,[3,8]); // maj3+7 of I, m3+m6 of A
-        sc += 0.28*mix - 0.22*pc(I+1) - 0.22*pc(I+6);
+        sc += 0.28*(sigMass(I,[4,11])+sigMass(A,[3,8])) - 0.22*pc(I+1) - 0.22*pc(I+6);
+      } else if(p.st==='jazzMaj'){
+        sc += 0.35*sigMass(I, [1,8,10]) - 0.15*pc(I+3);
       } else if(p.st==='myMin'){
-        // ShAM: aeolian + m2 + maj6 + maj7 (phrygian sig m2, dorian sig 6, ionian sig 7)
-        sc += 0.35*sigMass(A, [1,9,11]) - 0.15*pc(A+4); // less maj3 than jazz
+        sc += 0.35*sigMass(A, [1,9,11]) - 0.15*pc(A+4);
       } else if(p.st==='jazz'){
-        // Jazz: phrygian pole — m2 + maj3 + maj7 (phrygian sig, mixo harm, ionian sig)
-        sc += 0.35*sigMass(A, [1,4,11]) - 0.12*pc(A+9); // less maj6 than ShAM
+        sc += 0.35*sigMass(A, [1,4,11]) - 0.12*pc(A+9);
       }
       if(sc>bestSc){ bestSc=sc; best=p; }
     });
     if(!best || bestSc<0.15) return null;
 
     _autoStyle=best.st; _autoStyleAt=Date.now();
-    if(exile==='m2'){
-      if(best.st==='blues'){ _homeRoot=F; _homeMaj=true; }
-      else { _homeRoot=I; _homeMaj=true; }
-    } else {
-      _homeRoot=A; _homeMaj=false;
-    }
+    // Do not move ionian/aeolian home from style — key already locked
     _heptaKey=I;
     return best.st;
   }
@@ -8950,7 +8985,7 @@ updateKeySigDisplay();
       const el=document.getElementById('selKeyStyle');
       const v=el&&el.value;
       if(v==='auto') return _autoStyle||'myMaj';
-      if(v==='myMaj'||v==='myMin'||v==='blues'||v==='classical'||v==='jazz') return v;
+      if(v==='myMaj'||v==='myMin'||v==='blues'||v==='classical'||v==='jazz'||v==='jazzMaj') return v;
       if(v==='my') return 'myMaj';
     }catch(e){}
     return _autoStyle||'myMaj';
@@ -8966,8 +9001,10 @@ updateKeySigDisplay();
   function _styleForcesMaj(){
     const st=_getKeyStyle();
     if(st==='myMin'||st==='jazz') return false;
-    if(st==='myMaj'||st==='blues') return true;
-    return null; // classical: C or Cm
+    if(st==='myMaj'||st==='jazzMaj') return true;
+    if(st==='blues') return true;
+    if(st==='classical') return false;
+    return null;
   }
   function _poolPcs(root, maj){
     return _activePoolSpec(maj).rel.map(function(x){ return (x+root)%12; });
@@ -9426,41 +9463,68 @@ updateKeySigDisplay();
   // min penta degrees: 0,3,5,7,10 — the two mode-defining adds:
   //   maj2=2, min2=1, min6=8, maj6=9
   function _minorModeFromTwo(hist, R){
+    // Returns {mode, stage:'hepta'} when BOTH colour tones present,
+    // or {mode, stage:'hexa', add:deg} when only ONE colour tone (→ hex not hepta).
     const tot=hist.reduce(function(a,b){return a+b;},0)||1;
     function w(d){ return (hist[(R+d)%12]||0)/tot; }
     const maj2=w(2), min2=w(1), min6=w(8), maj6=w(9);
-    // need evidence of TWO colour notes (or strong pair)
+    const need=0.012;
     const pairs=[
-      {mode:'DORIAN',   a:maj2, b:maj6, need:0.012},
-      {mode:'AEOLIAN',  a:maj2, b:min6, need:0.012},
-      {mode:'PHRYGIAN', a:min2, b:min6, need:0.012}
+      {mode:'DORIAN',   a:maj2, b:maj6, da:2, db:9},
+      {mode:'AEOLIAN',  a:maj2, b:min6, da:2, db:8},
+      {mode:'PHRYGIAN', a:min2, b:min6, da:1, db:8}
     ];
     let best=null, bestSc=-1;
     pairs.forEach(function(p){
-      if(p.a<p.need || p.b<p.need) return;
+      if(p.a<need || p.b<need) return;
       const sc=p.a+p.b;
-      if(sc>bestSc){ bestSc=sc; best=p.mode; }
+      if(sc>bestSc){ bestSc=sc; best={mode:p.mode, stage:'hepta', sc:sc}; }
     });
-    // weaker: only one strong colour — still not mode-locked
-    return best;
+    if(best) return best;
+    // single colour → hexatonic only (e.g. m6 alone → not full Phrygian)
+    const singles=[
+      {mode:'PHRYGIAN', deg:8, w:min6}, // m6 → phrygian/aeolian hex
+      {mode:'PHRYGIAN', deg:1, w:min2}, // m2 → phrygian hex
+      {mode:'DORIAN',   deg:9, w:maj6}, // maj6 → dorian hex
+      {mode:'AEOLIAN',  deg:2, w:maj2}, // maj2 → aeolian/dorian hex
+      {mode:'DORIAN',   deg:2, w:maj2}
+    ];
+    let hs=null, hsc=-1;
+    singles.forEach(function(s){
+      if(s.w<need) return;
+      if(s.w>hsc){ hsc=s.w; hs={mode:s.mode, stage:'hexa', add:s.deg, sc:s.w}; }
+    });
+    return hs;
   }
   function _majorModeFromTwo(hist, R){
     const tot=hist.reduce(function(a,b){return a+b;},0)||1;
     function w(d){ return (hist[(R+d)%12]||0)/tot; }
     const maj4=w(5), aug4=w(6), maj7=w(11), min7=w(10);
-    // maj penta already has 0,2,4,7,9 — adds: 5 or 6, and 10 or 11
+    const need=0.012;
     const pairs=[
-      {mode:'IONIAN',      a:maj4, b:maj7, need:0.012},
-      {mode:'LYDIAN',      a:aug4, b:maj7, need:0.012},
-      {mode:'MIXOLYDIAN',  a:maj4, b:min7, need:0.012}
+      {mode:'IONIAN',      a:maj4, b:maj7},
+      {mode:'LYDIAN',      a:aug4, b:maj7},
+      {mode:'MIXOLYDIAN',  a:maj4, b:min7}
     ];
     let best=null, bestSc=-1;
     pairs.forEach(function(p){
-      if(p.a<p.need || p.b<p.need) return;
+      if(p.a<need || p.b<need) return;
       const sc=p.a+p.b;
-      if(sc>bestSc){ bestSc=sc; best=p.mode; }
+      if(sc>bestSc){ bestSc=sc; best={mode:p.mode, stage:'hepta', sc:sc}; }
     });
-    return best;
+    if(best) return best;
+    const singles=[
+      {mode:'LYDIAN', deg:6, w:aug4},
+      {mode:'IONIAN', deg:5, w:maj4},
+      {mode:'MIXOLYDIAN', deg:10, w:min7},
+      {mode:'IONIAN', deg:11, w:maj7}
+    ];
+    let hs=null, hsc=-1;
+    singles.forEach(function(s){
+      if(s.w<need) return;
+      if(s.w>hsc){ hsc=s.w; hs={mode:s.mode, stage:'hexa', add:s.deg, sc:s.w}; }
+    });
+    return hs;
   }
   function _observeBarAndInfer(hist){
     const tot=hist.reduce(function(a,b){return a+b;},0);
@@ -9491,48 +9555,116 @@ updateKeySigDisplay();
     const R=_pentaRoot!=null?_pentaRoot:_homeRoot;
     const maj=!!_pentaMaj;
 
-    // Stage 2: next TWO notes → mode at R, then map to parent ionian/aeolian KEY
-    // Example: Em penta + m2 + m6 → E Phrygian → parent C ionian / A aeolian → key Am
-    //   E phr / D dor / F lyd / C ion / A aeo / B loc all same key
+    // Stage 2: next TWO notes → mode colour at R.
+    // HOME KEY from triad/track is HARD. Do NOT remap Em→Am because E heard phrygian colour.
+    // Example: track Em → home stays Em (hepta G/E). Mode may be E aeolian / E dorian / E phrygian
+    // as a SCALE OFFER, but key-of stays Em. Only when NO home was set yet may parent be inferred.
+    // lite129: NEVER name Phrygian/Dorian/Lydian/Mixo BEFORE key = Ionian or Aeolian.
+    // One colour → hex (no mode name). Both colours → decide KEY (ionian/aeolian) first;
+    // key note may change (E + m2+m6 → key Am). Only AFTER that may relative modes appear.
     if(!_heptaLocked){
-      const mode=maj?_majorModeFromTwo(hist, R):_minorModeFromTwo(hist, R);
-      if(!mode){
+      const info=maj?_majorModeFromTwo(hist, R):_minorModeFromTwo(hist, R);
+      if(!info){
         const pick=maj?_majPentaPick(R):_minPentaPick(R);
         pick.stage='penta-wait-two';
         return pick;
       }
-      // Mode degree → ionian root (semitone offset of mode from ionian)
+      // ONE colour → hex inside ionian/aeolian family (many 6-note hexas by exclude)
+      // Minor hexatonic = min penta + 2 (inside aeolian). Trimurti = other aeolian-ex.
+      // Never label Phrygian/Dorian/etc — only named hex / colour until KEY locked.
+      if(info.stage==='hexa'){
+        const penta=maj?[0,2,4,7,9]:[0,3,5,7,10];
+        let semis=penta.slice();
+        if(semis.indexOf(info.add)<0) semis.push(info.add);
+        semis.sort(function(a,b){return a-b;});
+        // Prefer full aeolian/ionian-ex named hex when the set matches
+        let hexaName='colour hex';
+        const fp=semis.join(',');
+        // min penta + 2 → MINOR HEXATONIC (aeolian exclude m6)
+        if(!maj && fp==='0,2,3,5,7,10') hexaName='MINOR HEXATONIC';
+        // min penta + m6 → 0,3,5,7,8,10 = aeolian exclude 2 → PHRYGIAN HEX name in table
+        // but until key locked we still show as hex, use table name if present
+        else if(!maj && fp==='0,3,5,7,8,10') hexaName='MINOR HEX EX 2';
+        // Trimurti = aeolian ex 4 (exclude degree index 3 = 4th): 0,2,3,7,8,10
+        else if(!maj && fp==='0,2,3,7,8,10') hexaName='TRIMURTI';
+        try{
+          if(typeof HEX_NAMES!=='undefined'){
+            const parent=maj?'IONIAN':'AEOLIAN';
+            const parentSemis=(typeof MODE_SEMITONES!=='undefined'&&MODE_SEMITONES[parent])?MODE_SEMITONES[parent]:null;
+            if(parentSemis && HEX_NAMES[parent]){
+              for(let ex=0;ex<parentSemis.length;ex++){
+                const hx=parentSemis.filter(function(_,i){return i!==ex;});
+                if(hx.slice().sort(function(a,b){return a-b;}).join(',')===fp){
+                  hexaName=HEX_NAMES[parent][ex]||hexaName;
+                  semis=hx.slice();
+                  break;
+                }
+              }
+            }
+          }
+          if(typeof HEX_NAMES_X!=='undefined' && HEX_NAMES_X[fp]) hexaName=HEX_NAMES_X[fp];
+        }catch(e){}
+        const pick={
+          root:R, key:names[R], mode:'COLOUR', alt:'NA',
+          tag:'hexa:'+hexaName,
+          pcs:semis.map(function(d){return (R+d)%12;}),
+          kind:'hexa', colourSemis:semis, hexaName:hexaName,
+          stage:'hexa', uniName:hexaName
+        };
+        if(_homeRoot!=null) pick.keyOf=names[_homeRoot]+(_homeMaj?'':'m');
+        _barObs.push({root:R, maj:maj, tag:hexaName, stage:'hexa', add:info.add});
+        if(_barObs.length>24) _barObs.shift();
+        return pick;
+      }
+      // BOTH colours → lock KEY as Ionian or Aeolian (never as Phrygian etc.)
+      // Map heard centre R + mode-shape → parent ionian/aeolian; KEY NOTE is that tonic
       const modeOff={IONIAN:0, DORIAN:2, PHRYGIAN:4, LYDIAN:5, MIXOLYDIAN:7, AEOLIAN:9, LOCRIAN:11};
-      const off=modeOff[mode]!=null?modeOff[mode]:0;
+      const off=modeOff[info.mode]!=null?modeOff[info.mode]:0;
       const ionian=(R-off+12)%12;
       const aeolian=(ionian+9)%12;
+      const minSide=info.mode==='DORIAN'||info.mode==='AEOLIAN'||info.mode==='PHRYGIAN'||info.mode==='LOCRIAN';
+      // Track prior is soft suggestion only until both colours decide true key
       _iaIonian=ionian; _iaAeolian=aeolian; _heptaKey=ionian; _heptaLocked=true;
-      // Key we build on = ionian if major-side mode, aeolian if minor-side mode
-      const minSide=mode==='DORIAN'||mode==='AEOLIAN'||mode==='PHRYGIAN'||mode==='LOCRIAN';
       if(minSide){ _homeRoot=aeolian; _homeMaj=false; }
       else { _homeRoot=ionian; _homeMaj=true; }
-      // Offer the HEARD mode (E Phrygian), key display is Am
-      const pick=_modePick(R, mode);
+      _pentaRoot=_homeRoot; _pentaMaj=_homeMaj;
+      // Offer the KEY scale (Aeolian or Ionian) — not Phrygian/Dorian yet
+      const keyMode=_homeMaj?'IONIAN':'AEOLIAN';
+      const keyRoot=_homeRoot;
+      const pick=_modePick(keyRoot, keyMode);
       pick.keyOf=names[_homeRoot]+(_homeMaj?'':'m');
       pick.parentIonian=names[ionian];
       pick.parentAeolian=names[aeolian];
-      _barObs.push({root:R, maj:!minSide, tag:mode, stage:'mode', keyOf:pick.keyOf});
+      pick.stage='key-lock';
+      pick.fromShape=info.mode; // internal only — how we found the parent
+      _barObs.push({root:keyRoot, maj:_homeMaj, tag:keyMode, stage:'key', keyOf:pick.keyOf, via:info.mode});
       if(_barObs.length>24) _barObs.shift();
       return pick;
     }
 
-    // Stage 3+: walk ALL modes of the parent ionian (C ionian family if E phr → Am)
-    //   Offer the mode whose root best matches current hist, still key-of Am
-    const ion=_iaIonian!=null?_iaIonian:R;
-    const parentModes=[
-      {mode:'IONIAN',deg:0,semis:[0,2,4,5,7,9,11]},
-      {mode:'DORIAN',deg:2,semis:[0,2,3,5,7,9,10]},
-      {mode:'PHRYGIAN',deg:4,semis:[0,1,3,5,7,8,10]},
-      {mode:'LYDIAN',deg:5,semis:[0,2,4,6,7,9,11]},
-      {mode:'MIXOLYDIAN',deg:7,semis:[0,2,4,5,7,9,10]},
-      {mode:'AEOLIAN',deg:9,semis:[0,2,3,5,7,8,10]},
-      {mode:'LOCRIAN',deg:11,semis:[0,1,3,5,6,8,10]}
-    ];
+    // Stage 3+: KEY already = Ionian or Aeolian.
+    // Expand with: (1) 1-note alterations of base Ionian/Aeolian
+    //              (2) neighbour modes above/below = also 1-note alts of that base
+    //              (3) hexas for the walk — go for a walk, come home, walk again
+    const ion=_iaIonian!=null?_iaIonian:(_homeMaj?_homeRoot:((_homeRoot+3)%12));
+    const aeo=_iaAeolian!=null?_iaAeolian:(_homeMaj?((_homeRoot+9)%12):_homeRoot);
+    const baseRoot=_homeMaj?ion:aeo;
+    const baseMode=_homeMaj?'IONIAN':'AEOLIAN';
+    const baseSemis=_homeMaj?[0,2,4,5,7,9,11]:[0,2,3,5,7,8,10];
+    // Neighbour modes as 1-note alterations of the base (same 7 pcs rotated / one degree flipped)
+    // Major base Ionian: Lydian (#4), Mixolydian (b7) — neighbours
+    // Minor base Aeolian: Dorian (nat6), Phrygian (b2) — neighbours
+    const neighbours=_homeMaj
+      ? [
+          {mode:'IONIAN', root:ion, semis:[0,2,4,5,7,9,11], altOf:'base'},
+          {mode:'LYDIAN', root:ion, semis:[0,2,4,6,7,9,11], altOf:'1note'},   // 4→#4
+          {mode:'MIXOLYDIAN', root:ion, semis:[0,2,4,5,7,9,10], altOf:'1note'} // 7→b7
+        ]
+      : [
+          {mode:'AEOLIAN', root:aeo, semis:[0,2,3,5,7,8,10], altOf:'base'},
+          {mode:'DORIAN', root:aeo, semis:[0,2,3,5,7,9,10], altOf:'1note'},   // m6→6
+          {mode:'PHRYGIAN', root:aeo, semis:[0,1,3,5,7,8,10], altOf:'1note'}  // 2→m2
+        ];
     function scoreAt(root, semis){
       let inn=0,out=0,hit=0;
       const set={}; semis.forEach(function(d){set[(root+d)%12]=1;});
@@ -9540,41 +9672,61 @@ updateKeySigDisplay();
         const h=hist[i]||0; if(h<=0) continue;
         if(set[i]){inn+=h;hit++;} else out+=h;
       }
-      return (inn/(tot||1))-0.45*(out/(tot||1))+0.05*(hit/semis.length)+0.08*((hist[root]||0)/tot);
+      return (inn/(tot||1))-0.45*(out/(tot||1))+0.05*(hit/semis.length)+0.10*((hist[root]||0)/tot);
     }
     let best=null, bestSc=-99;
-    parentModes.forEach(function(f){
-      const root=(ion+f.deg)%12;
-      const sc=scoreAt(root, f.semis);
-      if(sc>bestSc){ bestSc=sc; best={mode:f.mode, semis:f.semis, root:root, kind:'hepta', sc:sc}; }
+    // Prefer base ionian/aeolian, then 1-note neighbour alts
+    neighbours.forEach(function(f){
+      let sc=scoreAt(f.root, f.semis);
+      if(f.altOf==='base') sc += 0.12; // emphasize home key mode
+      if(sc>bestSc){ bestSc=sc; best={mode:f.mode, semis:f.semis, root:f.root, kind:'hepta', sc:sc, altOf:f.altOf}; }
     });
-    // hexas by exclude-1 from best, ≤3 consecutive
-    if(best){
-      const base=best.semis, br=best.root;
-      for(let ex=0;ex<base.length;ex++){
-        const hx=base.filter(function(_,i){return i!==ex;});
-        if(typeof maxConsecutiveRun==='function' && maxConsecutiveRun(hx)>3) continue;
-        const sorted=hx.slice().sort(function(a,b){return a-b;});
-        let run=1, maxRun=1;
-        for(let i=1;i<sorted.length;i++){
-          if(sorted[i]===sorted[i-1]+1) run++; else run=1;
-          if(run>maxRun) maxRun=run;
-        }
-        if(maxRun>3) continue;
-        // bias hexas for wandering between home resolves
-        const sc=scoreAt(br, hx)+0.08;
-        if(sc>bestSc*0.92){ bestSc=sc; best={mode:'COLOUR', semis:hx, root:br, kind:'hexa', sc:sc, fromEx:ex}; }
+    // Hexas of the BASE (ionian-ex / aeolian-ex) for the walk
+    const hexCandidates=[];
+    for(let ex=0;ex<baseSemis.length;ex++){
+      const hx=baseSemis.filter(function(_,i){return i!==ex;});
+      if(typeof maxConsecutiveRun==='function' && maxConsecutiveRun(hx)>3) continue;
+      const sorted=hx.slice().sort(function(a,b){return a-b;});
+      let run=1, maxRun=1;
+      for(let i=1;i<sorted.length;i++){
+        if(sorted[i]===sorted[i-1]+1) run++; else run=1;
+        if(run>maxRun) maxRun=run;
+      }
+      if(maxRun>3) continue;
+      let nm='hex';
+      try{
+        if(typeof HEX_NAMES!=='undefined' && HEX_NAMES[baseMode] && HEX_NAMES[baseMode][ex])
+          nm=HEX_NAMES[baseMode][ex];
+      }catch(e){}
+      hexCandidates.push({semis:hx, root:baseRoot, name:nm, sc:scoreAt(baseRoot, hx)+0.10});
+    }
+    hexCandidates.forEach(function(h){
+      if(h.sc>bestSc*0.90){ // hexas compete for the walk
+        bestSc=Math.max(bestSc, h.sc);
+        if(h.sc>=bestSc-0.02)
+          best={mode:'COLOUR', semis:h.semis, root:h.root, kind:'hexa', sc:h.sc, hexaName:h.name};
+      }
+    });
+    // Between resolves, prefer hexa walk over staying on hepta base every bar
+    const bars=_barsSinceResolve||0;
+    if(bars>=2 && bars<=9 && hexCandidates.length){
+      hexCandidates.sort(function(a,b){return b.sc-a.sc;});
+      const h=hexCandidates[0];
+      if(h.sc>0.05){
+        best={mode:'COLOUR', semis:h.semis, root:h.root, kind:'hexa', sc:h.sc, hexaName:h.name};
       }
     }
-    if(!best) return maj?_majPentaPick(R):_minPentaPick(R);
+    if(!best){
+      return _homeMaj?_modePick(baseRoot,'IONIAN'):_modePick(baseRoot,'AEOLIAN');
+    }
     const pick={
       root:best.root, key:names[best.root], mode:best.mode, alt:'NA',
-      tag:'walk:'+(best.mode||'hexa'),
+      tag:best.kind==='hexa'?('walk:'+best.hexaName):('walk:'+best.mode),
       pcs:best.semis.map(function(d){return (best.root+d)%12;}), kind:best.kind,
-      colourSemis:best.semis.slice(), uniName:best.mode, stage:'walk',
-      keyOf:names[_homeRoot]+(_homeMaj?'':'m')
+      colourSemis:best.semis.slice(), uniName:best.mode==='COLOUR'?best.hexaName:best.mode,
+      stage:'walk', keyOf:names[_homeRoot]+(_homeMaj?'':'m')
     };
-    if(best.kind==='hexa') pick.hexaName='ex'+best.fromEx;
+    if(best.kind==='hexa') pick.hexaName=best.hexaName||'hex';
     return pick;
   }
   function _pickMatchingScale(hist, spice){
@@ -10247,22 +10399,32 @@ updateKeySigDisplay();
         const barHist=hist;
         let pick=_observeBarAndInfer(barHist);
         _inferHome(barHist, null);
-        if(_homeRoot==null && pick){
+        // Track prior seeds early only until KEY (ionian/aeolian) is decided from notes
+        const _pr=typeof _trackKeyPrior==='function'?_trackKeyPrior():null;
+        if(_pr && !_heptaLocked){
+          _homeRoot=_pr.root; _homeMaj=_pr.maj; _pentaRoot=_pr.root; _pentaMaj=_pr.maj;
+          if(_pr.maj){ _iaIonian=_pr.root; _iaAeolian=(_pr.root+9)%12; }
+          else { _iaAeolian=_pr.root; _iaIonian=(_pr.root+3)%12; }
+          _pentaLocked=true;
+          _exileKind=_pr.maj?'m2':'b5';
+        } else if(_homeRoot==null && pick){
           _homeRoot=pick.root; _homeMaj=!!pick.maj;
           _iaIonian=_homeMaj?pick.root:(pick.root+3)%12;
           _iaAeolian=_homeMaj?(pick.root+9)%12:pick.root;
         }
 
-        // Style is opportunistic only — never force the pool; tag if notes happen to fit
-        if(_isStyleAuto() && _iaIonian!=null){
+        // Style only after key locked; opportunistic
+        if(_isStyleAuto() && _heptaLocked && _iaIonian!=null){
           const u=_countUniquePcs(barHist);
           if(u.n>=10){
+            const savedHome=_homeRoot, savedMaj=_homeMaj, savedI=_iaIonian, savedA=_iaAeolian;
             const st=_inferStyleFromHist(barHist, _iaIonian, _iaAeolian);
             if(st){
-              // soft tag only; do NOT freeze the walk to the pool
               _autoStyle=st;
-              if(!_styleLocked) _styleLocked=true; // label only
+              if(!_styleLocked) _styleLocked=true;
             }
+            // style must not move ionian/aeolian key
+            _homeRoot=savedHome; _homeMaj=savedMaj; _iaIonian=savedI; _iaAeolian=savedA; _heptaKey=savedI;
           }
         }
 
@@ -10270,7 +10432,9 @@ updateKeySigDisplay();
         if(_homeRoot!=null){
           _barsSinceResolve=(_barsSinceResolve||0)+1;
           if(_barsSinceResolve>=11){
-            // MUST go home — prefer hexa/penta form for smooth land, else hepta
+            // Every 11 bars: resolve HOME to original ionian/aeolian (or hexa/penta of those 7 notes).
+            // Optionally soft-swap to a RELATED deca in the same group (min trio interchangeable;
+            // maj group limited). Never cross maj↔min group (would use all 12 / lose exile).
             const forms=['hexa','hepta','penta'];
             if(_lastPickKind==='penta') forms.unshift('penta','hexa','hepta');
             else if(_lastPickKind==='hepta') forms.unshift('hepta','hexa','penta');
@@ -10284,20 +10448,46 @@ updateKeySigDisplay();
               } else { pick=cand; break; }
             }
             if(!pick || !pick.resolve) pick=_homeResolveScale('hepta');
+            // related deca swap (same group only) — stay in 10-note boundary of new style
+            if(_styleLocked && _isStyleAuto()){
+              const cur=_getKeyStyle();
+              const rels=_relatedStyles(cur);
+              if(rels.length && Math.random()<0.35){
+                const nxt=rels[Math.floor(Math.random()*rels.length)];
+                if(_STYLE_GROUP[nxt]===_STYLE_GROUP[cur]){
+                  _autoStyle=nxt;
+                  // keep exile consistent with new pool if possible
+                  const P=_POOLS[nxt];
+                  if(P && P.exile && P.exile.length){
+                    // prefer shared exile with group (min trio → b5)
+                    if(_STYLE_GROUP[nxt]==='min') _exileKind='b5';
+                  }
+                }
+              }
+            }
             _barsSinceResolve=0;
           }
         }
 
-        // Between resolves: prefer hexatonic wander when observe didn't pick
+        // Between resolves: prefer hex wander INSIDE locked deca (10-note boundary)
         if(!pick || (pick && !pick.resolve && pick.kind==='hepta' && (_barsSinceResolve||0)>2 && (_barsSinceResolve||0)<10)){
-          // try a hexa of the parent family matching hist
           const spiceTry=_pickMatchingScale(barHist, Math.max(spice||0, 0.35));
           if(spiceTry && spiceTry.kind==='hexa') pick=spiceTry;
           else if(!pick) pick=spiceTry;
         }
         if(!pick) pick=_pickMatchingScale(barHist, spice) || _fallbackScale();
 
-        // Do not hard-reject non-pool scales — wandering is allowed until resolve
+        // Style locked → every offered scale must sit inside the 10-note pool
+        if(pick && _styleLocked){
+          const st=_getKeyStyle();
+          const poolRoot=(_homeMaj?_iaIonian:_iaAeolian);
+          const pset=_poolSetForStyle(st, poolRoot!=null?poolRoot:_homeRoot);
+          if(pset && pick.pcs && !_pcsInPool(pick.pcs, pset)){
+            // try related interchangeable deca only at resolve; otherwise snap home hexa
+            const home=_homeResolveScale('hexa')||_homeResolveScale('hepta');
+            if(home) pick=home;
+          }
+        }
         if(pick){
           _barChoice=pick;
           _lastPickKey=pick.key+'|'+(pick.mode)+'|'+(pick.alt||'')+'|'+(pick.pentaName||pick.hexaName||pick.tag||'');
@@ -10347,7 +10537,7 @@ updateKeySigDisplay();
           const stName=(_STYLE_LABEL&&_STYLE_LABEL[st])?_STYLE_LABEL[st]:st;
           homeLbl+=' · '+stName+' (wandered)';
         } else {
-          homeLbl+=' · notes '+u.n+'/10';
+          homeLbl+=' · notes '+u.n+'/11';
         }
         if(_exileKind) homeLbl+=' · exile '+_exileKind;
         const bPart=useBpm?(' · ~'+useBpm+' BPM'):'';
