@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite143';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite144';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -10736,28 +10736,35 @@ function _getKeyStyle(){
         const barNo=(typeof mBarNo==='number')?mBarNo:-1;
         const metOn=(typeof mPlaying!=='undefined' && mPlaying);
         const beatPos=(typeof mBarPos==='number')?mBarPos:0;
-        // Decide: always if no choice yet; else once per bar (prefer last beat when met on)
+        // Decide every TWO bars (2×4/4 or 2×3/4). Stage only — apply on beat 1.
         try{
           if(metOn){
             const lastBeat=Math.max(0,(mBeats|0)-1);
             const onLast=beatPos===lastBeat;
+            // pair index: bars 1-2, 3-4, … decide at end of even barNo
+            const endOfPair=(barNo>=1 && (barNo%2)===0);
             if(!_barChoice && !_pendingListenScale){
               _commitBar(useHist);
               _listenDecideBar=barNo;
-            } else if(onLast && barNo!==_listenDecideBar){
+            } else if(onLast && endOfPair && barNo!==_listenDecideBar){
               _commitBar(useHist);
               _listenDecideBar=barNo;
             }
-          } else if(now>=_barUntil || !_barChoice){
-            _commitBar(useHist);
-            if(_pendingListenScale){
-              _barChoice=_pendingListenScale;
-              const follow=document.getElementById('keyFollowScale');
-              if(follow && follow.checked) _applyListenScale(_pendingListenScale);
-              _pendingListenScale=null;
+          } else {
+            const beats=(mBeats||4);
+            const twoBars=Math.max(3200, Math.min(20000, (60000/(useBpm||100))*beats*2));
+            if(!_barChoice || now>=(_barUntil||0)){
+              _commitBar(useHist);
+              if(_pendingListenScale){
+                _barChoice=_pendingListenScale;
+                const follow=document.getElementById('keyFollowScale');
+                if(follow && follow.checked) _applyListenScale(_pendingListenScale);
+                _pendingListenScale=null;
+              }
+              _barUntil=now+twoBars;
             }
           }
-        }catch(errCommit){
+                }catch(errCommit){
           try{ console.warn('[listen] commit', errCommit); }catch(e){}
         }
         // status — always show something useful (never blank dash alone)
@@ -10784,7 +10791,7 @@ function _getKeyStyle(){
         } else {
           homeLbl+=' · notes '+u.n+'/11';
         }
-        if(_walkPhase==='out') homeLbl+=' · out '+(_walkAway||0)+'/8';
+        if(_walkPhase==='out') homeLbl+=' · out '+(_walkAway||0)+'/8 · hold 2 bars';
         else if(_walkPhase==='return') homeLbl+=' · return in '+(_walkBackLeft||0);
         else homeLbl+=' · home';
         if(_exileKind) homeLbl+=' · exile '+_exileKind;
