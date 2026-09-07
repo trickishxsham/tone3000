@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite141';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite142';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9282,9 +9282,12 @@ function _getKeyStyle(){
   let _heptaKey=null, _exileKind=null;
   let _pentaRoot=null, _pentaMaj=true, _pentaLocked=false;
   let _heptaLocked=false, _styleLocked=false;
-  let _barsSinceResolve=0; // lite116: resolve to home key every 11 bars
-  let _barObs=[]; // lite120: per-bar scale observations → refine mode → aeolian/ionian
+  let _barsSinceResolve=0;
+  let _barObs=[];
   let _walkBars=0;
+  let _walkPhase='home'; // home | out | return
+  let _walkAway=0;
+  let _walkBackLeft=0;
   function _trackKeyPrior(){
     // Key suffix rule (user): m OR M after the root is ALWAYS minor.
     //   EM = E minor, gM = G minor, Gm = G minor, F#m = F# minor.
