@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite140';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite141';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1173,7 +1173,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on, each bar applies the best-matching scale to the fretboard (does not lock forever).">
     <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
   </label>
-  <div id="keyResult" style="display:block; margin-top:0.45em; padding:0.35em 0.5em; font-weight:700; color:#4ade80; background:#0a1f12; border:1px solid #166534; border-radius:4px; font-size:0.82em; line-height:1.35; word-break:break-word; min-height:1.4em;">—</div>
+  <div id="keyResult" style="display:block; margin-top:0.45em; padding:0.35em 0.5em; font-weight:700; color:#4ade80; background:#0a1f12; border:1px solid #166534; border-radius:4px; font-size:0.82em; line-height:1.35; word-break:break-word; min-height:1.4em;">tap LISTEN KEY/BPM · play a track + metronome</div>
 </div>
 
 <!-- Colour Scale Generator -->
@@ -10366,21 +10366,28 @@ function _getKeyStyle(){
 
       if(_listenPhase==='tempo'){
         const elapsed=now-(_listenPhaseAt||now);
-        const needE = (keyAnFile || keyAnInt) ? 25 : 50;
-        const needB = (keyAnFile || (keyAnInt && appBpm)) ? 1 : 3;
-        // Hard timeout: never stay on estimating > 2.5s if we have any BPM candidate
-        const ready = (useBpm && lastBpmReads.length>=needB && energyHistory.length>=needE)
-                   || (useBpm && elapsed>2500)
-                   || (appBpm && keyAnInt && elapsed>800);
-        if(ready && useBpm){
+        if(!useBpm && appBpm) useBpm=Math.round(appBpm);
+        if(!useBpm && elapsed>600) useBpm=100;
+        const ready = !!useBpm && (elapsed>400 || lastBpmReads.length>=1 || !!appBpm || energyHistory.length>=8);
+        if(ready){
           if(!lockedBpm) lockedBpm=Math.round(useBpm);
           _listenPhase='walk';
           _listenPhaseAt=now;
           _barsAccumStart=now;
           _barUntil=0;
-          out.textContent='tempo ~'+Math.round(useBpm)+' BPM · scale each bar…';
+          try{
+            const pr=typeof _trackKeyPrior==='function'?_trackKeyPrior():null;
+            if(pr){
+              _homeRoot=pr.root; _homeMaj=!!pr.maj; _pentaLocked=true; _heptaLocked=true;
+              if(pr.maj){ _iaIonian=pr.root; _iaAeolian=(pr.root+9)%12; }
+              else { _iaAeolian=pr.root; _iaIonian=(pr.root+3)%12; }
+              _heptaKey=_iaIonian; _exileKind=pr.maj?'m2':'b5';
+              _autoStyle='classical';
+            }
+          }catch(e){}
+          out.textContent='tempo ~'+Math.round(useBpm)+' BPM · walking…';
         } else {
-          out.textContent='estimating tempo'+(useBpm?(' ~'+Math.round(useBpm)):(bpm?(' ~'+bpm):''))+'...';
+          out.textContent='estimating tempo'+(useBpm?(' ~'+Math.round(useBpm)):(appBpm?(' ~'+appBpm):''))+'...';
         }
         return;
       }
@@ -11950,7 +11957,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   })();
   // In-block button = the LISTEN control (start/stop key+BPM detection).
   document.getElementById('btnKeyDetect').addEventListener('click',()=>{
-    
   try{
     const _ss=document.getElementById('selKeyStyle');
     if(_ss && !_ss.__wiredStyle){
@@ -11960,7 +11966,19 @@ document.addEventListener('DOMContentLoaded',()=>{
       });
     }
   }catch(e){}
-keyDetectActive ? stopKeyDetect() : startKeyDetect();
+  if(keyDetectActive){
+    stopKeyDetect();
+  } else {
+    Promise.resolve(startKeyDetect()).catch(function(err){
+      try{
+        const out=document.getElementById('keyResult');
+        if(out) out.textContent='listen error: '+(err&&err.message?err.message:err);
+        const btn=document.getElementById('btnKeyDetect');
+        if(btn){ btn.textContent='🎵 LISTEN KEY/BPM'; btn.style.background='#16a34a'; }
+        keyDetectActive=false;
+      }catch(e){}
+    });
+  }
   });
 
   // ═══════════════════════════════════════════════════════════
