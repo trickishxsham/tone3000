@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite142';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite143';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -9288,6 +9288,7 @@ function _getKeyStyle(){
   let _walkPhase='home'; // home | out | return
   let _walkAway=0;
   let _walkBackLeft=0;
+  let _recentFps=[];
   function _trackKeyPrior(){
     // Key suffix rule (user): m OR M after the root is ALWAYS minor.
     //   EM = E minor, gM = G minor, Gm = G minor, F#m = F# minor.
@@ -10038,12 +10039,31 @@ function _getKeyStyle(){
         // 2) Plain mode ± single alt (real foundation colors)
         if(choice.mode && choice.mode!=='COLOUR' && MODE_SEMITONES[choice.mode]){
           const alt=choice.alt||'NA';
-          // single-degree exclusion hex: alt encoded as X{idx}
           if(choice.exIdx!=null && choice.exIdx>=0){
-            inst.setScale(keyName, choice.mode, 'X'+choice.exIdx);
+            inst.setScale(keyName, choice.mode, (alt&&alt!=='NA'&&alt.charAt(0)!=='X')?alt:'X'+choice.exIdx);
+            // If both alt and exclusion, prefer colour injection with real name below
+            if(alt && alt!=='NA' && alt.charAt(0)!=='X'){
+              // fall through to named COLOUR with uniName
+            } else {
+              return;
+            }
+          } else {
+            inst.setScale(keyName, choice.mode, alt);
             return;
           }
-          inst.setScale(keyName, choice.mode, alt);
+        }
+        // Named colour path: show realName / uniName on badge
+        if(choice.uniName||choice.realName||choice.hexaName){
+          const semis=(choice.colourSemis&&choice.colourSemis.length)?choice.colourSemis.slice()
+            :(choice.pcs||[]).map(function(p){ return ((p-R)%12+12)%12; }).sort(function(a,b){return a-b;});
+          const nm=choice.uniName||choice.realName||choice.hexaName;
+          MODE_SEMITONES['COLOUR']=semis.slice();
+          try{
+            MODE_INT_NAMES['COLOUR']=semis.map(function(x){ return (typeof CI_INT!=='undefined'?CI_INT[((x%12)+12)%12]:String(x)); });
+            MODE_FULL['COLOUR']=nm;
+            if(C_START[choice.parentMode||'IONIAN']) C_START['COLOUR']=C_START[choice.parentMode||'IONIAN'];
+          }catch(e){}
+          inst.setScale(keyName, 'COLOUR', 'NA');
           return;
         }
         // 3) Universe entry — same path as tapping a named scale title
@@ -10459,17 +10479,15 @@ function _getKeyStyle(){
         return o;
       }
       function _commitBar(hist){
-        // lite140 — simple walk:
-        // 1) lock major/minor key (track prior wins)
-        // 2) start Classical
-        // 3) 1-note moves inside deca pool (prefer smooth hex, also penta/hepta)
-        // 4) after 8 changes away → smooth route home
-        // 5) on home → brighter or darker legal deca, go again
-        const barHist=hist||_liveHist();
+        // lite143 — creative 1-note walk inside deca pool
+        // • real mode / alt / ex names (not anonymous COLOUR)
+        // • max 3 consecutive chromatic notes
+        // • tonic can move (relative modes) while key stays Em/classical
+        // • after 8 away → smooth home → brighter/darker deca
+        const barHist=hist||(typeof _liveHist==='function'?_liveHist():new Array(12).fill(0));
         const names=namesPC;
         try{ _inferHome(barHist, null); }catch(e){}
 
-        // Track prior HARD
         const _pr=typeof _trackKeyPrior==='function'?_trackKeyPrior():null;
         if(_pr){
           _homeRoot=_pr.root; _homeMaj=!!_pr.maj;
@@ -10479,14 +10497,7 @@ function _getKeyStyle(){
           _heptaKey=_iaIonian; _heptaLocked=true;
           _exileKind=_homeMaj?'m2':'b5';
         }
-
-        // Default style = Classical once we know polarity
-        if(_homeRoot!=null && !_autoStyle){
-          _autoStyle=_homeMaj?'classical':'classical';
-        }
-        if(_homeRoot!=null && !_styleLocked && _isStyleAuto()){
-          _autoStyle='classical';
-        }
+        if(_homeRoot!=null && _isStyleAuto() && !_autoStyle) _autoStyle='classical';
 
         const H=(_homeRoot!=null)?(_homeRoot|0):0;
         const maj=!!_homeMaj;
@@ -10494,139 +10505,203 @@ function _getKeyStyle(){
         const poolRel=(_POOLS[st]&&_POOLS[st].rel)||[0,2,3,4,5,7,8,9,10,11];
         const poolSet={}; poolRel.forEach(function(d){ poolSet[(H+d)%12]=1; });
 
-        function pcsOf(semis){ return semis.map(function(d){ return (H+d)%12; }); }
-        function inPool(pcs){
+        function maxRun(semis){
+          const s=semis.slice().sort(function(a,b){return a-b;});
+          let run=1, best=1;
+          for(let i=1;i<s.length;i++){
+            if((s[i]-s[i-1]+12)%12===1 || s[i]===s[i-1]+1){ run++; best=Math.max(best,run); }
+            else run=1;
+          }
+          // also wrap check
+          if(s.length>=2 && s[0]===0 && s[s.length-1]===11){
+            let lo=1; while(lo<s.length && s[lo]===lo) lo++;
+            let hi=1; while(hi<s.length && s[s.length-1-hi]===11-hi) hi++;
+            best=Math.max(best, lo+hi);
+          }
+          return best;
+        }
+        function inPoolAbs(pcs){
           for(let i=0;i<pcs.length;i++) if(!poolSet[pcs[i]]) return false;
           return true;
         }
-        function smoothFrom(prev, pcs){
-          if(!prev||!prev.length) return true;
-          return _symDiff(prev, pcs)<=3; // 1-note-ish change (± a couple)
+        function applyAltSemis(mode, alt){
+          const base=(MODE_SEMITONES[mode]||[]).slice();
+          if(!alt || alt==='NA') return base;
+          const ad=ALT_DATA[mode]&&ALT_DATA[mode][alt];
+          if(!ad) return base;
+          const out=base.filter(function(s){ return s!==ad.fromSemi; });
+          if(out.indexOf(ad.toSemi)<0) out.push(ad.toSemi);
+          return out.sort(function(a,b){return a-b;});
         }
-        function mk(semis, kind, mode, label){
-          const pcs=pcsOf(semis);
-          const o={root:H, key:names[H], mode:mode||'COLOUR', alt:'NA', tag:label||kind,
-            pcs:pcs, kind:kind, colourSemis:semis.slice()};
-          if(kind==='penta') o.pentaName=label;
-          if(kind==='hexa') o.hexaName=label;
-          if(kind==='hepta') o.uniName=label||mode;
-          return o;
-        }
-
-        // Candidate scales inside home key + pool (hex preferred)
-        const homeHepta=maj?[0,2,4,5,7,9,11]:[0,2,3,5,7,8,10];
-        const homePenta=maj?[0,2,4,7,9]:[0,3,5,7,10];
-        // hexas = drop one from hepta (smooth neighbours)
-        const hexas=[];
-        for(let drop=0; drop<homeHepta.length; drop++){
-          const semis=homeHepta.filter(function(_,i){ return i!==drop; });
-          if(inPool(pcsOf(semis))) hexas.push({semis:semis, label:'hex-'+drop});
-        }
-        // also pool-subset hexas: consecutive 6 of the 10
-        for(let i=0;i<poolRel.length;i++){
-          const semis=[];
-          for(let k=0;k<6;k++) semis.push(poolRel[(i+k)%poolRel.length]);
-          const u=[], seen={};
-          semis.forEach(function(d){ if(!seen[d]){ seen[d]=1; u.push(d); } });
-          if(u.length>=5 && inPool(pcsOf(u))) hexas.push({semis:u, label:'pool-hex'});
+        function excludeDeg(semis, exIdx){
+          if(exIdx==null || exIdx<0 || exIdx>=semis.length) return semis.slice();
+          return semis.filter(function(_,i){ return i!==exIdx; });
         }
 
+        // Build rich candidate pool: modes × alts × exclusions at several tonics in-pool
+        const MODE_ORDER_L=['IONIAN','DORIAN','PHRYGIAN','LYDIAN','MIXOLYDIAN','AEOLIAN','LOCRIAN'];
+        const ALTS_L=['NA','HI','HA','Ne','MS','BL','Ba','Bh','MP'];
+        // Relative tonics that sit in Em classical: E A B D G C (and F# if in pool)
+        const tonicOffsets=maj
+          ? [0,2,4,5,7,9,11]  // major family
+          : [0,3,5,7,8,10,2]; // minor family + a few colour tonics
         const cands=[];
-        // home hepta / penta
-        if(inPool(pcsOf(homeHepta))) cands.push(mk(homeHepta,'hepta', maj?'IONIAN':'AEOLIAN', maj?'IONIAN':'AEOLIAN'));
-        if(inPool(pcsOf(homePenta))) cands.push(mk(homePenta,'penta','COLOUR', maj?'Major Pentatonic':'Minor Pentatonic'));
-        hexas.forEach(function(h){ cands.push(mk(h.semis,'hexa','COLOUR', h.label)); });
+        const seenFp={};
+        function fpOf(pcs){ return pcs.slice().sort(function(a,b){return a-b;}).join(','); }
+        function pushCand(root, mode, alt, exIdx, semisRel, kind){
+          const pcs=semisRel.map(function(d){ return (root+d)%12; });
+          if(!inPoolAbs(pcs)) return;
+          if(maxRun(semisRel)>3) return; // no more than 3 consecutive
+          if(semisRel.length<5 || semisRel.length>8) return;
+          const fp=fpOf(pcs);
+          if(seenFp[fp]) return;
+          seenFp[fp]=1;
+          let label=mode;
+          if(alt && alt!=='NA') label+=' + '+alt;
+          if(exIdx!=null && exIdx>=0){
+            const hx=HEX_NAMES[mode]&&HEX_NAMES[mode][exIdx];
+            if(hx && (!alt || alt==='NA')) label=hx;
+            else label+=' ex '+exIdx;
+          }
+          // Keep real mode so setScale shows KUMUD / HI / ex N — not anonymous COLOUR
+          const o={
+            root:root, key:names[root], mode:mode, alt:(alt||'NA'),
+            tag:label, pcs:pcs, kind:kind||'hepta', colourSemis:semisRel.slice(),
+            parentMode:mode, exIdx:(exIdx!=null && exIdx>=0?exIdx:-1), uniName:label,
+            realName:label, maj:(mode==='IONIAN'||mode==='LYDIAN'||mode==='MIXOLYDIAN')
+          };
+          if(kind==='hexa'){
+            o.hexaName=label;
+            // exclusion hex: mode + X{ex} for foundation colors
+            if(o.exIdx>=0 && (!alt || alt==='NA')){ o.alt='X'+o.exIdx; }
+          }
+          if(kind==='penta'){ o.pentaName=label; o.mode='COLOUR'; }
+          cands.push(o);
+        }
 
-        // Score by hist fit + smooth transition + prefer hex while wandering
+        tonicOffsets.forEach(function(off){
+          const root=(H+off)%12;
+          if(!poolSet[root] && off!==0) return;
+          MODE_ORDER_L.forEach(function(mode){
+            ALTS_L.forEach(function(alt){
+              let semis=applyAltSemis(mode, alt);
+              // hepta
+              pushCand(root, mode, alt, -1, semis, 'hepta');
+              // each exclusion → hex
+              for(let ex=0; ex<semis.length; ex++){
+                const hx=excludeDeg(semis, ex);
+                pushCand(root, mode, alt, ex, hx, 'hexa');
+              }
+            });
+          });
+          // pentas from home shapes at this tonic
+          [[0,2,4,7,9,'maj penta'],[0,3,5,7,10,'min penta'],[0,2,5,7,10,'sus penta']].forEach(function(row){
+            pushCand(root, 'IONIAN', 'NA', -1, row.slice(0,5), 'penta');
+            cands[cands.length-1] && (cands[cands.length-1].pentaName=row[5], cands[cands.length-1].uniName=row[5]);
+          });
+        });
+
+        // Score: hist fit + 1-note smooth + novelty − repeat penalty
+        if(!_recentFps) _recentFps=[];
         function score(c){
           let s=0;
-          const tot=(barHist||[]).reduce(function(a,b){return a+b;},0)||1;
+          const tot=barHist.reduce(function(a,b){return a+b;},0)||1;
           (c.pcs||[]).forEach(function(pc){ s+=(barHist[pc]||0)/tot; });
-          if(_lastPickPcs && smoothFrom(_lastPickPcs, c.pcs)) s+=0.35;
-          else if(_lastPickPcs && _symDiff(_lastPickPcs, c.pcs)<=5) s+=0.12;
-          else if(_lastPickPcs) s-=0.25;
-          if(_walkPhase==='out' && c.kind==='hexa') s+=0.18;
-          if(_walkPhase==='return' && (c.mode==='IONIAN'||c.mode==='AEOLIAN'||c.resolve)) s+=0.4;
-          if(c.mode==='IONIAN'||c.mode==='AEOLIAN') s+=0.05;
+          if(_lastPickPcs && _lastPickPcs.length){
+            const d=_symDiff(_lastPickPcs, c.pcs);
+            if(d===1) s+=0.55;
+            else if(d===2) s+=0.28;
+            else if(d<=3) s+=0.12;
+            else if(d>5) s-=0.35;
+          }
+          // novelty vs recent
+          const fp=fpOf(c.pcs);
+          if(_recentFps.indexOf(fp)>=0) s-=0.45;
+          // while OUT prefer hex/alt colour over plain aeolian
+          if(_walkPhase==='out'){
+            if(c.kind==='hexa') s+=0.15;
+            if(c.alt && c.alt!=='NA') s+=0.12;
+            if(c.parentMode==='AEOLIAN' && c.alt==='NA' && c.kind==='hepta') s-=0.25;
+            if(c.hexaName && /PHRYGIAN HEX$/.test(c.hexaName)) s-=0.2; // avoid overusing
+            // encourage moving tonic
+            if(c.root!==H) s+=0.08;
+          }
+          if(_walkPhase==='return'){
+            if(c.root===H && (c.parentMode==='AEOLIAN'||c.parentMode==='IONIAN') && (!c.alt||c.alt==='NA'))
+              s+=0.55;
+          }
+          // light random spice for freedom
+          s+=Math.random()*0.12;
           return s;
         }
 
-        // Phase
         if(!_walkPhase || _walkPhase==='home'){ _walkPhase='out'; _walkAway=0; _walkBackLeft=0; }
 
         let pick=null;
-        if(_walkPhase==='return'){
-          // Smooth route home: pick best smooth candidate that is closer to home hepta
-          const homePcs=pcsOf(homeHepta);
+        if(!cands.length){
+          // absolute fallback
+          const semis=maj?[0,2,4,5,7,9,11]:[0,2,3,5,7,8,10];
+          pick={root:H, key:names[H], mode:maj?'IONIAN':'AEOLIAN', alt:'NA', tag:maj?'IONIAN':'AEOLIAN',
+            pcs:semis.map(function(d){return (H+d)%12;}), kind:'hepta', colourSemis:semis,
+            uniName:maj?'IONIAN':'AEOLIAN', parentMode:maj?'IONIAN':'AEOLIAN'};
+        } else if(_walkPhase==='return'){
           let best=null, bestSc=-99;
           cands.forEach(function(c){
-            let sc=score(c);
-            sc -= 0.08*_symDiff(c.pcs, homePcs); // nearer home better
-            if(c.mode==='IONIAN'||c.mode==='AEOLIAN') sc+=0.5;
+            const sc=score(c);
             if(sc>bestSc){ bestSc=sc; best=c; }
           });
-          pick=best||mk(homeHepta,'hepta', maj?'IONIAN':'AEOLIAN', maj?'IONIAN':'AEOLIAN');
+          pick=best;
           _walkBackLeft=Math.max(0,(_walkBackLeft||8)-1);
-          const atHome=(pick.mode==='IONIAN'||pick.mode==='AEOLIAN')||_walkBackLeft<=0;
-          if(atHome){
-            if(pick.mode!=='IONIAN'&&pick.mode!=='AEOLIAN')
-              pick=mk(homeHepta,'hepta', maj?'IONIAN':'AEOLIAN', maj?'IONIAN':'AEOLIAN');
-            pick.resolve=true;
-            // Brighter or darker deca (11-note rule)
+          const homeish=pick && pick.root===H && (pick.parentMode==='AEOLIAN'||pick.parentMode==='IONIAN') && (!pick.alt||pick.alt==='NA') && pick.kind==='hepta';
+          if(homeish || _walkBackLeft<=0){
+            // force home hepta
+            const semis=maj?[0,2,4,5,7,9,11]:[0,2,3,5,7,8,10];
+            pick={root:H, key:names[H], mode:maj?'IONIAN':'AEOLIAN', alt:'NA', tag:maj?'IONIAN':'AEOLIAN',
+              pcs:semis.map(function(d){return (H+d)%12;}), kind:'hepta', colourSemis:semis,
+              uniName:maj?'IONIAN':'AEOLIAN', parentMode:maj?'IONIAN':'AEOLIAN', resolve:true};
+            // brighter / darker deca
             if(_isStyleAuto()){
-              const cur=st;
-              // classical: brighter=blues, darker=sham/jazz
-              // blues: brighter=myMaj, darker=classical
-              // myMin/jazz: brighter=classical, darker=stay min trio
-              let nxt=cur;
-              const bright=Math.random()<0.5;
+              const cur=st; let nxt=cur; const bright=Math.random()<0.5;
               if(cur==='classical') nxt=bright?'blues':(Math.random()<0.5?'myMin':'jazz');
               else if(cur==='blues') nxt=bright?'myMaj':'classical';
               else if(cur==='myMaj') nxt=bright?'jazzMaj':'blues';
               else if(cur==='jazzMaj') nxt='myMaj';
               else if(cur==='myMin') nxt=bright?'classical':'jazz';
               else if(cur==='jazz') nxt=bright?'classical':'myMin';
-              // 11-note check vs current
-              const P0=_POOLS[cur], P1=_POOLS[nxt];
-              if(P0&&P1){
-                const set={};
-                P0.rel.forEach(function(d){ set[(H+d)%12]=1; });
-                P1.rel.forEach(function(d){ set[(H+d)%12]=1; });
-                let n=0; for(let i=0;i<12;i++) if(set[i]) n++;
-                if(n>11) nxt=cur; // refuse 12
-              }
               _autoStyle=nxt; _styleLocked=true;
             }
             _walkPhase='out'; _walkAway=0; _walkBackLeft=0;
           }
         } else {
-          // OUT: prefer hex 1-note smooth wanders inside pool
+          // OUT — pick creative 1-note step
           let best=null, bestSc=-99;
           cands.forEach(function(c){
             const sc=score(c);
             if(sc>bestSc){ bestSc=sc; best=c; }
           });
-          pick=best||mk(homeHepta,'hepta', maj?'IONIAN':'AEOLIAN', maj?'IONIAN':'AEOLIAN');
-          const wasHome=(!_lastPickPcs)||(_lastPickKind==='hepta'&&_lastPickPcs&&_symDiff(_lastPickPcs,pcsOf(homeHepta))===0);
-          const stillHome=(pick.mode==='IONIAN'||pick.mode==='AEOLIAN');
-          if(!stillHome){
-            _walkAway=(_walkAway||0)+1;
-            if(_walkAway>=8){ _walkPhase='return'; _walkBackLeft=8; }
-          } else {
-            _walkAway=0;
+          pick=best;
+          if(pick){
+            const atPlainHome=pick.root===H && (pick.parentMode==='AEOLIAN'||pick.parentMode==='IONIAN') && (!pick.alt||pick.alt==='NA') && pick.kind==='hepta';
+            if(!atPlainHome){
+              _walkAway=(_walkAway||0)+1;
+              if(_walkAway>=8){ _walkPhase='return'; _walkBackLeft=8; }
+            }
           }
         }
 
         if(pick){
+          // track recent fingerprints for novelty
+          const fp=fpOf(pick.pcs||[]);
+          _recentFps.push(fp);
+          if(_recentFps.length>12) _recentFps.shift();
           _pendingListenScale=pick;
-          _lastPickKey=pick.key+'|'+(pick.mode)+'|'+(pick.alt||'')+'|'+(pick.pentaName||pick.hexaName||pick.tag||'');
+          _lastPickKey=pick.key+'|'+(pick.uniName||pick.mode)+'|'+(pick.alt||'');
           _lastPickPcs=(pick.pcs||[]).slice();
           _lastPickKind=pick.kind;
           _barUntil=now+oneBarMs;
           if(!_barChoice) _barChoice=pick;
         }
         _walkBars=(_walkBars||0)+1;
-        _barsSinceResolve=(_barsSinceResolve||0)+1;
       }
 
       function _flushListenScaleOnDownbeat(){
