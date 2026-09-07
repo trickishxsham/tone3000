@@ -248,7 +248,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.861-lite144';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.861-lite146';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3210,11 +3210,15 @@ let lastBendHaptic=-1;
 // magnetic-assist: ease the bend toward a guide line, snap+buzz when locked on
 function magnetize(semis){
   for(const g of BEND_GUIDES){
-    if(Math.abs(semis-g)<0.10){            // narrower magnetic zone
-      const pulled=g+(semis-g)*0.78;       // gentle hint, ~22% pull (was 65%)
-      if(Math.abs(pulled-g)<0.025){        // tighter snap window
-        if(lastBendHaptic!==g){ haptic(14); lastBendHaptic=g; }
-        return g;                          // lock + buzz only when truly on the line
+    // FULL (2.0) gets a wider zone + stronger pull toward the perfect bend
+    const zone=(g===2.0)?0.28:(g===3.0)?0.18:0.12;
+    const residual=(g===2.0)?0.28:(g===3.0)?0.45:0.55; // lower = stronger magnet
+    if(Math.abs(semis-g)<zone){
+      const pulled=g+(semis-g)*residual;
+      const snap=(g===2.0)?0.04:0.025;
+      if(Math.abs(pulled-g)<snap){
+        if(lastBendHaptic!==g){ haptic(g===2.0?18:14); lastBendHaptic=g; }
+        return g;
       }
       return pulled;
     }
@@ -3360,13 +3364,14 @@ function ensureAudio(){
       // High MIDI harmonics get quieter (piercing range) — soft knee above ~C6
       const hi=Math.max(0, (midi-84)/24);           // 0 at C6, ~1 at C8
       const hiAtten=1/(1+hi*hi*3.2);                // strong roll-off up high
-      const V=(sustain ? base*0.38 : base*0.72) * hiAtten;
+      // lite146: natural a bit louder, longer audible plateau until same-string interrupt
+      const V=(sustain ? base*0.55 : base*0.72) * hiAtten;
       const g=_AC.createGain();
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.linearRampToValueAtTime(V,t+0.018);   // slightly softer attack
-      // gentler decay curve: hold a low plateau then fade (less "spike")
+      g.gain.linearRampToValueAtTime(V,t+0.016);
       if(sustain){
-        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, V*0.22), t+0.35);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, V*0.42), t+0.45);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.00015, V*0.18), t+4.0);
         g.gain.exponentialRampToValueAtTime(0.0001, t+RING);
       } else {
         g.gain.exponentialRampToValueAtTime(0.0001,t+RING);
@@ -4146,13 +4151,14 @@ function createInstance(prefix, chordsAlwaysOn){
           const _nhDt=performance.now()-_nhDownT;
           const _ux=(e&&e.clientX!=null)?e.clientX:_ptrX, _uy=(e&&e.clientY!=null)?e.clientY:_ptrY;
           const _nhMove=(_nhDownX!=null) ? Math.hypot(_ux-_nhDownX, _uy-_nhDownY) : 0;
-          if(_nhDt<=220 && _nhMove<=32){
+          // lite146: larger slide/tap window — easier to hit natural harmonic on 12/7/5
+          if(_nhDt<=420 && _nhMove<=58){
             const _st=parseInt(_nhDownCell.dataset.str,10), _mi=parseInt(_nhDownCell.dataset.midi,10);
             const _fr=_mi-STRING_MIDI[_st], _pt={12:12,7:19,5:24}[_fr];
             if(_pt!=null && STRING_MIDI[_st]!=null){
-              held.forEach(v=>{ try{ v.release(true); }catch(x){} }); held=[];   // v632: hard-mute so the note TRANSFORMS to the harmonic (one sound, not two)
-              try{ window.playHarmonicChime(STRING_MIDI[_st]+_pt+octPedal, 0.40, _st); }catch(x){}   // v847: softer natural harmonic
-              try{ if(recOn && !recPlaying) recArr.push({m:STRING_MIDI[_st]+_pt+octPedal, t:performance.now()-recT0, dur:400, vel:0.28, harm:'nat'}); }catch(x){}
+              held.forEach(v=>{ try{ v.release(true); }catch(x){} }); held=[];
+              try{ window.playHarmonicChime(STRING_MIDI[_st]+_pt+octPedal, 0.58, _st); }catch(x){}
+              try{ if(recOn && !recPlaying) recArr.push({m:STRING_MIDI[_st]+_pt+octPedal, t:performance.now()-recT0, dur:500, vel:0.42, harm:'nat'}); }catch(x){}
               try{ haptic([10,40]); }catch(x){}
             }
           }
@@ -6853,16 +6859,20 @@ function metTick(){
   if(!bkAudioActive) metClick(beat===0);   // BKTRK: silent — your track carries the time
   renderDots(beat);
   if(beat===0 && mCount>0){           // downbeat of a new bar → maybe change scale
-    if(_walkHoldable() && _barsLeft>1){
-      _barsLeft--;                     // hold the current scale for another bar
+    // LISTEN active: walk is suspended — only apply staged listen scale (2-bar hold, beat 1)
+    if(typeof keyDetectActive!=='undefined' && keyDetectActive){
+      try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
     } else {
-      walkAdvance();
+      if(_walkHoldable() && _barsLeft>1){
+        _barsLeft--;                     // hold the current scale for another bar
+      } else {
+        walkAdvance();
+      }
     }
-    // Listen KEY/BPM follow: apply staged scale on the 1 only (no mid-bar flash)
-    try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
   } else if(beat===0 && mCount===0){
-    // first downbeat of session
-    try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
+    if(typeof keyDetectActive!=='undefined' && keyDetectActive){
+      try{ if(typeof window.__flushListenScaleOnDownbeat==='function') window.__flushListenScaleOnDownbeat(); }catch(e){}
+    }
   }
   mCount++;
   if(!isFinite(mBeats)||mBeats<1) mBeats=4;      // v676: a poisoned meter can't kill the bar counter
@@ -7396,7 +7406,19 @@ window.pivotScaleFromBendNote=function(midi, semis){
   try{
     // 1½ peak (≥~2.75st) → relative major/minor of current scale
     if(semis!=null && semis>=2.75){
-      return window.pivotRelativeMajorMinor();
+      const ok=window.pivotRelativeMajorMinor();
+      try{
+        if(ok && typeof keyDetectActive!=='undefined' && keyDetectActive){
+          // Bend changes scale NOW. Drop any staged pick so beat-1 won't flash over it mid-pair.
+          // Do NOT touch _listenDecideBar — next 2-bar decide still lands on schedule.
+          _pendingListenScale=null;
+          try{
+            const sc=(INST[getActivePrefix()]&&INST[getActivePrefix()].getScale())||{};
+            _barChoice={key:sc.key, mode:sc.mode||'COLOUR', alt:sc.alt||'NA', tag:'1½ bend', kind:'hepta', uniName:(sc.key||'')+' '+(sc.mode||'')};
+          }catch(e2){}
+        }
+      }catch(e){}
+      return ok;
     }
     if(midi==null || !isFinite(midi)) return false;
     const pre=(window.getActivePrefix&&window.getActivePrefix())||'sS_';
@@ -7448,6 +7470,13 @@ window.pivotScaleFromBendNote=function(midi, semis){
     }
     inst.setScale(newKey, mode, alt, null);
     try{ if(window.jamHud) window.jamHud('FULL → '+newKey+' '+mode+(alt!=='NA'?' '+alt:'')); }catch(e){}
+    try{
+      if(typeof keyDetectActive!=='undefined' && keyDetectActive){
+        // FULL bend now; keep 2-bar listen cadence intact (do not set _listenDecideBar)
+        _pendingListenScale=null;
+        _barChoice={key:newKey, mode:mode, alt:alt||'NA', tag:'FULL bend', kind:'hepta', uniName:newKey+' '+mode};
+      }
+    }catch(e){}
     return true;
   }catch(e){ return false; }
 };
@@ -10707,13 +10736,16 @@ function _getKeyStyle(){
       function _flushListenScaleOnDownbeat(){
         if(!_pendingListenScale) return;
         const barNo=(typeof mBarNo==='number')?mBarNo:-1;
-        if(barNo>=0 && barNo===_listenAppliedBar) return; // already applied this bar
+        if(barNo>=0 && barNo===_listenAppliedBar) return;
+        // Only one apply per staged pick; never re-apply mid-pair
         const pick=_pendingListenScale;
         _pendingListenScale=null;
         _barChoice=pick;
         _listenAppliedBar=barNo;
         const follow=document.getElementById('keyFollowScale');
-        if(follow && follow.checked) _applyListenScale(pick);
+        if(follow && follow.checked){
+          try{ _applyListenScale(pick); }catch(e){}
+        }
       }
       // Expose for metTick
       window.__flushListenScaleOnDownbeat=_flushListenScaleOnDownbeat;
