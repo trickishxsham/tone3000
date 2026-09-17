@@ -1,5 +1,5 @@
-// modules/judgevoices/judgevoices.js — v878
-// Static MP3 judge lines (no meSpeak once all files exist).
+// modules/judgevoices/judgevoices.js — v879
+// Static MP3 judge lines (score dialogue + 876/878 packs).
 // Free-tier premade voices: Adam / Antoni / Arnold / George / Daniel / Harry (male Freddie)
 (function(){
   'use strict';
@@ -56,7 +56,70 @@
       {id:'artie_878_07', text:"Nice tone. Now say something with it.", audio:'artie_878_07.mp3'},
       {id:'artie_878_08', text:"You resolved early. Tension is a gift — open it slower.", audio:'artie_878_08.mp3'},
       {id:'artie_878_09', text:"That lick walked in wearing a tuxedo and left in socks. Commit.", audio:'artie_878_09.mp3'},
-      {id:'artie_878_10', text:"Bravissimo for the try. Next time, bravissimo for the truth.", audio:'artie_878_10.mp3'}
+      {id:'artie_878_10', text:"Bravissimo for the try. Next time, bravissimo for the truth.", audio:'artie_878_10.mp3'},
+      // scoring.js grade lines (partial pack — MP3s generated)
+      {id:'artie_score_hi_01', text:'Loose and lovely, baby.', audio:'artie_score_hi_01.mp3'},
+      {id:'artie_score_hi_02', text:'Felt good — who counts clams?', audio:'artie_score_hi_02.mp3'},
+      {id:'artie_score_hi_03', text:'You let it breathe. I dig it.', audio:'artie_score_hi_03.mp3'},
+      {id:'artie_score_hi_04', text:"Smooth. You weren't even trying hard.", audio:'artie_score_hi_04.mp3'},
+      {id:'artie_score_hi_05', text:"That's the good stuff. Effortless.", audio:'artie_score_hi_05.mp3'},
+      {id:'artie_score_hi_06', text:'Rode the groove like a hammock.', audio:'artie_score_hi_06.mp3'},
+      {id:'artie_score_hi_07', text:'Yeah man, that just flowed.', audio:'artie_score_hi_07.mp3'},
+      {id:'artie_score_hi_08', text:'Butter. Pure butter.', audio:'artie_score_hi_08.mp3'},
+      {id:'artie_score_hi_09', text:'You and the beat were old friends.', audio:'artie_score_hi_09.mp3'},
+      {id:'artie_score_hi_10', text:"Didn't think, just played. Perfect.", audio:'artie_score_hi_10.mp3'},
+      {id:'artie_score_hi_11', text:'That had a Sunday-morning glow.', audio:'artie_score_hi_11.mp3'},
+      {id:'artie_score_hi_12', text:'Butter on toast, that was.', audio:'artie_score_hi_12.mp3'},
+      {id:'artie_score_hi_13', text:'You made the guitar sing, kid.', audio:'artie_score_hi_13.mp3'},
+      {id:'artie_score_hi_14', text:'Like a good espresso, strong and smooth.', audio:'artie_score_hi_14.mp3'},
+      {id:'artie_score_hi_15', text:'You got that lounge-singer swagger tonight.', audio:'artie_score_hi_15.mp3'},
+      {id:'artie_score_hi_16', text:'That phrasing had real Napoli in it.', audio:'artie_score_hi_16.mp3'},
+      {id:'artie_score_hi_17', text:'You told a story up there, kid.', audio:'artie_score_hi_17.mp3'},
+      {id:'artie_score_hi_18', text:'That was a warm night in Napoli, right there.', audio:'artie_score_hi_18.mp3'},
+      {id:'artie_score_hi_19', text:'You danced with the changes, kid.', audio:'artie_score_hi_19.mp3'},
+      {id:'artie_score_hi_20', text:'That had real gravel and honey in it.', audio:'artie_score_hi_20.mp3'},
+      {id:'artie_score_hi_21', text:'You made an old song feel brand new, kid.', audio:'artie_score_hi_21.mp3'},
+      {id:'artie_score_mid_01', text:'Rough, but it had heart.', audio:'artie_score_mid_01.mp3'},
+      {id:'artie_score_mid_02', text:"I'll allow it. Vibes carried you.", audio:'artie_score_mid_02.mp3'},
+      {id:'artie_score_mid_03', text:'Not clean, not boring either.', audio:'artie_score_mid_03.mp3'},
+      {id:'artie_score_mid_04', text:'Few bumps, still felt nice.', audio:'artie_score_mid_04.mp3'},
+      {id:'artie_score_mid_05', text:"Loosen up more, it'll come.", audio:'artie_score_mid_05.mp3'},
+      {id:'artie_score_mid_06', text:'Decent hang. No complaints here.', audio:'artie_score_mid_06.mp3'},
+      {id:'artie_score_mid_07', text:'Almost in the pocket. Almost.', audio:'artie_score_mid_07.mp3'},
+      {id:'artie_score_mid_08', text:'You were thinking too hard, man.', audio:'artie_score_mid_08.mp3'},
+      {id:'artie_score_mid_09', text:'Stop counting, start feeling.', audio:'artie_score_mid_09.mp3'},
+      {id:'artie_score_mid_10', text:'It wandered, but pleasantly.', audio:'artie_score_mid_10.mp3'},
+      {id:'artie_score_mid_11', text:'Halfway to a hammock.', audio:'artie_score_mid_11.mp3'},
+      {id:'artie_score_mid_12', text:'Bit rough round the edges, but it had soul.', audio:'artie_score_mid_12.mp3'},
+      {id:'artie_score_mid_13', text:'Not bad, not bad - a little more swagger.', audio:'artie_score_mid_13.mp3'},
+      {id:'artie_score_mid_14', text:"It's a Tuesday night set. Nothing wrong with that.", audio:'artie_score_mid_14.mp3'},
+      {id:'artie_score_mid_15', text:"Solid. Wouldn't turn my back on it.", audio:'artie_score_mid_15.mp3'},
+      {id:'artie_score_mid_16', text:'Decent plate of pasta, not the best I have had.', audio:'artie_score_mid_16.mp3'},
+      {id:'artie_score_mid_17', text:'You played it safe. Safe is fine, tonight.', audio:'artie_score_mid_17.mp3'},
+      {id:'artie_score_mid_18', text:'Not bad. Not the special, but not bad.', audio:'artie_score_mid_18.mp3'},
+      {id:'artie_score_mid_19', text:'A little cold in the middle, warm at the end.', audio:'artie_score_mid_19.mp3'},
+      {id:'artie_score_mid_20', text:"It's a working man's set. Gets the job done.", audio:'artie_score_mid_20.mp3'},
+      {id:'artie_score_mid_21', text:'Steady hands, could use a little fire.', audio:'artie_score_mid_21.mp3'},
+      {id:'artie_score_lo_01', text:'Still a spark in there somewhere.', audio:'artie_score_lo_01.mp3'},
+      {id:'artie_score_lo_02', text:'Messy, but you went for it. Respect.', audio:'artie_score_lo_02.mp3'},
+      {id:'artie_score_lo_03', text:'Heard worse on a good night.', audio:'artie_score_lo_03.mp3'},
+      {id:'artie_score_lo_04', text:'Take a breath, try it sleepy.', audio:'artie_score_lo_04.mp3'},
+      {id:'artie_score_lo_05', text:'No worries. Shake it off.', audio:'artie_score_lo_05.mp3'},
+      {id:'artie_score_lo_06', text:"Rough one, but I'm not mad.", audio:'artie_score_lo_06.mp3'},
+      {id:'artie_score_lo_07', text:"Eh, we've all had off takes.", audio:'artie_score_lo_07.mp3'},
+      {id:'artie_score_lo_08', text:'You were tense. I could hear it.', audio:'artie_score_lo_08.mp3'},
+      {id:'artie_score_lo_09', text:'Let it go, then play it again.', audio:'artie_score_lo_09.mp3'},
+      {id:'artie_score_lo_10', text:"Forgiven. Music's hard, baby.", audio:'artie_score_lo_10.mp3'},
+      {id:'artie_score_lo_11', text:'Eh, we all have off nights, cugino.', audio:'artie_score_lo_11.mp3'},
+      {id:'artie_score_lo_12', text:'The heart was there, the hands were somewhere else.', audio:'artie_score_lo_12.mp3'},
+      {id:'artie_score_lo_13', text:'Even Sinatra had a rough Tuesday, kid.', audio:'artie_score_lo_13.mp3'},
+      {id:'artie_score_lo_14', text:"Hey, the bar's still open. Try again.", audio:'artie_score_lo_14.mp3'},
+      {id:'artie_score_lo_15', text:"Eh, the sauce didn't come together.", audio:'artie_score_lo_15.mp3'},
+      {id:'artie_score_lo_16', text:'We start again tomorrow, no shame in it.', audio:'artie_score_lo_16.mp3'},
+      {id:'artie_score_lo_17', text:'Even the espresso machine broke that night.', audio:'artie_score_lo_17.mp3'},
+      {id:'artie_score_lo_18', text:'We forgive it. Come back Thursday.', audio:'artie_score_lo_18.mp3'},
+      {id:'artie_score_lo_19', text:'Even the best kitchen burns a dish sometimes.', audio:'artie_score_lo_19.mp3'},
+      {id:'artie_score_lo_20', text:'Shake it off, the next one is yours.', audio:'artie_score_lo_20.mp3'}
     ],
     howie:[
       {id:'howie_876_01', text:"THAT'S what I'm talking about! Do it again before I change my mind!", audio:'howie_876_01.mp3'},
@@ -100,7 +163,29 @@
       {id:'billie_878_07', text:"That was either genius or a glitch in the matrix. I'm voting both!", audio:'billie_878_07.mp3'},
       {id:'billie_878_08', text:"Please warn me before you drop a lick that loud in my brain!", audio:'billie_878_08.mp3'},
       {id:'billie_878_09', text:"I just invented a new emoji for what you did. It has three eyebrows!", audio:'billie_878_09.mp3'},
-      {id:'billie_878_10', text:"Encore for the chaos! Encore for the chaos! ...Okay one more chaos!", audio:'billie_878_10.mp3'}
+      {id:'billie_878_10', text:"Encore for the chaos! Encore for the chaos! ...Okay one more chaos!", audio:'billie_878_10.mp3'},
+      // scoring.js grade lines (partial pack — MP3s generated)
+      {id:'billie_score_hi_01', text:'YES. Burn it down!', audio:'billie_score_hi_01.mp3'},
+      {id:'billie_score_hi_02', text:"Unhinged. I'm obsessed.", audio:'billie_score_hi_02.mp3'},
+      {id:'billie_score_hi_03', text:'That bend nearly took my head off.', audio:'billie_score_hi_03.mp3'},
+      {id:'billie_score_hi_04', text:'Reckless and PERFECT.', audio:'billie_score_hi_04.mp3'},
+      {id:'billie_score_hi_05', text:'You scared me. Do it again.', audio:'billie_score_hi_05.mp3'},
+      {id:'billie_score_hi_06', text:'Pure adrenaline. More!', audio:'billie_score_hi_06.mp3'},
+      {id:'billie_score_hi_07', text:'I felt that in my teeth.', audio:'billie_score_hi_07.mp3'},
+      {id:'billie_score_hi_08', text:'FERAL. Absolutely feral. Love it.', audio:'billie_score_hi_08.mp3'},
+      {id:'billie_score_hi_09', text:'You played like the amp owed you money.', audio:'billie_score_hi_09.mp3'},
+      {id:'billie_score_hi_10', text:'That solo had a body count.', audio:'billie_score_hi_10.mp3'},
+      {id:'billie_score_hi_11', text:'Loud, wrong, GLORIOUS.', audio:'billie_score_hi_11.mp3'},
+      {id:'billie_score_mid_06', text:'Push HARDER next time.', audio:'billie_score_mid_06.mp3'},
+      {id:'billie_score_mid_07', text:'Almost dangerous. Almost.', audio:'billie_score_mid_07.mp3'},
+      {id:'billie_score_mid_08', text:"You apologised with that note. Don't.", audio:'billie_score_mid_08.mp3'},
+      {id:'billie_score_mid_09', text:'Some fire. I wanted an inferno.', audio:'billie_score_mid_09.mp3'},
+      {id:'billie_score_mid_10', text:'Good. Now break the rules harder.', audio:'billie_score_mid_10.mp3'},
+      {id:'billie_score_mid_11', text:'You flinched. I saw it.', audio:'billie_score_mid_11.mp3'},
+      {id:'billie_score_mid_12', text:'Eh, needs more EXPLOSIONS, but okay okay.', audio:'billie_score_mid_12.mp3'},
+      {id:'billie_score_mid_13', text:'I almost fell off my chair. ALMOST.', audio:'billie_score_mid_13.mp3'},
+      {id:'billie_score_mid_14', text:'Meh-diocre! Get it? Meh? ...Eh.', audio:'billie_score_mid_14.mp3'},
+      {id:'billie_score_mid_15', text:'A solid maybe-kinda-good-ish job!', audio:'billie_score_mid_15.mp3'}
     ],
     jackie:[
       {id:'jackie_876_01', text:"Was that a bend or are you just squeezing the neck for emotional support?", audio:'jackie_876_01.mp3'},
@@ -162,11 +247,12 @@
     if(!rel && text){
       var arr = LINES[judgeId];
       if(arr){
+        var tn = String(text).replace(/\s+/g,' ').trim().toLowerCase();
         for(var i=0;i<arr.length;i++){
-          if(arr[i].text===text && arr[i].audio){
-            rel = 'audio/'+judgeId+'/'+arr[i].audio;
-            break;
-          }
+          if(!arr[i].audio) continue;
+          if(arr[i].text===text){ rel='audio/'+judgeId+'/'+arr[i].audio; break; }
+          var ct = String(arr[i].text||'').replace(/\s+/g,' ').trim().toLowerCase();
+          if(ct && (tn===ct || tn.indexOf(ct)===0)){ rel='audio/'+judgeId+'/'+arr[i].audio; break; }
         }
       }
     }
@@ -189,7 +275,7 @@
   function getVoice(judgeId){ return VOICES[judgeId]||null; }
 
   window.registerModule('judgevoices', {
-    version:'4.9.8.878',
+    version:'4.9.8.879',
     isStub:false,
     VOICES:VOICES,
     LINES:LINES,
