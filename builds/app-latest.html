@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <script>
-// v884: universe row gains size-10 button with the 8 named decatonics (Cydia-Aero / TRiCkiSh / JazzMaj / Blues / Classical / Aero-Cydia / ShAM / JazzMin). Build app-884.
+// v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
 // v883: octotonic switch replaces (activeOcto.clear then add) — was stacking notes up to 12 when switching octo→octo. Build app-883.
 // v882: 8 tonic-touching alts are true swaps (remove the 1); octotonic restores it + shows 8va of the 1 (9 tiles, compact size). When 1 is absent the Roman row starts on ii/II and drops the 8va. KEY never moves. Build app-882.
 // v881: scale-chord strip uses real ascending rootMidi (no fixed ANCHOR=48) so relative modes (D Dorian etc.) correctly pick the higher resolving C / any repeated note. Build app-881.
@@ -281,7 +281,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.884';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.885';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1076,12 +1076,12 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <div class="met-grp" id="metInst">
     <button data-inst="piano">PIANO</button>
     <button data-inst="guitar" data-tip-title="GUITAR" data-tip="Karplus-Strong plucked-string — acoustic steel-string guitar - soundbox body resonance + bright pluck.">GTR</button>
-    <button data-inst="electric" class="active">ELEC</button>
+    <button data-inst="electric">ELEC</button>
     <button data-inst="strat">STRAT</button>
-    <button data-inst="samp">SAMP</button>
+    <button data-inst="samp" class="active">SAMP</button>
   </div>
 </div>
-<div id="pickupBar" style="display:flex;align-items:center;gap:5px;padding:4px 10px;font-size:0.68em;color:#cbd5e1;">
+<div id="pickupBar" style="display:none;align-items:center;gap:5px;padding:4px 10px;font-size:0.68em;color:#cbd5e1;">
   <span style="color:#2dd4bf;font-weight:900;">PICKUP</span>
   <button class="pkSel active" data-pk="1" data-tip-title="NECK" data-tip="Warm, hollow, woody — strong odd harmonics. Jazz/blues rhythm.">NECK</button>
   <button class="pkSel" data-pk="2" data-tip-title="NECK+MID" data-tip="Position 2 quack — hollow phase-cancelled cluck. Funk/clean.">2</button>
@@ -1173,6 +1173,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <div id="rigSnapRow" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px dashed #b8860b55;padding-top:6px;">
     <span style="width:44px;font-weight:900;color:#fbbf24;" data-tip-title="SNAPSHOTS" data-tip="Save the whole rig (pedal+amp+cab, tiers, knobs, toggles) to a slot. Tap to recall. Tap SAVE then a letter to overwrite. Saved to device — survives reload.">SNAP</span>
     <button class="rigSnapSave" style="min-width:44px;padding:3px 8px;border-radius:4px;border:1px solid #b45309;background:#2a1a05;color:#fbbf24;font-family:'Bangers',cursive;">SAVE</button>
+    <button id="rigSnapExportJson" type="button" data-tip-title="EXPORT SNAPSHOTS" data-tip="Export all A–G snapshot slots as JSON, including each saved NAM model name and its captured parameters." style="padding:3px 8px;border-radius:4px;border:1px solid #0369a1;background:#082f49;color:#7dd3fc;font-family:'Bangers',cursive;">EXPORT JSON</button>
     <button class="rigSnap" data-snap="0" data-hue="#F0483A" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #F0483A;background:#1a1a1a;color:#F0483A;font-weight:900;">A</button>
     <button class="rigSnap" data-snap="1" data-hue="#FFDD00" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #FFDD00;background:#1a1a1a;color:#FFDD00;font-weight:900;">B</button>
     <button class="rigSnap" data-snap="2" data-hue="#EDF0CF" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #EDF0CF;background:#1a1a1a;color:#EDF0CF;font-weight:900;">C</button>
@@ -3198,7 +3199,7 @@ window.getBkVol=function(){ return _bkVol; };
 window.getInstVol=function(){ return _instVol; };
 window.getBkGain=function(){ return _BKGAIN; };   // backing-bus gain node, so any backing source can route through the crossfader
 const LIVE_VOICES=[];   // active voices, for the polyphony cap (fast-chord cutout fix)
-let instrument='electric';  // v868: default ELEC + neck pickup (not piano)
+let instrument='samp';  // default SAMP instrument
 let lastVoices=[];   // most-recent voices — the bend pad targets these
 let bendSemis=0;     // current bend-pad amount (semitones) — enables prebends
 // v544: how many fingers are currently holding a fret/scale-block gesture. Bend state is
@@ -7500,6 +7501,12 @@ document.getElementById('metInst').querySelectorAll('[data-inst]').forEach(b=>{
     if(pkBar) pkBar.style.display = (instrument==='electric') ? 'flex' : 'none';
   });
 });
+// v885: if SAMP is the selected instrument in the startup markup/state, run
+// the same existing selection path so Legendary Bloomfield loads automatically.
+try{
+  var startupInstBtn=document.querySelector('#metInst [data-inst].active');
+  if(startupInstBtn && startupInstBtn.dataset.inst==='samp') startupInstBtn.click();
+}catch(e){}
 // pickup selector wiring — default NECK (1) with ELEC
 window._stratPickup = window._stratPickup || 1;
 document.querySelectorAll('.pkSel').forEach(btn=>{
@@ -18835,7 +18842,58 @@ window.Vault=(function(){
   }, 1200);
 })();
 </script>
-
+<script>
+/* v885: portable A–G RIG snapshot export. Serialize typed arrays/ArrayBuffers losslessly. */
+(function(){
+  var LETTERS='ABCDEFG';
+  function bytesToB64(buffer){
+    var bytes=new Uint8Array(buffer), out='', step=0x8000;
+    for(var i=0;i<bytes.length;i+=step){ out+=String.fromCharCode.apply(null,bytes.subarray(i,Math.min(i+step,bytes.length))); }
+    return btoa(out);
+  }
+  function encode(value){
+    if(value instanceof Float32Array) return {__t:'f32',d:bytesToB64(value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength))};
+    if(value instanceof Float64Array) return {__t:'f64',d:bytesToB64(value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength))};
+    if(value instanceof Int16Array) return {__t:'i16',d:bytesToB64(value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength))};
+    if(value instanceof Uint8Array) return {__t:'u8',d:bytesToB64(value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength))};
+    if(value instanceof ArrayBuffer) return {__t:'ab',d:bytesToB64(value)};
+    if(Array.isArray(value)) return value.map(encode);
+    if(value && typeof value==='object'){ var out={}; Object.keys(value).forEach(function(k){out[k]=encode(value[k]);}); return out; }
+    return value;
+  }
+  function downloadJson(payload){
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download='improvs2-rig-snapshots-A-G.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},1500);
+  }
+  function bind(){
+    var btn=document.getElementById('rigSnapExportJson');
+    if(!btn || btn.__exportBound) return;
+    btn.__exportBound=true;
+    btn.addEventListener('click',async function(){
+      var stat=document.getElementById('rigSnapStat');
+      var old=btn.textContent; btn.disabled=true; btn.textContent='EXPORTING…';
+      try{
+        if(!window.RigSnapStore || typeof window.RigSnapStore.load!=='function') throw new Error('Snapshot store is not ready yet.');
+        var slots=await Promise.all(LETTERS.split('').map(async function(letter,index){
+          var data=await window.RigSnapStore.load(index);
+          return {letter:letter,index:index,data:data===null?null:encode(data)};
+        }));
+        var count=slots.filter(function(slot){return slot.data!==null;}).length;
+        if(!count) throw new Error('No saved snapshots found. Save one or more A–G slots first.');
+        downloadJson({format:'IMPROVS2-RIG-SNAPSHOTS',schemaVersion:1,appBuild:window.BUILD||'unknown',exportedAt:new Date().toISOString(),slots:slots});
+        if(stat) stat.textContent='Exported '+count+'/7 snapshots';
+      }catch(err){
+        if(stat) stat.textContent=(err&&err.message)||'Snapshot export failed';
+        console.warn('[RigSnap export]',err);
+      }finally{ btn.disabled=false; btn.textContent=old; }
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind); else bind();
+})();
+</script>
 <script>
 /* v699: the service worker was caching the loader's 'latest build' lookup, freezing the live
    site on an old build. This UNREGISTERS any installed worker and clears its caches so the
