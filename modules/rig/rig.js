@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.860
+// version: 4.9.8.885
 // Realtime NAM (WASM) + TONE3000 client + RIG UI (pedal/amp/cab)
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.861j-lite21';
+var MODULE_VERSION = '4.9.8.885';
 var _booted=false;
 var _uiBound=false;
 
@@ -28,7 +28,7 @@ if(_booted) return; _booted=true;
 //   (unverified paths — refuse rather than render silently-wrong audio).
 const NAMRealtime = (function(){
   let nodePedal=null, nodeAmp=null, ac=null, active=false, ready=false;
-  // Per-slot GATEWAY-style DSP: input gain -> noise gate -> [NAM] -> bass/mid/treble EQ -> output gain.
+  // Per-slot DSP: input gain -> drive -> [optional compressor] -> [NAM] -> filters/EQ -> output gain; optional reverb send.
   const fx={ pedal:null, amp:null, cab:null };
   let _rigVerb=null, _rigVerbSum=null;      // shared reverb for GATEWAY wet sends
   function makeDriveCurve(amount){
@@ -53,16 +53,18 @@ const NAMRealtime = (function(){
     function mk(){
       const inGain=context.createGain(); inGain.gain.value=1;
       const drive=context.createWaveShaper(); drive.curve=makeDriveCurve(0); drive.oversample='2x';
-      const gate=context.createDynamicsCompressor();   // used as downward gate via threshold
+      const gate=context.createDynamicsCompressor(); // legacy gate node retained for old snapshot compatibility; no longer exposed in UI
       gate.threshold.value=-80; gate.knee.value=0; gate.ratio.value=20; gate.attack.value=0.003; gate.release.value=0.15;
+      const comp=context.createDynamicsCompressor(); comp.threshold.value=-24; comp.knee.value=18; comp.ratio.value=2.5; comp.attack.value=0.01; comp.release.value=0.12;
+      const lowCut=context.createBiquadFilter(); lowCut.type='highpass'; lowCut.frequency.value=35; lowCut.Q.value=0.707;
       const bass=context.createBiquadFilter(); bass.type='lowshelf'; bass.frequency.value=120; bass.gain.value=0;
       const mid=context.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=800; mid.Q.value=0.7; mid.gain.value=0;
       const treble=context.createBiquadFilter(); treble.type='highshelf'; treble.frequency.value=3000; treble.gain.value=0;
+      const highCut=context.createBiquadFilter(); highCut.type='lowpass'; highCut.frequency.value=18000; highCut.Q.value=0.707;
       const outGain=context.createGain(); outGain.gain.value=1;
-      const wetSend=context.createGain(); wetSend.gain.value=0;   // dry by default; feeds shared rig reverb
+      const wetSend=context.createGain(); wetSend.gain.value=0;   // reverb send is separate from cab/IR blend and defaults off
       wetSend.connect(_rigVerb);
-      // internal wiring: in->drive->gate->bass->mid->treble->out (NAM node splices between gate and bass externally)
-      return { inGain, drive, gate, bass, mid, treble, outGain, wetSend, gateOn:false, eqOn:true, driveAmt:0 };
+      return { inGain, drive, gate, comp, lowCut, bass, mid, treble, highCut, outGain, wetSend, gateOn:false, compOn:false, eqOn:true, driveAmt:0 };
     }
     if(!fx.pedal){ fx.pedal=mk(); fx.amp=mk(); fx.cab=mk(); }
   }
@@ -154,7 +156,7 @@ const NAMRealtime = (function(){
     // tear down every node's outputs
     try{ src.disconnect(); }catch(e){}
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(!f)continue;
-      for(const n of [f.inGain,f.drive,f.gate,f.bass,f.mid,f.treble,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
+      for(const n of [f.inGain,f.drive,f.gate,f.comp,f.lowCut,f.bass,f.mid,f.treble,f.highCut,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
     try{ if(nodePedal) nodePedal.disconnect(); }catch(e){}
     try{ if(nodeAmp) nodeAmp.disconnect(); }catch(e){}
     try{ if(cab) cab.disconnect(); }catch(e){}
@@ -164,15 +166,17 @@ const NAMRealtime = (function(){
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(f&&_rigVerb) try{ f.wetSend.connect(_rigVerb); }catch(e){} }
     if(_rigVerb && _rigVerbSum) try{ _rigVerb.connect(_rigVerbSum); }catch(e){}
     // helper: wire one slot's fx around a processing node. Returns tail.
-    // chain: prev -> inGain -> drive -> [gate] -> node -> [bass->mid->treble] -> outGain (+wet send)
+    // chain: prev -> inGain -> drive -> [compressor] -> node -> [low-cut -> EQ -> high-cut] -> outGain (+optional reverb send)
     function wireSlot(prev, f, node){
       if(!prev || !f) return prev;
       prev.connect(f.inGain);
       f.inGain.connect(f.drive);
       let t=f.drive;
-      if(f.gateOn){ t.connect(f.gate); t=f.gate; }
+      if(f.compOn){ t.connect(f.comp); t=f.comp; }
       if(node){ t.connect(node); t=node; }
+      t.connect(f.lowCut); t=f.lowCut;
       if(f.eqOn){ t.connect(f.bass); f.bass.connect(f.mid); f.mid.connect(f.treble); t=f.treble; }
+      t.connect(f.highCut); t=f.highCut;
       t.connect(f.outGain);
       f.outGain.connect(f.wetSend);   // parallel wet send (dry level unchanged)
       return f.outGain;
@@ -197,16 +201,26 @@ const NAMRealtime = (function(){
     const f=fx[slot]; if(!f) return;
     if(param==='input') f.inGain.gain.value=Math.pow(10, value/20);       // dB
     else if(param==='output') f.outGain.gain.value=Math.pow(10, value/20); // dB
-    else if(param==='threshold') f.gate.threshold.value=value;             // dB
+    else if(param==='lowCut') f.lowCut.frequency.value=Math.max(20,Math.min(1000,value));
+    else if(param==='highCut') f.highCut.frequency.value=Math.max(1000,Math.min(20000,value));
+    else if(param==='bassFreq') f.bass.frequency.value=Math.max(40,Math.min(500,value));
+    else if(param==='midFreq') f.mid.frequency.value=Math.max(100,Math.min(8000,value));
+    else if(param==='midQ') f.mid.Q.value=Math.max(0.3,Math.min(5,value));
+    else if(param==='trebleFreq') f.treble.frequency.value=Math.max(1000,Math.min(12000,value));
+    else if(param==='compThreshold') f.comp.threshold.value=value;
+    else if(param==='compRatio') f.comp.ratio.value=Math.max(1,Math.min(12,value));
+    else if(param==='compAttack') f.comp.attack.value=Math.max(0.001,Math.min(0.2,value));
+    else if(param==='compRelease') f.comp.release.value=Math.max(0.02,Math.min(1,value));
     else if(param==='bass') f.bass.gain.value=(value-5)*3;                 // 0-10 -> -15..+15 dB
     else if(param==='middle') f.mid.gain.value=(value-5)*3;
     else if(param==='treble') f.treble.gain.value=(value-5)*3;
     else if(param==='drive'){ f.driveAmt=value; f.drive.curve=makeDriveCurve(value); }  // 0-10 saturation
-    else if(param==='wet') f.wetSend.gain.value=Math.max(0,Math.min(1,value/10));         // 0-10 -> 0..1 reverb send
+    else if(param==='reverb') f.wetSend.gain.value=Math.max(0,Math.min(0.35,value/100)); // 0-100% restrained shared reverb send
   }
   function setFxEnabled(slot, which, on){
     const f=fx[slot]; if(!f) return;
-    if(which==='gate') f.gateOn=on; else if(which==='eq') f.eqOn=on;
+    if(which==='gate') f.gateOn=on; // legacy snapshots only; gate is intentionally absent from the UI
+    else if(which==='compressor') f.compOn=on; else if(which==='eq') f.eqOn=on;
     route(_pedalOn,_ampOn,_irOn);   // rewire
   }
   // ── main-thread model build: flatten -> emit WASM bytes -> async compile -> post module.
@@ -753,43 +767,45 @@ window.T3K=T3K;
   window.__rigBindUI = bindPanelUI;
   bindPanelUI();
 
-  // Build GATEWAY-style param panel for each slot (Input/Threshold/Bass/Middle/Treble/Output + gate/EQ)
+  // Build per-slot tone-shaping panel (filters, parametric EQ, optional compressor and reverb send)
   function buildFxPanel(slot){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||fp._built) return;
     fp._built=true;
     fp.style.cssText='display:none;background:#1e1033;border:1px solid #7c3aed;border-radius:5px;padding:8px;margin:2px 0 4px 50px;';
-    // knob rows: [param, label, min, max, default, unit]
+    // DSP controls are intentionally independent of the Tone3000 model and quality tier.
     const knobs=[
-      ['input','Input',-20,20,0,'dB'],
-      ['drive','Drive',0,10,0,''],
-      ['threshold','Threshold',-80,0,-80,'dB'],
-      ['bass','Bass',0,10,5,''],
-      ['middle','Middle',0,10,5,''],
-      ['treble','Treble',0,10,5,''],
-      ['wet','Wet',0,10,0,''],
-      ['output','Output',-20,20,0,'dB']
+      ['input','Input',-20,20,0,' dB'], ['drive','Drive',0,10,0,''],
+      ['lowCut','Low Cut',20,500,35,' Hz'], ['bassFreq','Bass Freq',40,500,120,' Hz'],
+      ['bass','Bass Gain',0,10,5,''], ['midFreq','Mid Freq',100,8000,800,' Hz'],
+      ['midQ','Mid Q',0.3,5,0.7,''], ['middle','Mid Gain',0,10,5,''],
+      ['trebleFreq','Treble Freq',1000,12000,3000,' Hz'], ['treble','Treble Gain',0,10,5,''],
+      ['highCut','High Cut',1000,20000,18000,' Hz'], ['reverb','Reverb Send',0,100,0,'%'],
+      ['compThreshold','Comp Threshold',-60,0,-24,' dB'], ['compRatio','Comp Ratio',1,12,2.5,':1'],
+      ['compAttack','Comp Attack',1,200,10,' ms'], ['compRelease','Comp Release',20,1000,120,' ms'],
+      ['output','Output',-20,20,0,' dB']
     ];
-    let html='<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;">';
+    let html='<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;\">';
     for(const [p,label,mn,mx,dv,unit] of knobs){
-      html+='<div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:60px;flex:1;">'
-        +'<span style="color:#9ab;font-size:0.9em;font-weight:700;">'+label+'</span>'
-        +'<input type="range" class="fxKnob" data-slot="'+slot+'" data-param="'+p+'" min="'+mn+'" max="'+mx+'" step="0.1" value="'+dv+'" style="width:100%;accent-color:#38bdf8;">'
-        +'<span class="fxVal" data-for="'+p+'" style="color:#7dd3fc;font-size:0.85em;">'+dv.toFixed(1)+unit+'</span>'
+      html+='<div style=\"display:flex;flex-direction:column;align-items:stretch;gap:3px;min-width:0;\">'
+        +'<span style=\"color:#9ab;font-size:0.82em;font-weight:700;\">'+label+'</span>'
+        +'<input type=\"range\" class=\"fxKnob\" data-slot=\"'+slot+'\" data-param=\"'+p+'\" min=\"'+mn+'\" max=\"'+mx+'\" step=\"'+(['midQ','compRatio'].includes(p)?'0.1':(p==='compAttack'||p==='compRelease'?'1':'0.1'))+'\" value=\"'+dv+'\" style=\"width:100%;accent-color:#38bdf8;\">'
+        +'<span class=\"fxVal\" data-for=\"'+p+'\" style=\"color:#7dd3fc;font-size:0.78em;\">'+dv+unit+'</span>'
         +'</div>';
     }
-    html+='</div><div style="display:flex;gap:20px;margin-top:6px;justify-content:center;">'
-      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="gate" style="accent-color:#10b981;">Noise Gate</label>'
-      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="eq" checked style="accent-color:#10b981;">EQ</label>'
-      +'</div>';
+    html+='</div><div style=\"display:flex;gap:20px;margin-top:8px;justify-content:center;flex-wrap:wrap;\">'
+      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"compressor\" style=\"accent-color:#10b981;\">Compressor</label>'
+      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"eq\" checked style=\"accent-color:#10b981;\">EQ</label>'
+      +'</div><div style=\"color:#64748b;font-size:0.75em;margin-top:5px;\">Noise gate removed from controls: NAM input has no physical pickup hum to gate. IR/cab on-off remains independent.</div>';
     fp.innerHTML=html;
     const _unitOf={}; for(const [p,,,,,u] of knobs){ _unitOf[p]=u; }
     // wire knobs
     fp.querySelectorAll('.fxKnob').forEach(k=>{
       k.addEventListener('input',()=>{
-        const val=parseFloat(k.value), param=k.dataset.param, unit=_unitOf[param]||'';
+        const raw=parseFloat(k.value), param=k.dataset.param, unit=(knobs.find(x=>x[0]===param)||[])[5]||'';
+        const val=(param==='compAttack'||param==='compRelease')?raw/1000:raw;
         window.ensureAudio&&window.ensureAudio();
         NAMRealtime.setParam(k.dataset.slot, param, val);
-        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=val.toFixed(1)+unit;
+        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=(Number.isInteger(raw)?String(raw):raw.toFixed(1))+unit;
       });
     });
     fp.querySelectorAll('.fxToggle').forEach(t=>{
@@ -862,11 +878,11 @@ window.T3K=T3K;
       else st.delSnap(i).catch(()=>{});
     }catch(e){ console.warn('[snap persist]',e); }
   }
-  // restore all four slots from IndexedDB on boot
+  // restore all seven A–G slots from IndexedDB on boot
   async function loadSnapsFromDisk(){
     try{
       const st=window.SampleStore; if(!st||!st.loadSnap) return;
-      for(let i=0;i<4;i++){
+      for(let i=0;i<7;i++){
         const d=await st.loadSnap(i);
         if(d){ if(d.cab&&d.cab.ir) d.cab.buf=null;   // rebuilt lazily on recall (needs live AudioContext)
                SNAPS[i]=d; }
@@ -877,9 +893,11 @@ window.T3K=T3K;
   function restoreFx(slot, fx){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||!fp._built||!fx) return;
     fp.querySelectorAll('.fxKnob').forEach(k=>{ const p=k.dataset.param;
-      if(fx.knobs[p]!=null){ k.value=fx.knobs[p]; NAMRealtime.setParam(slot,p,fx.knobs[p]);
-        const unit=(p==='input'||p==='threshold'||p==='output')?'dB':'';
-        const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=fx.knobs[p].toFixed(1)+unit; } });
+      if(fx.knobs[p]!=null){ const stored=fx.knobs[p]; k.value=stored; NAMRealtime.setParam(slot,p,(p==='compAttack'||p==='compRelease')?stored/1000:stored);
+        const unit=({'input':' dB','output':' dB','lowCut':' Hz','highCut':' Hz','bassFreq':' Hz','midFreq':' Hz','midQ':'','trebleFreq':' Hz','compThreshold':' dB','compRatio':':1','compAttack':' ms','compRelease':' ms','reverb':'%'})[p]||'';
+        const shown=parseFloat(k.value); const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=(Number.isInteger(shown)?String(shown):shown.toFixed(1))+unit; } });
+    // Gate was removed because this signal is synthesized/reamped audio, not a noisy physical pickup.
+    NAMRealtime.setFxEnabled(slot,'gate',false);
     fp.querySelectorAll('.fxToggle').forEach(t=>{ const want=!!fx[t.dataset.fx];
       if(t.checked!==want){ t.checked=want; NAMRealtime.setFxEnabled(slot,t.dataset.fx,want); } });
   }
