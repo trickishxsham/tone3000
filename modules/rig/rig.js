@@ -28,7 +28,7 @@ if(_booted) return; _booted=true;
 //   (unverified paths — refuse rather than render silently-wrong audio).
 const NAMRealtime = (function(){
   let nodePedal=null, nodeAmp=null, ac=null, active=false, ready=false;
-  // Per-slot DSP: input gain -> drive -> [optional compressor] -> [NAM] -> filters/EQ -> output gain; optional reverb send.
+  // Per-slot GATEWAY-style DSP: input gain -> noise gate -> [NAM] -> bass/mid/treble EQ -> output gain.
   const fx={ pedal:null, amp:null, cab:null };
   let _rigVerb=null, _rigVerbSum=null;      // shared reverb for GATEWAY wet sends
   function makeDriveCurve(amount){
@@ -53,18 +53,16 @@ const NAMRealtime = (function(){
     function mk(){
       const inGain=context.createGain(); inGain.gain.value=1;
       const drive=context.createWaveShaper(); drive.curve=makeDriveCurve(0); drive.oversample='2x';
-      const gate=context.createDynamicsCompressor(); // legacy gate node retained for old snapshot compatibility; no longer exposed in UI
+      const gate=context.createDynamicsCompressor();   // used as downward gate via threshold
       gate.threshold.value=-80; gate.knee.value=0; gate.ratio.value=20; gate.attack.value=0.003; gate.release.value=0.15;
-      const comp=context.createDynamicsCompressor(); comp.threshold.value=-24; comp.knee.value=18; comp.ratio.value=2.5; comp.attack.value=0.01; comp.release.value=0.12;
-      const lowCut=context.createBiquadFilter(); lowCut.type='highpass'; lowCut.frequency.value=35; lowCut.Q.value=0.707;
       const bass=context.createBiquadFilter(); bass.type='lowshelf'; bass.frequency.value=120; bass.gain.value=0;
       const mid=context.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=800; mid.Q.value=0.7; mid.gain.value=0;
       const treble=context.createBiquadFilter(); treble.type='highshelf'; treble.frequency.value=3000; treble.gain.value=0;
-      const highCut=context.createBiquadFilter(); highCut.type='lowpass'; highCut.frequency.value=18000; highCut.Q.value=0.707;
       const outGain=context.createGain(); outGain.gain.value=1;
-      const wetSend=context.createGain(); wetSend.gain.value=0;   // reverb send is separate from cab/IR blend and defaults off
+      const wetSend=context.createGain(); wetSend.gain.value=0;   // dry by default; feeds shared rig reverb
       wetSend.connect(_rigVerb);
-      return { inGain, drive, gate, comp, lowCut, bass, mid, treble, highCut, outGain, wetSend, gateOn:false, compOn:false, eqOn:true, driveAmt:0 };
+      // internal wiring: in->drive->gate->bass->mid->treble->out (NAM node splices between gate and bass externally)
+      return { inGain, drive, gate, bass, mid, treble, outGain, wetSend, gateOn:false, eqOn:true, driveAmt:0 };
     }
     if(!fx.pedal){ fx.pedal=mk(); fx.amp=mk(); fx.cab=mk(); }
   }
@@ -156,7 +154,7 @@ const NAMRealtime = (function(){
     // tear down every node's outputs
     try{ src.disconnect(); }catch(e){}
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(!f)continue;
-      for(const n of [f.inGain,f.drive,f.gate,f.comp,f.lowCut,f.bass,f.mid,f.treble,f.highCut,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
+      for(const n of [f.inGain,f.drive,f.gate,f.bass,f.mid,f.treble,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
     try{ if(nodePedal) nodePedal.disconnect(); }catch(e){}
     try{ if(nodeAmp) nodeAmp.disconnect(); }catch(e){}
     try{ if(cab) cab.disconnect(); }catch(e){}
@@ -166,17 +164,15 @@ const NAMRealtime = (function(){
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(f&&_rigVerb) try{ f.wetSend.connect(_rigVerb); }catch(e){} }
     if(_rigVerb && _rigVerbSum) try{ _rigVerb.connect(_rigVerbSum); }catch(e){}
     // helper: wire one slot's fx around a processing node. Returns tail.
-    // chain: prev -> inGain -> drive -> [compressor] -> node -> [low-cut -> EQ -> high-cut] -> outGain (+optional reverb send)
+    // chain: prev -> inGain -> drive -> [gate] -> node -> [bass->mid->treble] -> outGain (+wet send)
     function wireSlot(prev, f, node){
       if(!prev || !f) return prev;
       prev.connect(f.inGain);
       f.inGain.connect(f.drive);
       let t=f.drive;
-      if(f.compOn){ t.connect(f.comp); t=f.comp; }
+      if(f.gateOn){ t.connect(f.gate); t=f.gate; }
       if(node){ t.connect(node); t=node; }
-      t.connect(f.lowCut); t=f.lowCut;
       if(f.eqOn){ t.connect(f.bass); f.bass.connect(f.mid); f.mid.connect(f.treble); t=f.treble; }
-      t.connect(f.highCut); t=f.highCut;
       t.connect(f.outGain);
       f.outGain.connect(f.wetSend);   // parallel wet send (dry level unchanged)
       return f.outGain;
@@ -201,26 +197,16 @@ const NAMRealtime = (function(){
     const f=fx[slot]; if(!f) return;
     if(param==='input') f.inGain.gain.value=Math.pow(10, value/20);       // dB
     else if(param==='output') f.outGain.gain.value=Math.pow(10, value/20); // dB
-    else if(param==='lowCut') f.lowCut.frequency.value=Math.max(20,Math.min(1000,value));
-    else if(param==='highCut') f.highCut.frequency.value=Math.max(1000,Math.min(20000,value));
-    else if(param==='bassFreq') f.bass.frequency.value=Math.max(40,Math.min(500,value));
-    else if(param==='midFreq') f.mid.frequency.value=Math.max(100,Math.min(8000,value));
-    else if(param==='midQ') f.mid.Q.value=Math.max(0.3,Math.min(5,value));
-    else if(param==='trebleFreq') f.treble.frequency.value=Math.max(1000,Math.min(12000,value));
-    else if(param==='compThreshold') f.comp.threshold.value=value;
-    else if(param==='compRatio') f.comp.ratio.value=Math.max(1,Math.min(12,value));
-    else if(param==='compAttack') f.comp.attack.value=Math.max(0.001,Math.min(0.2,value));
-    else if(param==='compRelease') f.comp.release.value=Math.max(0.02,Math.min(1,value));
+    else if(param==='threshold') f.gate.threshold.value=value;             // dB
     else if(param==='bass') f.bass.gain.value=(value-5)*3;                 // 0-10 -> -15..+15 dB
     else if(param==='middle') f.mid.gain.value=(value-5)*3;
     else if(param==='treble') f.treble.gain.value=(value-5)*3;
     else if(param==='drive'){ f.driveAmt=value; f.drive.curve=makeDriveCurve(value); }  // 0-10 saturation
-    else if(param==='reverb') f.wetSend.gain.value=Math.max(0,Math.min(0.35,value/100)); // 0-100% restrained shared reverb send
+    else if(param==='wet') f.wetSend.gain.value=Math.max(0,Math.min(1,value/10));         // 0-10 -> 0..1 reverb send
   }
   function setFxEnabled(slot, which, on){
     const f=fx[slot]; if(!f) return;
-    if(which==='gate') f.gateOn=on; // legacy snapshots only; gate is intentionally absent from the UI
-    else if(which==='compressor') f.compOn=on; else if(which==='eq') f.eqOn=on;
+    if(which==='gate') f.gateOn=on; else if(which==='eq') f.eqOn=on;
     route(_pedalOn,_ampOn,_irOn);   // rewire
   }
   // ── main-thread model build: flatten -> emit WASM bytes -> async compile -> post module.
@@ -677,7 +663,19 @@ const T3K=(function(){
     return authed('/tones/search?'+p.toString());
   }
   function favorited(page){ return authed('/tones/favorited?page='+(page||1)+'&page_size=20'); }
-  function listModels(toneId){ return authed('/models?tone_id='+encodeURIComponent(toneId)+'&architecture=2&page_size=100'); }
+  async function getTone(toneId){ return authed('/tones/'+encodeURIComponent(toneId)+'?architecture=2'); }
+  async function listModels(toneId){
+    // Fetch every model page so variants are not silently omitted for large tones.
+    let page=1, all=[], totalPages=1;
+    do {
+      const res=await authed('/models?tone_id='+encodeURIComponent(toneId)+'&architecture=2&page_size=300&page='+page);
+      const batch=res.data||res;
+      if(Array.isArray(batch)) all=all.concat(batch);
+      totalPages=Number(res.total_pages)||1;
+      page++;
+    } while(page<=totalPages && page<=20);
+    return {data:all};
+  }
   async function downloadModel(modelUrl){
     const t=await token();
     const r=await fetch(modelUrl,{ headers:{ Authorization:'Bearer '+t } });
@@ -685,7 +683,7 @@ const T3K=(function(){
     return r.blob();
   }
 
-  return { configured, connected, connect, handleCallback, clearTokens, search, favorited, listModels, downloadModel };
+  return { configured, connected, connect, handleCallback, clearTokens, search, favorited, getTone, listModels, downloadModel };
 })();
 window.T3K=T3K;
 
@@ -695,7 +693,7 @@ window.T3K=T3K;
   const fileNam=document.getElementById('rigFileNam'), fileIr=document.getElementById('rigFileIr');
   const rigStat=document.getElementById('rigStat');
   // per-slot state
-  const S={ pedal:{loaded:false,json:null}, amp:{loaded:false,json:null}, cab:{loaded:false} };
+  const S={ pedal:{loaded:false,json:null,toneId:null,modelId:null,modelName:''}, amp:{loaded:false,json:null,toneId:null,modelId:null,modelName:''}, cab:{loaded:false,toneId:null,modelId:null,modelName:''} };
   let fileTargetSlot=null, t3kTargetSlot=null;
   function setStat(t){ if(rigStat) rigStat.textContent=t||''; }
   function slotEl(slot){ return panel && panel.querySelector('.rigSlot[data-slot="'+slot+'"]'); }
@@ -767,45 +765,43 @@ window.T3K=T3K;
   window.__rigBindUI = bindPanelUI;
   bindPanelUI();
 
-  // Build per-slot tone-shaping panel (filters, parametric EQ, optional compressor and reverb send)
+  // Build GATEWAY-style param panel for each slot (Input/Threshold/Bass/Middle/Treble/Output + gate/EQ)
   function buildFxPanel(slot){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||fp._built) return;
     fp._built=true;
     fp.style.cssText='display:none;background:#1e1033;border:1px solid #7c3aed;border-radius:5px;padding:8px;margin:2px 0 4px 50px;';
-    // DSP controls are intentionally independent of the Tone3000 model and quality tier.
+    // knob rows: [param, label, min, max, default, unit]
     const knobs=[
-      ['input','Input',-20,20,0,' dB'], ['drive','Drive',0,10,0,''],
-      ['lowCut','Low Cut',20,500,35,' Hz'], ['bassFreq','Bass Freq',40,500,120,' Hz'],
-      ['bass','Bass Gain',0,10,5,''], ['midFreq','Mid Freq',100,8000,800,' Hz'],
-      ['midQ','Mid Q',0.3,5,0.7,''], ['middle','Mid Gain',0,10,5,''],
-      ['trebleFreq','Treble Freq',1000,12000,3000,' Hz'], ['treble','Treble Gain',0,10,5,''],
-      ['highCut','High Cut',1000,20000,18000,' Hz'], ['reverb','Reverb Send',0,100,0,'%'],
-      ['compThreshold','Comp Threshold',-60,0,-24,' dB'], ['compRatio','Comp Ratio',1,12,2.5,':1'],
-      ['compAttack','Comp Attack',1,200,10,' ms'], ['compRelease','Comp Release',20,1000,120,' ms'],
-      ['output','Output',-20,20,0,' dB']
+      ['input','Input',-20,20,0,'dB'],
+      ['drive','Drive',0,10,0,''],
+      ['threshold','Threshold',-80,0,-80,'dB'],
+      ['bass','Bass',0,10,5,''],
+      ['middle','Middle',0,10,5,''],
+      ['treble','Treble',0,10,5,''],
+      ['wet','Wet',0,10,0,''],
+      ['output','Output',-20,20,0,'dB']
     ];
-    let html='<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;\">';
+    let html='<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;">';
     for(const [p,label,mn,mx,dv,unit] of knobs){
-      html+='<div style=\"display:flex;flex-direction:column;align-items:stretch;gap:3px;min-width:0;\">'
-        +'<span style=\"color:#9ab;font-size:0.82em;font-weight:700;\">'+label+'</span>'
-        +'<input type=\"range\" class=\"fxKnob\" data-slot=\"'+slot+'\" data-param=\"'+p+'\" min=\"'+mn+'\" max=\"'+mx+'\" step=\"'+(['midQ','compRatio'].includes(p)?'0.1':(p==='compAttack'||p==='compRelease'?'1':'0.1'))+'\" value=\"'+dv+'\" style=\"width:100%;accent-color:#38bdf8;\">'
-        +'<span class=\"fxVal\" data-for=\"'+p+'\" style=\"color:#7dd3fc;font-size:0.78em;\">'+dv+unit+'</span>'
+      html+='<div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:60px;flex:1;">'
+        +'<span style="color:#9ab;font-size:0.9em;font-weight:700;">'+label+'</span>'
+        +'<input type="range" class="fxKnob" data-slot="'+slot+'" data-param="'+p+'" min="'+mn+'" max="'+mx+'" step="0.1" value="'+dv+'" style="width:100%;accent-color:#38bdf8;">'
+        +'<span class="fxVal" data-for="'+p+'" style="color:#7dd3fc;font-size:0.85em;">'+dv.toFixed(1)+unit+'</span>'
         +'</div>';
     }
-    html+='</div><div style=\"display:flex;gap:20px;margin-top:8px;justify-content:center;flex-wrap:wrap;\">'
-      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"compressor\" style=\"accent-color:#10b981;\">Compressor</label>'
-      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"eq\" checked style=\"accent-color:#10b981;\">EQ</label>'
-      +'</div><div style=\"color:#64748b;font-size:0.75em;margin-top:5px;\">Noise gate removed from controls: NAM input has no physical pickup hum to gate. IR/cab on-off remains independent.</div>';
+    html+='</div><div style="display:flex;gap:20px;margin-top:6px;justify-content:center;">'
+      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="gate" style="accent-color:#10b981;">Noise Gate</label>'
+      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="eq" checked style="accent-color:#10b981;">EQ</label>'
+      +'</div>';
     fp.innerHTML=html;
     const _unitOf={}; for(const [p,,,,,u] of knobs){ _unitOf[p]=u; }
     // wire knobs
     fp.querySelectorAll('.fxKnob').forEach(k=>{
       k.addEventListener('input',()=>{
-        const raw=parseFloat(k.value), param=k.dataset.param, unit=(knobs.find(x=>x[0]===param)||[])[5]||'';
-        const val=(param==='compAttack'||param==='compRelease')?raw/1000:raw;
+        const val=parseFloat(k.value), param=k.dataset.param, unit=_unitOf[param]||'';
         window.ensureAudio&&window.ensureAudio();
         NAMRealtime.setParam(k.dataset.slot, param, val);
-        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=(Number.isInteger(raw)?String(raw):raw.toFixed(1))+unit;
+        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=val.toFixed(1)+unit;
       });
     });
     fp.querySelectorAll('.fxToggle').forEach(t=>{
@@ -859,9 +855,9 @@ window.T3K=T3K;
   }
   function snapCapture(){
     return {
-      pedal:{ json:S.pedal.json, loaded:S.pedal.loaded, tier:(()=>{const s=slotEl('pedal').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('pedal').querySelector('.rigName').textContent, fx:grabFx('pedal') },
-      amp:{ json:S.amp.json, loaded:S.amp.loaded, tier:(()=>{const s=slotEl('amp').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('amp').querySelector('.rigName').textContent, fx:grabFx('amp') },
-      cab:{ buf:(window._IRCAB&&window._IRCAB.buffer)||null, ir:serializeIR((window._IRCAB&&window._IRCAB.buffer)||null), loaded:S.cab.loaded, name:slotEl('cab').querySelector('.rigName').textContent, fx:grabFx('cab') },
+      pedal:{ json:S.pedal.json, loaded:S.pedal.loaded, toneId:S.pedal.toneId||null, modelId:S.pedal.modelId||null, modelName:S.pedal.modelName||'', tier:(()=>{const s=slotEl('pedal').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('pedal').querySelector('.rigName').textContent, fx:grabFx('pedal') },
+      amp:{ json:S.amp.json, loaded:S.amp.loaded, toneId:S.amp.toneId||null, modelId:S.amp.modelId||null, modelName:S.amp.modelName||'', tier:(()=>{const s=slotEl('amp').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('amp').querySelector('.rigName').textContent, fx:grabFx('amp') },
+      cab:{ toneId:S.cab.toneId||null, modelId:S.cab.modelId||null, modelName:S.cab.modelName||'', buf:(window._IRCAB&&window._IRCAB.buffer)||null, ir:serializeIR((window._IRCAB&&window._IRCAB.buffer)||null), loaded:S.cab.loaded, name:slotEl('cab').querySelector('.rigName').textContent, fx:grabFx('cab') },
       on:{ pedal:NAMRealtime.pedalOn, amp:NAMRealtime.ampOn, ir:NAMRealtime.irOn }
     };
   }
@@ -878,11 +874,11 @@ window.T3K=T3K;
       else st.delSnap(i).catch(()=>{});
     }catch(e){ console.warn('[snap persist]',e); }
   }
-  // restore all seven A–G slots from IndexedDB on boot
+  // restore all four slots from IndexedDB on boot
   async function loadSnapsFromDisk(){
     try{
       const st=window.SampleStore; if(!st||!st.loadSnap) return;
-      for(let i=0;i<7;i++){
+      for(let i=0;i<4;i++){
         const d=await st.loadSnap(i);
         if(d){ if(d.cab&&d.cab.ir) d.cab.buf=null;   // rebuilt lazily on recall (needs live AudioContext)
                SNAPS[i]=d; }
@@ -893,11 +889,9 @@ window.T3K=T3K;
   function restoreFx(slot, fx){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||!fp._built||!fx) return;
     fp.querySelectorAll('.fxKnob').forEach(k=>{ const p=k.dataset.param;
-      if(fx.knobs[p]!=null){ const stored=fx.knobs[p]; k.value=stored; NAMRealtime.setParam(slot,p,(p==='compAttack'||p==='compRelease')?stored/1000:stored);
-        const unit=({'input':' dB','output':' dB','lowCut':' Hz','highCut':' Hz','bassFreq':' Hz','midFreq':' Hz','midQ':'','trebleFreq':' Hz','compThreshold':' dB','compRatio':':1','compAttack':' ms','compRelease':' ms','reverb':'%'})[p]||'';
-        const shown=parseFloat(k.value); const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=(Number.isInteger(shown)?String(shown):shown.toFixed(1))+unit; } });
-    // Gate was removed because this signal is synthesized/reamped audio, not a noisy physical pickup.
-    NAMRealtime.setFxEnabled(slot,'gate',false);
+      if(fx.knobs[p]!=null){ k.value=fx.knobs[p]; NAMRealtime.setParam(slot,p,fx.knobs[p]);
+        const unit=(p==='input'||p==='threshold'||p==='output')?'dB':'';
+        const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=fx.knobs[p].toFixed(1)+unit; } });
     fp.querySelectorAll('.fxToggle').forEach(t=>{ const want=!!fx[t.dataset.fx];
       if(t.checked!==want){ t.checked=want; NAMRealtime.setFxEnabled(slot,t.dataset.fx,want); } });
   }
@@ -906,7 +900,7 @@ window.T3K=T3K;
     window.ensureAudio&&window.ensureAudio();
     setStat('recalling '+(SNAP_LABELS[i]||i)+'…');
     // pedal
-    S.pedal.json=sn.pedal.json; S.pedal.loaded=sn.pedal.loaded;
+    S.pedal.json=sn.pedal.json; S.pedal.loaded=sn.pedal.loaded; S.pedal.toneId=sn.pedal.toneId||null; S.pedal.modelId=sn.pedal.modelId||null; S.pedal.modelName=sn.pedal.modelName||'';
     const pSel=slotEl('pedal').querySelector('.rigTier');
     if(sn.pedal.loaded&&sn.pedal.json){
       const pt=NAMEngine.tiers(sn.pedal.json);
@@ -917,7 +911,7 @@ window.T3K=T3K;
     } else if(pSel){ pSel.style.display='none'; pSel.innerHTML=''; }
     slotEl('pedal').querySelector('.rigName').textContent=sn.pedal.name||'';
     // amp
-    S.amp.json=sn.amp.json; S.amp.loaded=sn.amp.loaded;
+    S.amp.json=sn.amp.json; S.amp.loaded=sn.amp.loaded; S.amp.toneId=sn.amp.toneId||null; S.amp.modelId=sn.amp.modelId||null; S.amp.modelName=sn.amp.modelName||'';
     const aSel=slotEl('amp').querySelector('.rigTier');
     if(sn.amp.loaded&&sn.amp.json){
       const at=NAMEngine.tiers(sn.amp.json);
@@ -929,7 +923,7 @@ window.T3K=T3K;
     } else if(aSel){ aSel.style.display='none'; aSel.innerHTML=''; }
     slotEl('amp').querySelector('.rigName').textContent=sn.amp.name||'';
     // cab — rebuild the AudioBuffer if this snap came from disk (buf stripped, ir kept)
-    S.cab.loaded=sn.cab.loaded;
+    S.cab.loaded=sn.cab.loaded; S.cab.toneId=sn.cab.toneId||null; S.cab.modelId=sn.cab.modelId||null; S.cab.modelName=sn.cab.modelName||'';
     if(sn.cab.loaded && !sn.cab.buf && sn.cab.ir){ try{ sn.cab.buf=deserializeIR(sn.cab.ir); }catch(e){ console.warn('[snap IR rebuild]',e); } }
     NAMRealtime.setIR(sn.cab.loaded?sn.cab.buf:null);
     slotEl('cab').querySelector('.rigName').textContent=sn.cab.name||'';
@@ -988,7 +982,7 @@ window.T3K=T3K;
     (isZip?extractNamFromZip(f):f.text()).then(txt=>applyNam(txt, slot, f.name)).catch(err=>setStat(slot+' load failed: '+err.message));
   }
   function applyNam(txt, slot, label){
-    const json=JSON.parse(txt); S[slot].json=json; S[slot].loaded=true;
+    const json=JSON.parse(txt); S[slot].json=json; S[slot].loaded=true; S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName='';
     window.ensureAudio&&window.ensureAudio();
     if(slot==='amp'){
       const tiers=NAMEngine.tiers(json); const tierSel=slotEl('amp').querySelector('.rigTier');
@@ -1041,19 +1035,45 @@ window.T3K=T3K;
     modal.style.display='flex'; curPage=1; runSearch();
   }
   async function loadTone(tone){
-    t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">loading '+(tone.title||'tone')+'…</div>';
+    t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading variants for '+escapeT3k(tone.title||'tone')+'…</div>';
+    if(t3kPager) t3kPager.innerHTML='';
     try{
       const res=await T3K.listModels(tone.id); const models=res.data||res;
-      if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No A2 models.</div>'; return; }
-      const m=models[0]; const blob=await T3K.downloadModel(m.model_url);
+      if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No models available for this tone in the selected NAM architecture.</div>'; return; }
+      if(models.length===1){ await loadToneModel(tone,models[0]); return; }
+      renderModelVariants(tone,models);
+    }catch(err){ var msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
+      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Could not load variants: '+escapeT3k(msg)+'</div>';
+      console.warn('[T3K] model list failed:',err); }
+  }
+  function escapeT3k(value){ return String(value==null?'':value).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c];}); }
+  function renderModelVariants(tone,models){
+    t3kResults.innerHTML='<div style="padding:10px 7px;color:#7dd3fc;font-weight:900;">Choose a model · '+escapeT3k(tone.title||'TONE3000 tone')+'</div>'+
+      models.map((m,i)=>'<div class="t3kModelRow" data-i="'+i+'" style="display:flex;gap:10px;align-items:center;padding:12px 9px;border-bottom:1px solid #222;cursor:pointer;">'+
+        '<div style="flex:1;min-width:0;"><div style="color:#e2e8f0;font-weight:900;font-size:0.9em;overflow-wrap:anywhere;">'+escapeT3k(m.name||('Model '+(i+1)))+'</div>'+
+        '<div style="color:#64748b;font-size:0.72em;margin-top:3px;">Model ID '+escapeT3k(m.id)+' · '+escapeT3k(m.size||'NAM capture')+'</div></div>'+
+        '<span style="color:#38bdf8;font-size:1.2em;flex-shrink:0;">▸</span></div>').join('')+
+      '<button type="button" id="t3kVariantsBack" style="margin:10px 7px;padding:7px 12px;background:#334155;color:#fff;border:0;border-radius:6px;">← Back to search results</button>';
+    t3kResults.querySelectorAll('.t3kModelRow').forEach(row=>row.addEventListener('click',()=>loadToneModel(tone,models[parseInt(row.dataset.i,10)])));
+    const back=document.getElementById('t3kVariantsBack');
+    back&&back.addEventListener('click',()=>runSearch());
+  }
+  async function loadToneModel(tone,model){
+    t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading '+escapeT3k(model.name||'model')+'…</div>';
+    if(t3kPager) t3kPager.innerHTML='';
+    try{
+      const blob=await T3K.downloadModel(model.model_url);
       modal.style.display='none';
       const slot=t3kTargetSlot||'amp';
       const isIR=(tone.format==='ir')||(slot==='cab');
-      if(isIR){ loadIrBlob(blob, tone.title||m.name); }
-      else { applyNam(await blob.text(), slot==='cab'?'amp':slot, tone.title||m.name); }
+      const label=(tone.title||'TONE3000 tone')+(model.name?' — '+model.name:'');
+      if(isIR){ loadIrBlob(blob,label); }
+      else { applyNam(await blob.text(), slot==='cab'?'amp':slot,label); }
+      const target=isIR?'cab':(slot==='cab'?'amp':slot);
+      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=String(model.id); S[target].modelName=model.name||''; }
     }catch(err){ var msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
-      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+msg+'<br><span style="font-size:0.85em;opacity:0.8;">TONE3000 search needs the app served over https.</span></div>';
-      console.warn('[T3K] load failed:',err); }
+      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+escapeT3k(msg)+'</div>';
+      console.warn('[T3K] model load failed:',err); }
   }
   function loadIrBlob(blob, name){
     window.ensureAudio&&window.ensureAudio(); const ac=window.getAC&&window.getAC();
@@ -1086,7 +1106,21 @@ window.T3K=T3K;
   }
   async function runSearch(){
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">searching…</div>';
-    try{ renderResults(await T3K.search({ query:t3kQuery.value.trim(), gears:t3kGear.value, format:t3kFormat.value, sort:t3kSort.value, page:curPage, page_size:20 })); }
+    try{
+      const query=t3kQuery.value.trim();
+      if(/^\d+$/.test(query)){
+        const tone=await T3K.getTone(query);
+        if(!tone || !tone.id) throw new Error('No tone found for ID '+query);
+        // Respect the selected format/slot filter for direct-ID lookups.
+        if(t3kFormat.value && tone.format && tone.format!==t3kFormat.value){
+          t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Tone ID '+escapeT3k(query)+' is format '+escapeT3k(tone.format)+', but the current filter is '+escapeT3k(t3kFormat.value)+'. Change the format filter and try again.</div>';
+          t3kPager.innerHTML=''; return;
+        }
+        renderResults({data:[tone],page:1,total_pages:1});
+      } else {
+        renderResults(await T3K.search({ query, gears:t3kGear.value, format:t3kFormat.value, sort:t3kSort.value, page:curPage, page_size:20 }));
+      }
+    }
     catch(err){ const msg=err.message||'';
       if(/not connected|401/.test(msg)){ t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Session expired — reconnecting…</div>'; T3K.connect().catch(e=>{t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">'+e.message+'</div>';}); return; }
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Search failed: '+msg+'</div>'; }
