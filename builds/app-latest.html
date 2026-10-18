@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.894 — Listener inputs and unified snapshot row -->
+<!-- Build 4.9.8.899 — cumulative 892–898 source with restored fast asymmetric bend response -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -283,7 +283,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.898';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.899';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3307,20 +3307,16 @@ function haptic(ms){ try{
 //   A→½=A# · FULL=B · 1½=C  (minor third at peak = relative-major reach)
 const BEND_MAX=3;
 const BEND_GUIDES=[0.5,1.0,2.0,3.0];
-// v897: intentionally asymmetric on-screen bend limits.
-// Drag UP = FULL bend (2 semitones); drag DOWN = 1½-step bend (3 semitones).
-// Each direction is normalized to its own reachable screen travel, so screen
-// position does not change the endpoint. Fast full bends retain the existing
-// bend-hang vibrato gesture; natural-harmonic marker releases remain distinct.
+// v899: restore the original fast bend sensitivity (1 semitone per 55 px).
+// Keep the requested asymmetric endpoints: UP = FULL (2 semitones), DOWN = 1½ (3 semitones).
+// Do not normalize against the remaining screen height: that made bends feel slow.
+// Fast full bends retain the existing bend-hang vibrato gesture; natural-harmonic
+// marker releases remain distinct.
 const BEND_UP_MAX=2;
 const BEND_DOWN_MAX=3;
 function bendFromVerticalDrag(distance, direction, rect, margin){
-  const h=Math.max(1,window.innerHeight||window.document.documentElement.clientHeight||1);
-  const m=Math.max(0,Number(margin)||0);
-  const available=direction<0 ? (rect.top-m) : (h-rect.bottom-m);
-  const travel=Math.max(55,available);
   const max=direction<0 ? BEND_UP_MAX : BEND_DOWN_MAX;
-  return Math.max(0,Math.min(max,(Math.max(0,distance)/travel)*max));
+  return Math.max(0,Math.min(max,Math.max(0,distance)/55));
 }
 let lastBendHaptic=-1;
 // magnetic-assist: ease the bend toward a guide line, snap+buzz when locked on
