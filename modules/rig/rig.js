@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.885
+// version: 4.9.8.887
 // Realtime NAM (WASM) + TONE3000 client + RIG UI (pedal/amp/cab)
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.885';
+var MODULE_VERSION = '4.9.8.887';
 var _booted=false;
 var _uiBound=false;
 
@@ -663,15 +663,14 @@ const T3K=(function(){
     return authed('/tones/search?'+p.toString());
   }
   function favorited(page){ return authed('/tones/favorited?page='+(page||1)+'&page_size=20'); }
-  async function getTone(toneId){ return authed('/tones/'+encodeURIComponent(toneId)+'?architecture=2'); }
   async function listModels(toneId){
-    // Fetch every model page so variants are not silently omitted for large tones.
+    // Fetch all model pages; tones may have multiple NAM captures/variants.
     let page=1, all=[], totalPages=1;
     do {
-      const res=await authed('/models?tone_id='+encodeURIComponent(toneId)+'&architecture=2&page_size=300&page='+page);
-      const batch=res.data||res;
-      if(Array.isArray(batch)) all=all.concat(batch);
-      totalPages=Number(res.total_pages)||1;
+      const res=await authed('/models?tone_id='+encodeURIComponent(toneId)+'&architecture=2&page_size=100&page='+page);
+      const batch=Array.isArray(res)?res:(Array.isArray(res.data)?res.data:(Array.isArray(res.models)?res.models:[]));
+      all=all.concat(batch);
+      totalPages=Math.max(1,Number(res.total_pages||res.pagination&&res.pagination.total_pages)||1);
       page++;
     } while(page<=totalPages && page<=20);
     return {data:all};
@@ -683,7 +682,7 @@ const T3K=(function(){
     return r.blob();
   }
 
-  return { configured, connected, connect, handleCallback, clearTokens, search, favorited, getTone, listModels, downloadModel };
+  return { configured, connected, connect, handleCallback, clearTokens, search, favorited, listModels, downloadModel };
 })();
 window.T3K=T3K;
 
@@ -868,18 +867,33 @@ window.T3K=T3K;
     return c;
   }
   function persistSnap(i){
+    const data=SNAPS[i]?snapForDisk(SNAPS[i]):null;
+    const jobs=[];
     try{
-      const st=window.SampleStore; if(!st||!st.saveSnap) return;
-      if(SNAPS[i]) st.saveSnap(i, snapForDisk(SNAPS[i])).catch(e=>console.warn('[snap save]',e));
-      else st.delSnap(i).catch(()=>{});
-    }catch(e){ console.warn('[snap persist]',e); }
+      const st=window.SampleStore;
+      if(st){
+        if(data&&st.saveSnap) jobs.push(Promise.resolve(st.saveSnap(i,data)));
+        else if(!data&&st.delSnap) jobs.push(Promise.resolve(st.delSnap(i)));
+      }
+    }catch(e){ console.warn('[snap persist: SampleStore]',e); }
+    // Keep the cross-build Vault store in sync too; the export/import module reads this store.
+    try{
+      const vault=window.RigSnapStore;
+      if(vault){
+        if(data&&vault.save) jobs.push(Promise.resolve(vault.save(i,data)));
+        else if(!data&&vault.drop) jobs.push(Promise.resolve(vault.drop(i)));
+      }
+    }catch(e){ console.warn('[snap persist: Vault]',e); }
+    return Promise.all(jobs).catch(e=>console.warn('[snap persist]',e));
   }
   // restore all four slots from IndexedDB on boot
   async function loadSnapsFromDisk(){
     try{
-      const st=window.SampleStore; if(!st||!st.loadSnap) return;
-      for(let i=0;i<4;i++){
-        const d=await st.loadSnap(i);
+      const st=window.SampleStore, vault=window.RigSnapStore;
+      for(let i=0;i<7;i++){
+        let d=null;
+        if(st&&st.loadSnap) d=await st.loadSnap(i);
+        if(!d&&vault&&vault.load) d=await vault.load(i);
         if(d){ if(d.cab&&d.cab.ir) d.cab.buf=null;   // rebuilt lazily on recall (needs live AudioContext)
                SNAPS[i]=d; }
       }
@@ -962,6 +976,7 @@ window.T3K=T3K;
   });
 
   function clearSlot(slot){
+    S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName='';
     if(slot==='cab'){ S.cab.loaded=false; NAMRealtime.setIR(null);
       NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, false).then(()=>{paint();toggleBtn();}); }
     else { S[slot].loaded=false; S[slot].json=null;
@@ -1005,6 +1020,7 @@ window.T3K=T3K;
     setStat('');
   }
   function loadIrFile(f){
+    S.cab.toneId=null; S.cab.modelId=null; S.cab.modelName='';
     setStat('loading cab…');
     window.ensureAudio&&window.ensureAudio();
     const ac=window.getAC&&window.getAC();
@@ -1034,54 +1050,53 @@ window.T3K=T3K;
     if(t3kFormat) t3kFormat.value = (slot==='cab')?'ir':'nam';
     modal.style.display='flex'; curPage=1; runSearch();
   }
+  function escapeT3k(value){ return String(value==null?'':value).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c];}); }
   async function loadTone(tone){
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading variants for '+escapeT3k(tone.title||'tone')+'…</div>';
     if(t3kPager) t3kPager.innerHTML='';
     try{
       const res=await T3K.listModels(tone.id); const models=res.data||res;
-      if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No models available for this tone in the selected NAM architecture.</div>'; return; }
+      if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No models available for this tone in the selected architecture.</div>'; return; }
       if(models.length===1){ await loadToneModel(tone,models[0]); return; }
       renderModelVariants(tone,models);
-    }catch(err){ var msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
+    }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Could not load variants: '+escapeT3k(msg)+'</div>';
       console.warn('[T3K] model list failed:',err); }
   }
-  function escapeT3k(value){ return String(value==null?'':value).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c];}); }
   function renderModelVariants(tone,models){
-    t3kResults.innerHTML='<div style="padding:10px 7px;color:#7dd3fc;font-weight:900;">Choose a model · '+escapeT3k(tone.title||'TONE3000 tone')+'</div>'+
-      models.map((m,i)=>'<div class="t3kModelRow" data-i="'+i+'" style="display:flex;gap:10px;align-items:center;padding:12px 9px;border-bottom:1px solid #222;cursor:pointer;">'+
-        '<div style="flex:1;min-width:0;"><div style="color:#e2e8f0;font-weight:900;font-size:0.9em;overflow-wrap:anywhere;">'+escapeT3k(m.name||('Model '+(i+1)))+'</div>'+
-        '<div style="color:#64748b;font-size:0.72em;margin-top:3px;">Model ID '+escapeT3k(m.id)+' · '+escapeT3k(m.size||'NAM capture')+'</div></div>'+
-        '<span style="color:#38bdf8;font-size:1.2em;flex-shrink:0;">▸</span></div>').join('')+
+    t3kResults.innerHTML='<div style="padding:10px 7px;color:#7dd3fc;font-weight:900;">Choose a model · '+escapeT3k(tone.title||'TONE3000 tone')+'</div>'+models.map((m,i)=>
+      '<div class="t3kModelRow" data-i="'+i+'" style="display:flex;gap:10px;align-items:center;padding:12px 9px;border-bottom:1px solid #222;cursor:pointer;">'+
+      '<div style="flex:1;min-width:0;"><div style="color:#e2e8f0;font-weight:900;font-size:0.9em;overflow-wrap:anywhere;">'+escapeT3k(m.name||('Model '+(i+1)))+'</div>'+ 
+      '<div style="color:#64748b;font-size:0.72em;margin-top:3px;">Model ID '+escapeT3k(m.id==null?'unknown':m.id)+'</div></div><span style="color:#38bdf8;font-size:1.2em;flex-shrink:0;">▸</span></div>').join('')+
       '<button type="button" id="t3kVariantsBack" style="margin:10px 7px;padding:7px 12px;background:#334155;color:#fff;border:0;border-radius:6px;">← Back to search results</button>';
     t3kResults.querySelectorAll('.t3kModelRow').forEach(row=>row.addEventListener('click',()=>loadToneModel(tone,models[parseInt(row.dataset.i,10)])));
-    const back=document.getElementById('t3kVariantsBack');
-    back&&back.addEventListener('click',()=>runSearch());
+    const back=document.getElementById('t3kVariantsBack'); if(back) back.addEventListener('click',()=>runSearch());
   }
   async function loadToneModel(tone,model){
+    if(!model||!model.model_url){ setStat('selected model has no download URL'); return; }
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading '+escapeT3k(model.name||'model')+'…</div>';
     if(t3kPager) t3kPager.innerHTML='';
     try{
-      const blob=await T3K.downloadModel(model.model_url);
-      modal.style.display='none';
-      const slot=t3kTargetSlot||'amp';
+      const blob=await T3K.downloadModel(model.model_url); const slot=t3kTargetSlot||'amp';
       const isIR=(tone.format==='ir')||(slot==='cab');
       const label=(tone.title||'TONE3000 tone')+(model.name?' — '+model.name:'');
-      if(isIR){ loadIrBlob(blob,label); }
-      else { applyNam(await blob.text(), slot==='cab'?'amp':slot,label); }
+      if(isIR){ await loadIrBlob(blob,label); }
+      else { applyNam(await blob.text(),slot==='cab'?'amp':slot,label); }
       const target=isIR?'cab':(slot==='cab'?'amp':slot);
-      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=String(model.id); S[target].modelName=model.name||''; }
-    }catch(err){ var msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
+      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=model.id==null?null:String(model.id); S[target].modelName=model.name||''; }
+      modal.style.display='none';
+    }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+escapeT3k(msg)+'</div>';
       console.warn('[T3K] model load failed:',err); }
   }
   function loadIrBlob(blob, name){
     window.ensureAudio&&window.ensureAudio(); const ac=window.getAC&&window.getAC();
-    blob.arrayBuffer().then(ab=>ac.decodeAudioData(ab)).then(buf=>{
+    if(!ac) return Promise.reject(new Error('Audio engine is not ready'));
+    return blob.arrayBuffer().then(ab=>ac.decodeAudioData(ab)).then(buf=>{
       NAMRealtime.setIR(buf); S.cab.loaded=true;
       slotEl('cab').querySelector('.rigName').textContent=name;
-      NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, true).then(()=>{paint();toggleBtn();});
-    }).catch(err=>setStat('cab load failed: '+err.message));
+      return NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, true).then(()=>{paint();toggleBtn();});
+    }).catch(err=>{setStat('cab load failed: '+err.message); throw err;});
   }
   function renderResults(data){
     const tones=data.data||[];
@@ -1109,21 +1124,16 @@ window.T3K=T3K;
     try{
       const query=t3kQuery.value.trim();
       if(/^\d+$/.test(query)){
-        const tone=await T3K.getTone(query);
-        if(!tone || !tone.id) throw new Error('No tone found for ID '+query);
-        // Respect the selected format/slot filter for direct-ID lookups.
-        if(t3kFormat.value && tone.format && tone.format!==t3kFormat.value){
-          t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Tone ID '+escapeT3k(query)+' is format '+escapeT3k(tone.format)+', but the current filter is '+escapeT3k(t3kFormat.value)+'. Change the format filter and try again.</div>';
-          t3kPager.innerHTML=''; return;
+        const res=await T3K.getTone(query); const tone=res&&res.data?res.data:res;
+        if(!tone||!tone.id) throw new Error('No tone found for ID '+query);
+        if(t3kFormat&&t3kFormat.value&&tone.format&&String(tone.format).toLowerCase()!==String(t3kFormat.value).toLowerCase()){
+          t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Tone ID '+escapeT3k(query)+' is format '+escapeT3k(tone.format)+', but the current filter is '+escapeT3k(t3kFormat.value)+'. Change the format filter and try again.</div>'; if(t3kPager)t3kPager.innerHTML=''; return;
         }
         renderResults({data:[tone],page:1,total_pages:1});
-      } else {
-        renderResults(await T3K.search({ query, gears:t3kGear.value, format:t3kFormat.value, sort:t3kSort.value, page:curPage, page_size:20 }));
-      }
-    }
-    catch(err){ const msg=err.message||'';
-      if(/not connected|401/.test(msg)){ t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Session expired — reconnecting…</div>'; T3K.connect().catch(e=>{t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">'+e.message+'</div>';}); return; }
-      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Search failed: '+msg+'</div>'; }
+      } else renderResults(await T3K.search({ query, gears:t3kGear.value, format:t3kFormat.value, sort:t3kSort.value, page:curPage, page_size:20 }));
+    }catch(err){ const msg=err.message||'';
+      if(/not connected|401/.test(msg)){ t3kResults.innerHTML='<div style="padding:20px;color:#fbbf24;">Session expired — reconnecting…</div>'; T3K.connect().catch(e=>{t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">'+escapeT3k(e.message)+'</div>';}); return; }
+      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Search failed: '+escapeT3k(msg)+'</div>'; if(t3kPager)t3kPager.innerHTML=''; }
   }
   t3kGo&&t3kGo.addEventListener('click',()=>{ curPage=1; runSearch(); });
   t3kQuery&&t3kQuery.addEventListener('keydown',e=>{ if(e.key==='Enter'){ curPage=1; runSearch(); } });
@@ -1150,6 +1160,20 @@ window.T3K=T3K;
   window._namRtOnError=function(msg,slot){ setStat((slot||'amp')+' error: '+msg); };
   window._namActive=function(){ return NAMRealtime.ampOn && NAMEngine.loaded; };
 
+  // Public bridge used by modules/snapshot/snapshots.js; keeps the actual rig state private.
+  window.RigSnapshotBridge={
+    version:MODULE_VERSION,
+    getSnapshot:function(i){ return SNAPS[i]||null; },
+    getSnapshotForDisk:function(i){ return SNAPS[i]?snapForDisk(SNAPS[i]):null; },
+    loadFromDisk:function(){ return loadSnapsFromDisk(); },
+    capture:function(){ return snapCapture(); },
+    saveCurrent:async function(i){ if(i<0||i>6) throw new Error('Snapshot index must be 0–6'); SNAPS[i]=snapCapture(); await persistSnap(i); paintSnaps(); return SNAPS[i]; },
+    clearIR:function(){ clearSlot('cab'); },
+    recall:function(i){ return snapRecall(i); },
+    loadT3KModel:async function(slot,tone,model){ t3kTargetSlot=slot; await loadToneModel(tone,model); },
+    setStatus:function(msg){ setStat(msg); }
+  };
+
 })(); // end RIG UI IIFE (was missing — syntax error killed all RIG buttons)
 
 window.registerModule('rig', {
@@ -1168,6 +1192,9 @@ function namReady(){
 // Boot RIG UI immediately so OFF / File / T3K / SNAP work even while NAM loads.
 // NAMEngine stub already exists in the shell; real nam module upgrades it.
 try { boot(); } catch(e){ console.warn('[rig] boot error', e); }
+if(typeof window.loadModule === 'function'){
+  window.loadModule('snapshot').catch(function(e){ console.warn('[snapshot] module load failed',e); });
+}
 if(!namReady() && typeof window.loadModule === 'function'){
   window.loadModule('nam').catch(function(e){
     console.warn('[rig] nam load failed', e);
