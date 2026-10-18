@@ -282,7 +282,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.890';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.892';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -3426,7 +3426,7 @@ function ensureAudio(){
       h.oscs.forEach(function(o){ try{ o.stop(now+0.07); }catch(e){} });
     }catch(e){}
   };
-  // v890: retain graze-only natural harmonic trigger and gesture-dependent decay; pinch harmonic unchanged
+  // v892: natural harmonics use fast/light taps and bend-release only; slides never trigger harmonics
   window.playHarmonicChime=function(midi, vel, str, decaySec){
     try{
       if(!_AC||!_MASTER) return;
@@ -4033,29 +4033,29 @@ function createInstance(prefix, chordsAlwaysOn){
       let _ptrX=ev.clientX, _ptrY=ev.clientY;
       let _lastMoveX=ev.clientX, _lastMoveY=ev.clientY, _lastMoveT=performance.now();
       let _moveSpeed=0, _moveDX=0, _moveDY=0, _movePressure=0.5, _movePressureKnown=false, _moveDt=999;
-      const _nhArm=function(c){
-        if(!c||!c.classList||!c.classList.contains('nh-node')||!curCell) return false;
-        // A harmonic is a brief graze, not a long-press/release action. Only accept
-        // a fast node crossing with a fresh pointer sample; slow holds cannot arm it.
-        if(_moveDt>75) return false;
-        // Trigger only when grazing a harmonic marker along the same string.
-        if(parseInt(c.dataset.str,10)!==parseInt(curCell.dataset.str,10)) return false;
-        if(Math.abs(_moveDX)<8 || Math.abs(_moveDX)<Math.abs(_moveDY)*1.25 || _moveSpeed<0.80) return false;
-        // A constant 0.5 pressure is generally an unsupported-pressure fallback.
-        if(_movePressureKnown && _movePressure>0.44) return false;
+      // Classify marker taps briefly: fast/light tap = harmonic; hold/ordinary tap = fretted note.
+      let _nhTapTimer=null, _nhTapStart=performance.now(), _nhTapCell=null, _nhTapFired=false;
+      const _nhTapPressure=(typeof ev.pressure==='number' && ev.pressure>0 && ev.pressure<1 && Math.abs(ev.pressure-0.5)>0.04) ? ev.pressure : null;
+      const _nhIsMarker=c=>!!(c&&c.classList&&c.classList.contains('nh-node'));
+      const _nhFretInfo=c=>{
+        if(!_nhIsMarker(c)) return null;
         const st=parseInt(c.dataset.str,10), mi=parseInt(c.dataset.midi,10);
-        const fret=mi-STRING_MIDI[st], partial={12:12,7:19,5:24}[fret];
-        if(partial==null || STRING_MIDI[st]==null) return false;
-        const speed01=Math.max(0,Math.min(1,(_moveSpeed-0.55)/1.35));
-        const light01=_movePressureKnown ? Math.max(0,Math.min(1,(0.44-_movePressure)/0.24)) : 0.65;
-        const hVel=Math.max(0.22,Math.min(0.58,(0.30+0.24*speed01)*(0.82+0.18*light01)));
-        const decay=1.35+2.25*speed01+1.15*light01+(fret===12?0.25:fret===7?0.1:0);
-        held.forEach(v=>{ try{ v.release(true); }catch(e){} }); held=[];
-        if(curCell) curCell.classList.remove('struck');
-        try{ window.playHarmonicChime(STRING_MIDI[st]+partial+octPedal,hVel,st,decay); }catch(e){}
-        try{ if(recOn && !recPlaying) recArr.push({m:STRING_MIDI[st]+partial+octPedal,t:performance.now()-recT0,dur:Math.round(decay*1000),vel:hVel,harm:'nat'}); }catch(e){}
-        try{ haptic([10,40]); }catch(e){}
-        return true;
+        if(!Number.isFinite(st)||STRING_MIDI[st]==null||!Number.isFinite(mi)) return null;
+        const fret=mi-STRING_MIDI[st], partial=({12:12,7:19,5:24})[fret];
+        return partial==null?null:{st,mi,fret,partial};
+      };
+      const _nhPlayForCell=(c,gestureSpeed=0.5,pressure=_nhTapPressure)=>{
+        const q=_nhFretInfo(c); if(!q) return false;
+        const speed01=Math.max(0,Math.min(1,(gestureSpeed-0.15)/0.85));
+        const light01=pressure==null?0.55:Math.max(0,Math.min(1,(0.5-pressure)/0.35));
+        const vel=Math.max(0.22,Math.min(0.58,(0.28+0.24*speed01)*(0.82+0.18*light01)));
+        const decay=1.15+1.7*speed01+1.05*light01+(q.fret===12?0.25:q.fret===7?0.1:0);
+        held.forEach(v=>{try{v.release(true);}catch(e){}}); held=[];
+        try{if(curCell)curCell.classList.remove('struck');}catch(e){}
+        try{window.playHarmonicChime(STRING_MIDI[q.st]+q.partial+octPedal,vel,q.st,decay);}catch(e){}
+        try{if(recOn&&!recPlaying)recArr.push({m:STRING_MIDI[q.st]+q.partial+octPedal,t:performance.now()-recT0,dur:Math.round(decay*1000),vel,harm:'nat'});}catch(e){}
+        try{haptic([10,40]);}catch(e){}
+        _nhTapFired=true; return true;
       };
       let _pinchFullT=null;   // v607: time bend first hit full, for the pinch pull-off
       let _maxRawBend=0;   // v608: peak raw (pre-snap) bend for accuracy grading
@@ -4115,22 +4115,22 @@ function createInstance(prefix, chordsAlwaysOn){
           curCell=c; curRect=c.getBoundingClientRect();
           return;
         }
-        // Touching/holding a natural-harmonic marker is not a picked fretted note.
-        // It stays silent until the finger crosses INTO it with a qualifying graze.
-        // This prevents the normal note from sounding underneath a later harmonic.
-        if(!allowSlur && c.classList.contains('nh-node')){
-          held.forEach(v=>{ try{ v.release(true); }catch(e){} }); held=[];
-          if(curCell) curCell.classList.remove('struck');
-          curCell=c; curRect=c.getBoundingClientRect(); slurCount=0;
-          finger.sounding=false;
+        // Marker contact is not automatically a harmonic. Defer briefly so a fast/light tap
+        // can resolve as a harmonic; longer or ordinary contact becomes a normal fretted note.
+        if(!allowSlur && _nhIsMarker(c)){
+          held.forEach(v=>{try{v.release(true);}catch(e){}}); held=[];
+          if(curCell)curCell.classList.remove('struck');
+          curCell=c; curRect=c.getBoundingClientRect(); slurCount=0; finger.sounding=false;
+          const tapCell=c; _nhTapCell=c; _nhTapStart=performance.now(); _nhTapFired=false;
+          if(_nhTapTimer)clearTimeout(_nhTapTimer);
+          _nhTapTimer=setTimeout(()=>{
+            _nhTapTimer=null;
+            if(_nhTapFired||_nhTapCell!==tapCell||curCell!==tapCell)return;
+            try{_SAMP_PICK_HARD=true;held=fretVoices(tapCell,gVel);tapCell.classList.add('struck');finger.sounding=true;lastVoices=held;}catch(e){}
+          },95);
           return;
         }
-        // On a qualifying slide, trigger the harmonic instead of also picking that fret.
-        // Run after string arbitration so a muted lower finger cannot fire one.
-        if(allowSlur && _nhArm(c)){
-          curCell=c; curRect=c.getBoundingClientRect(); slurCount=1;
-          return;
-        }
+        // Sliding across a harmonic marker is ordinary fretboard movement, never a natural harmonic.
         // SAMPLER slide → fresh SOFT retrigger (no dead re-pitch); taps below = HARD attack
         if(allowSlur && single && instrument==='samp' && held.length){
           _SAMP_PICK_HARD=false;
@@ -4227,6 +4227,18 @@ function createInstance(prefix, chordsAlwaysOn){
       const up=e=>{
         if(e && e.pointerId!==undefined && e.pointerId!==pid) return;   // v544: only our finger lifts this voice
         try{ shapeDiv.releasePointerCapture(pid); }catch(x){}
+        if(_nhTapTimer){
+          clearTimeout(_nhTapTimer); _nhTapTimer=null;
+          const elapsed=performance.now()-_nhTapStart;
+          const sameTap=!!(_nhTapCell&&curCell===_nhTapCell&&_nhIsMarker(_nhTapCell));
+          const gentle=_nhTapPressure==null||_nhTapPressure<=0.45;
+          if(sameTap&&!_nhTapFired&&elapsed<=95&&gentle){
+            _nhPlayForCell(_nhTapCell,Math.max(0.15,1-elapsed/120),_nhTapPressure);
+          }else if(sameTap&&!_nhTapFired){
+            try{_SAMP_PICK_HARD=true;held=fretVoices(_nhTapCell,gVel);_nhTapCell.classList.add('struck');finger.sounding=true;lastVoices=held;}catch(e){}
+          }
+        }
+        _nhTapCell=null;
         _releaseString(finger);                        // v557: hand the string to the next finger down
         // v594: THE bend gesture is this one — press a fret, drag up past the cell (dyEdge above),
         //   which is exactly how the finger arrives on the ⚖ / ▶ row sitting above the board.
@@ -4234,8 +4246,23 @@ function createInstance(prefix, chordsAlwaysOn){
         //   killing it; the document pointerup right after this fires the nav. v590-593 hung off
         //   the BEND PAD's release, which this gesture never touches — so none of it ever ran.
         let hung=false;
+        // Bend-up then release onto a same-string natural-harmonic marker.
+        let _nhBendRelease=false;
+        if(_maxRawBend>=0.25 && e && e.clientX!=null){
+          try{
+            const elUp=document.elementFromPoint(e.clientX,e.clientY);
+            const cellUp=elUp&&elUp.closest?elUp.closest('.fb-cell'):null;
+            const infoUp=_nhFretInfo(cellUp);
+            if(infoUp&&curCell&&parseInt(curCell.dataset.str,10)===infoUp.st){
+              if(_nhTapTimer){clearTimeout(_nhTapTimer);_nhTapTimer=null;}
+              _nhTapCell=null;
+              _nhBendRelease=_nhPlayForCell(cellUp,Math.min(1,0.35+_maxRawBend*0.22),_movePressureKnown?_movePressure:null);
+              if(_nhBendRelease){curCell=cellUp;curRect=cellUp.getBoundingClientRect();hung=true;}
+            }
+          }catch(e){}
+        }
         // v849: FULL bend hang OR release onto ⚖ / segment — vibrato hang + pivot root to fretted note
-        if(bendSemis>=0.15 && held.length && e && e.clientX!=null){
+        if(!_nhBendRelease && bendSemis>=0.15 && held.length && e && e.clientX!=null){
           try{
             const el=document.elementFromPoint(e.clientX,e.clientY);
             const scaleNowEl=el && el.closest && el.closest('.scale-now');
@@ -4260,10 +4287,10 @@ function createInstance(prefix, chordsAlwaysOn){
             }
           }catch(x){}
         }
-        // Natural harmonics are triggered only by a qualifying fast, light slide in goTo().
-        // Releasing a finger on a harmonic marker cannot retrigger the harmonic.
+        // Natural harmonics can trigger on a fast/light marker tap, a qualifying graze, or bend-release.
+        // Ordinary contacts fall back to the normal fretted note; pinch harmonics remain separate.
         // v607: PINCH (artificial) harmonic - bend to FULL, pull off quickly (<=400ms). Sparse-bell squeal.
-        if(!hung && bendSemis>=1.9 && _pinchFullT!=null && (performance.now()-_pinchFullT)<=400 && curCell){
+        if(!_nhBendRelease && !hung && bendSemis>=1.9 && _pinchFullT!=null && (performance.now()-_pinchFullT)<=400 && curCell){
           const _bm=parseInt(curCell.dataset.midi,10)+Math.round(bendSemis)+24;
           held.forEach(v=>{ try{ v.release(); }catch(x){} }); held=[];
           try{ window.playHarmonicChime(_bm+octPedal, 0.55); }catch(x){}
@@ -4279,6 +4306,7 @@ function createInstance(prefix, chordsAlwaysOn){
         shapeDiv.removeEventListener('pointermove',mv);
         shapeDiv.removeEventListener('pointerup',up);
         shapeDiv.removeEventListener('pointercancel',up);
+        if(_nhTapTimer){clearTimeout(_nhTapTimer);_nhTapTimer=null;}
       };
       shapeDiv.addEventListener('pointermove',mv);
       shapeDiv.addEventListener('pointerup',up);
