@@ -1,0 +1,23 @@
+IMPROVS2 Build 898 — cumulative package consolidating changes since Build 892
+
+Canonical app: app-898.html
+Deployment alias: app-latest.html (byte-identical to app-898.html)
+Modules included once each:
+  modules/rig/rig.js          latest Build 898 rig module
+  modules/snapshots/snapshots.js  unchanged supporting snapshot-store module from the 892 baseline
+  modules/sampler/sampler.js      unchanged supporting sampler module from the 892 baseline
+
+Merged update history (one cumulative copy, not a stack of old builds):
+- 893: carry-forward app changes from the 893/894 source line; unified A–G snapshot controls and Listener input selection controls are present in the final HTML. The separately proposed Harmonic Lab was not included because it is not part of the user's requested final feature set.
+- 894: selectable Listener input sources and microphone-device selector; device refresh and low-processing mic constraints; unified snapshot row.
+- 895: eight-NAM stereo rig layer added in modules/rig/rig.js.
+- 896: bend display/gesture scaling changes from the 896 app source line.
+- 897: directional bend behaviour revision from the 897 app source line.
+- 898: final build marker and NAM8 rig module with L1-L4 and R1-R4, left/right IR state, pan controls, and snapshot migration logic.
+
+Important source audit note:
+- app-898.html is based on the available local 897 app, with the build marker advanced to 898; the later rig logic is in modules/rig/rig.js.
+- The rig module retains the legacy pedal/amp/cab implementation and adds the NAM8 layer. This is a compatibility layer, not a completed removal/refactor of the legacy engine. Inspect runtime routing carefully before treating it as a fully integrated single graph.
+- The Listener's full requested all-10-notes cycle, shortest-path home route, randomized legal decatonic transition, and chord-tone constraints are not fully implemented by this package.
+- No native Windows process-specific audio capture is included; browser tab capture remains browser-limited.
+- Syntax/structural checks are not a substitute for live browser, model-load, snapshot round-trip, and audible stereo tests.

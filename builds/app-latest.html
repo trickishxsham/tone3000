@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Build 4.9.8.894 — Listener inputs and unified snapshot row -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -282,7 +283,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.892';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.898';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -1172,17 +1173,14 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   </div>
   <div class="rigFxPanel" data-slot="cab" style="display:none;"></div>
   <div id="rigSnapRow" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px dashed #b8860b55;padding-top:6px;">
-    <span style="width:44px;font-weight:900;color:#fbbf24;" data-tip-title="SNAPSHOTS" data-tip="Save the whole rig (pedal+amp+cab, tiers, knobs, toggles) to a slot. Tap to recall. Tap SAVE then a letter to overwrite. Saved to device — survives reload.">SNAP</span>
+    <span style="width:44px;font-weight:900;color:#fbbf24;" data-tip-title="SNAPSHOTS" data-tip="Save and recall the whole rig in slots A–G.">SNAP</span>
     <button class="rigSnapSave" style="min-width:44px;padding:3px 8px;border-radius:4px;border:1px solid #b45309;background:#2a1a05;color:#fbbf24;font-family:'Bangers',cursive;">SAVE</button>
-    <button id="rigSnapRandomize" type="button" data-tip-title="BUILD STARTER RIGS" data-tip="A–G use your specified pedals; each gets a randomly chosen amp or amp+cabinet NAM. A/C/E/G use amp-only NAMs plus an IR; B/D/F use an amp or amp+cabinet NAM without an extra IR. Building replaces all seven snapshots after confirmation." style="padding:3px 8px;border-radius:4px;border:1px solid #854d0e;background:#422006;color:#fde68a;font-family:'Bangers',cursive;">BUILD A–G</button>
-    <button id="rigSnapExportJson" type="button" data-tip-title="EXPORT SNAPSHOTS" data-tip="Export all A–G snapshot slots as JSON, including each saved NAM model name and its captured parameters." style="padding:3px 8px;border-radius:4px;border:1px solid #0369a1;background:#082f49;color:#7dd3fc;font-family:'Bangers',cursive;">EXPORT JSON</button>
+    <button id="rigSnapRandomize" type="button" data-tip-title="BUILD STARTER RIGS" data-tip="Build the A–G starter set from TONE3000.">BUILD A–G</button>
+    <button id="rigSnapExportJson" type="button" data-tip-title="EXPORT SNAPSHOTS" data-tip="Export saved A–G snapshots as JSON.">EXPORT JSON</button>
     <button class="rigSnap" data-snap="0" data-hue="#F0483A" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #F0483A;background:#1a1a1a;color:#F0483A;font-weight:900;">A</button>
     <button class="rigSnap" data-snap="1" data-hue="#FFDD00" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #FFDD00;background:#1a1a1a;color:#FFDD00;font-weight:900;">B</button>
     <button class="rigSnap" data-snap="2" data-hue="#EDF0CF" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #EDF0CF;background:#1a1a1a;color:#EDF0CF;font-weight:900;">C</button>
     <button class="rigSnap" data-snap="3" data-hue="#00CC66" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #00CC66;background:#1a1a1a;color:#00CC66;font-weight:900;">D</button>
-  </div>
-  <div id="rigSnapRow2" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:4px;">
-    <span style="width:44px;"></span>
     <button class="rigSnap" data-snap="4" data-hue="#78D4EF" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #78D4EF;background:#1a1a1a;color:#78D4EF;font-weight:900;">E</button>
     <button class="rigSnap" data-snap="5" data-hue="#558BE1" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #558BE1;background:#1a1a1a;color:#558BE1;font-weight:900;">F</button>
     <button class="rigSnap" data-snap="6" data-hue="#AE78C6" style="min-width:34px;padding:3px 8px;border-radius:4px;border:1px solid #AE78C6;background:#1a1a1a;color:#AE78C6;font-weight:900;">G</button>
@@ -1191,6 +1189,28 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   <span id="rigStat" style="color:#a16207;font-size:0.9em;font-weight:700;"></span>
 </div>
 <div class="keysig-row collapsed" id="keySigRow"><span class="ks-lab">KEYSIG</span></div>
+
+<script>
+(function(){
+  async function refresh(){
+    const sel=document.getElementById('keyMicDevice'); if(!sel||!navigator.mediaDevices||!navigator.mediaDevices.enumerateDevices)return;
+    try{
+      const devices=await navigator.mediaDevices.enumerateDevices(); const ins=devices.filter(d=>d.kind==='audioinput');
+      const prior=sel.value; sel.innerHTML='<option value="">Default audio input</option>';
+      ins.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||('Audio input '+(i+1));sel.appendChild(o);});
+      if(prior&&ins.some(d=>d.deviceId===prior))sel.value=prior;
+    }catch(e){console.warn('[Listener] input enumeration',e);}
+  }
+  window._refreshListenerMicDevices=refresh;
+  document.addEventListener('DOMContentLoaded',function(){
+    const b=document.getElementById('keyMicRefresh'); if(b)b.addEventListener('click',async function(){
+      try{ if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){const s=await navigator.mediaDevices.getUserMedia({audio:true});s.getTracks().forEach(t=>t.stop());} await refresh(); }catch(e){console.warn('[Listener] microphone permission',e);}
+    });
+    if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener)navigator.mediaDevices.addEventListener('devicechange',refresh);
+    refresh();
+  });
+})();
+</script>
 
 <!-- Key Estimator -->
 <div id="keyBpmBlock" style="display:none; margin-top:0.5em; padding:0.5em; background:#1a1a2e; border-radius:4px; font-size:0.9em;">
@@ -1206,13 +1226,16 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
     <option value="sham minor">ShAM Minor</option>
     <option value="jazz">JAZZ MINOR</option>
   </select>
-  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="DEFAULT: App + Mic — hears the in-app backing track AND your real guitar on the mic. Feeds the rule-of-11 (m2 or b5 exiled → side + tonic). FILE = load MP3/WAV. APP only / MIC only / CAPTURE for special cases.">
-    <option value="both" selected>App + Mic (guitar + track)</option>
-    <option value="internal">App audio only</option>
-    <option value="mic">Mic only (speakers on)</option>
+  <select id="selKeySource" style="padding:0.2em 0.5em; margin-right:0.5em; cursor:pointer; background:#0f172a; color:#ccc;" data-tip-title="LISTEN SOURCE" data-tip="Listen to app audio, your selected guitar input, or shared browser-tab audio with your guitar input.">
+    <option value="both" selected>In-App + Mic</option>
+    <option value="internal">In-App audio only</option>
+    <option value="mic">Mic only</option>
+    <option value="capture">Tab Capture only</option>
+    <option value="tabmic">Tab Capture + Mic</option>
     <option value="file">Load audio file</option>
-    <option value="capture">Capture tab/stream</option>
   </select>
+  <select id="keyMicDevice" aria-label="Guitar / microphone input" title="Choose your guitar interface or microphone" style="max-width:190px;padding:0.2em 0.4em;margin-right:0.5em;background:#0f172a;color:#ccc;"><option value="">Default audio input</option></select>
+  <button type="button" id="keyMicRefresh" style="padding:0.2em 0.45em;margin-right:0.5em;background:#172554;color:#bfdbfe;border:1px solid #1d4ed8;border-radius:4px;">↻ Inputs</button>
   <input type="file" id="keyFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" style="display:none;">
   <label style="margin-right:0.6em;cursor:pointer;color:#86efac;font-size:0.85em;white-space:nowrap;" data-tip-title="FOLLOW SCALES" data-tip="When on, each bar applies the best-matching scale to the fretboard (does not lock forever).">
     <input type="checkbox" id="keyFollowScale" checked style="accent-color:#22c55e;vertical-align:middle;"> Follow scales
@@ -3284,6 +3307,21 @@ function haptic(ms){ try{
 //   A→½=A# · FULL=B · 1½=C  (minor third at peak = relative-major reach)
 const BEND_MAX=3;
 const BEND_GUIDES=[0.5,1.0,2.0,3.0];
+// v897: intentionally asymmetric on-screen bend limits.
+// Drag UP = FULL bend (2 semitones); drag DOWN = 1½-step bend (3 semitones).
+// Each direction is normalized to its own reachable screen travel, so screen
+// position does not change the endpoint. Fast full bends retain the existing
+// bend-hang vibrato gesture; natural-harmonic marker releases remain distinct.
+const BEND_UP_MAX=2;
+const BEND_DOWN_MAX=3;
+function bendFromVerticalDrag(distance, direction, rect, margin){
+  const h=Math.max(1,window.innerHeight||window.document.documentElement.clientHeight||1);
+  const m=Math.max(0,Number(margin)||0);
+  const available=direction<0 ? (rect.top-m) : (h-rect.bottom-m);
+  const travel=Math.max(55,available);
+  const max=direction<0 ? BEND_UP_MAX : BEND_DOWN_MAX;
+  return Math.max(0,Math.min(max,(Math.max(0,distance)/travel)*max));
+}
 let lastBendHaptic=-1;
 // magnetic-assist: ease the bend toward a guide line, snap+buzz when locked on
 function magnetize(semis){
@@ -4058,7 +4096,7 @@ function createInstance(prefix, chordsAlwaysOn){
         _nhTapFired=true; return true;
       };
       let _pinchFullT=null;   // v607: time bend first hit full, for the pinch pull-off
-      let _maxRawBend=0;   // v608: peak raw (pre-snap) bend for accuracy grading
+      let _maxRawBend=0, _maxBendDirection=0;   // v897: peak raw bend + direction for asymmetric grading
       let octLatch=false;   // v596: 8va fires ONCE per entry onto the button, not every 450ms
       const gVel=pressVelocity(ev);                    // press dynamics for this gesture
       const NOTES_PER_PICK=3;                          // hammer 3, pick on the 4th (speed-independent)
@@ -4206,18 +4244,19 @@ function createInstance(prefix, chordsAlwaysOn){
             return;
           }
         }
-        let dyEdge=0;                                  // how far ABOVE/BELOW the cell
+        let dyEdge=0, bendDirection=0;                 // distance + direction beyond the fret cell
+        const bendMargin=38;
         if(curRect){
-          const M=38;                                  // dead-zone margin around the cell
-          if(e.clientY<curRect.top-M)         dyEdge=curRect.top-M-e.clientY;
-          else if(e.clientY>curRect.bottom+M) dyEdge=e.clientY-curRect.bottom-M;
+          if(e.clientY<curRect.top-bendMargin){ bendDirection=-1; dyEdge=curRect.top-bendMargin-e.clientY; }
+          else if(e.clientY>curRect.bottom+bendMargin){ bendDirection=1; dyEdge=e.clientY-curRect.bottom-bendMargin; }
         }
         if(dyEdge>0){                                  // finger left the fret cell -> BEND
-          bendSemis=magnetize(Math.max(0,Math.min((typeof BEND_MAX==="number"?BEND_MAX:3), dyEdge/55)));
+          const _rawB=bendFromVerticalDrag(dyEdge,bendDirection,curRect,bendMargin);
+          bendSemis=magnetize(_rawB);
           held.forEach(v=>{try{v.bend(bendSemis);}catch(x){}});
           applyBendVisual(bendSemis);
           if(bendSemis>=1.9){ if(_pinchFullT==null) _pinchFullT=performance.now(); } else _pinchFullT=null;   // v607: arm pinch on full bend
-          { const _rawB=Math.max(0,Math.min((typeof BEND_MAX==="number"?BEND_MAX:3), dyEdge/55)); if(_rawB>_maxRawBend) _maxRawBend=_rawB; }   // v608: peak raw bend for grading
+          if(_rawB>_maxRawBend){ _maxRawBend=_rawB; _maxBendDirection=bendDirection; }   // peak raw bend for grading
         } else {                                       // inside cell -> slide normally
           if(bendSemis!==0){ bendSemis=0; held.forEach(v=>{try{v.bend(0);}catch(x){}}); applyBendVisual(0); }
           const el=document.elementFromPoint(e.clientX,e.clientY);
@@ -4298,7 +4337,7 @@ function createInstance(prefix, chordsAlwaysOn){
           try{ haptic([8,30,8]); }catch(x){}
         }
         // v608: log this bend's RAW accuracy vs nearest quarter/half/full (snap hides it) for grading
-        if(_maxRawBend>=0.3){ let _be=9; BEND_GUIDES.forEach(g=>{ const d=Math.abs(_maxRawBend-g); if(d<_be)_be=d; });
+        if(_maxRawBend>=0.3){ let _be=9; (_maxBendDirection<0 ? [0.5,1.0,2.0] : BEND_GUIDES).forEach(g=>{ const d=Math.abs(_maxRawBend-g); if(d<_be)_be=d; });
           try{ if(recOn && !recPlaying) (window._takeBendErrs=window._takeBendErrs||[]).push(_be); }catch(x){} }
         if(!hung) held.forEach(v=>{ if(!_hangIs(v)) v.release(); });
         if(curCell) curCell.classList.remove('struck');
@@ -4429,14 +4468,14 @@ function createInstance(prefix, chordsAlwaysOn){
         goTo(blk,false);                                 // initial press = pick
         const mv=e=>{
           if(e.pointerId!==pid) return;               // v544: ignore the other finger's moves
-          let dyEdge=0;
+          let dyEdge=0, bendDirection=0;
+          const bendMargin=72;                           // wider dead-zone — short scale blocks bend too easily on a tap
           if(curRect){
-            const M=72;                                // wider dead-zone — short scale blocks bend too easily on a tap
-            if(e.clientY<curRect.top-M)         dyEdge=curRect.top-M-e.clientY;
-            else if(e.clientY>curRect.bottom+M) dyEdge=e.clientY-curRect.bottom-M;
+            if(e.clientY<curRect.top-bendMargin){ bendDirection=-1; dyEdge=curRect.top-bendMargin-e.clientY; }
+            else if(e.clientY>curRect.bottom+bendMargin){ bendDirection=1; dyEdge=e.clientY-curRect.bottom-bendMargin; }
           }
           if(dyEdge>0){                                  // finger left the segment -> BEND
-            bendSemis=magnetize(Math.max(0,Math.min((typeof BEND_MAX==="number"?BEND_MAX:3), dyEdge/55)));
+            bendSemis=magnetize(bendFromVerticalDrag(dyEdge,bendDirection,curRect,bendMargin));
             held.forEach(v=>{try{v.bend(bendSemis);}catch(x){}});
             applyBendVisual(bendSemis);
           } else {
@@ -7568,8 +7607,7 @@ document.querySelectorAll('.pkSel').forEach(btn=>{
 });
 // Preload KS for default ELEC so first pluck is real
 try{ if(window.loadModule) window.loadModule('ks'); }catch(e){}
-// BEND pads — one per panel; bend the most-recent note(s):
-// 0 .. 1/4 .. 1/2 .. FULL step (up to 2 semitones)
+// BEND pads — one per panel; bend the most-recent note(s), 0..3 semitones (1½ steps).
 document.addEventListener('pointerdown',()=>{try{ensureAudio();}catch(e){}},{once:true});
 // move every bend-pad knob to reflect a bend amount (0..2 semitones)
 function applyBendVisual(semis){
@@ -10693,13 +10731,24 @@ function _getKeyStyle(){
     _iaIonian=null; _iaAeolian=null; _heptaKey=null; _exileKind=null;
     _exileEv={ m2:0, b5:0, n:0, committed:false, kind:null, at:0, deca:null, pair:null, decaSc:0 };
     _pentaRoot=null; _pentaMaj=true; _pentaLocked=false;
-    _heptaLocked=false; _styleLocked=false; _barsSinceResolve=0; _barObs=[]; _walkBars=0; _walkPhase='home'; _walkAway=0; _walkBackLeft=0;
+    _heptaLocked=false; _styleLocked=false; _barsSinceResolve=0; _barObs=[]; _walkBars=0; _walkPhase='home'; _walkAway=0; _walkBackLeft=0; _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey='';
+    _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey='';
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
     chromaHist=new Array(12).fill(0); chromaAt=0;
     ensureAudio();                                              // creates _AC / _MASTER if needed
     if(_AC && _AC.state==='suspended'){ try{ await _AC.resume(); }catch(e){} }
     const srcEl=document.getElementById('selKeySource');
     const src=srcEl?srcEl.value:'internal';
+    async function _getListenerMicStream(){
+      const sel=document.getElementById('keyMicDevice');
+      const deviceId=sel&&sel.value;
+      const audio={echoCancellation:false,noiseSuppression:false,autoGainControl:false};
+      if(deviceId) audio.deviceId={exact:deviceId};
+      const stream=await navigator.mediaDevices.getUserMedia({audio:audio});
+      try{ if(typeof _refreshListenerMicDevices==='function') await _refreshListenerMicDevices(); }catch(e){}
+      return stream;
+    }
+
     if(src==='file') out.textContent='pick an audio file...';
     else if(src==='internal') out.textContent='app audio only — play in THIS app, or Load file / Mic for external songs';
     else if(src==='mic') out.textContent='mic on — play song on SPEAKERS (not headphones)...';
@@ -10724,14 +10773,14 @@ function _getKeyStyle(){
         if(ab>=30 && ab<=300){ lockedBpm=ab; lastBpmReads=[ab,ab,ab]; _bpmEma=ab; }
       }catch(e){}
     }
-    if(src==='mic'||src==='both'){
+    if(src==='mic'||src==='both'||src==='tabmic'){
       if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
         out.textContent = (src==='both')
           ? 'internal only — mic needs https:// or localhost'
           : 'mic blocked: open via https:// or localhost (not content://)';
       } else {
         try{
-          keyMicStream=await navigator.mediaDevices.getUserMedia({audio:true});
+          keyMicStream=await _getListenerMicStream();
           const micSrc=_AC.createMediaStreamSource(keyMicStream);
           keyAnMic=_AC.createAnalyser(); keyAnMic.fftSize=4096;
           micSrc.connect(keyAnMic);
@@ -10739,7 +10788,7 @@ function _getKeyStyle(){
         }catch(e){
           var reqMic=function(){
             if(out) out.textContent='requesting mic access...';
-            navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
+            _getListenerMicStream().then(function(s){
               keyMicStream=s;
               var ms=_AC.createMediaStreamSource(s);
               keyAnMic=_AC.createAnalyser(); keyAnMic.fftSize=4096; ms.connect(keyAnMic);
@@ -10794,7 +10843,7 @@ function _getKeyStyle(){
         console.warn('[listen file]', e);
       }
     }
-    if(src==='capture'){
+    if(src==='capture'||src==='tabmic'){
       let capSrcNode=null;
       if(typeof capActive!=='undefined' && capActive && capSysSource){
         capSrcNode=capSysSource;                      // piggyback the live CAP stream
@@ -10990,6 +11039,16 @@ function _getKeyStyle(){
         const st=(_isStyleAuto()?(_autoStyle||'classical'):_getKeyStyle())||'classical';
         const poolRel=(_POOLS[st]&&_POOLS[st].rel)||[0,2,3,4,5,7,8,9,10,11];
         const poolSet={}; poolRel.forEach(function(d){ poolSet[(H+d)%12]=1; });
+        // Build 894: phase progression is driven by actual detected melody notes, not a fixed 8-bar timer.
+        const _poolKey=H+':'+poolRel.slice().sort(function(a,b){return a-b;}).join(',');
+        if(_decaSeenKey!==_poolKey){ _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey=_poolKey; }
+        if(_walkPhase==='out') {
+          const _from=Math.max(0,pitchHistory.length-160);
+          for(let _pi=_from;_pi<pitchHistory.length;_pi++){
+            const _pc=((Math.round(pitchHistory[_pi])%12)+12)%12;
+            if(poolSet[_pc]&&!_decaSeen[_pc]){ _decaSeen[_pc]=1; _decaSeenCount++; }
+          }
+        }
 
         function maxRun(semis){
           const s=semis.slice().sort(function(a,b){return a-b;});
@@ -11113,15 +11172,20 @@ function _getKeyStyle(){
             if(c.root!==H) s+=0.08;
           }
           if(_walkPhase==='return'){
-            if(c.root===H && (c.parentMode==='AEOLIAN'||c.parentMode==='IONIAN') && (!c.alt||c.alt==='NA'))
-              s+=0.55;
+            // Prefer a short, smooth chain through hexatonics, then home pentatonic/hexatonic,
+            // and finally the tonic Ionian/Aeolian. The symmetric-difference terms above
+            // penalize large jumps; these bonuses encode the requested route hierarchy.
+            if(c.kind==='hexa') s+=0.32;
+            if(c.kind==='penta' && c.root===H) s+=0.38;
+            if(c.kind==='hexa' && c.root===H) s+=0.48;
+            if(c.root===H && (c.parentMode==='AEOLIAN'||c.parentMode==='IONIAN') && (!c.alt||c.alt==='NA') && c.kind==='hepta') s+=0.65;
           }
           // light random spice for freedom
           s+=Math.random()*0.12;
           return s;
         }
 
-        if(!_walkPhase || _walkPhase==='home'){ _walkPhase='out'; _walkAway=0; _walkBackLeft=0; }
+        if(!_walkPhase || _walkPhase==='home'){ _walkPhase='out'; _walkAway=0; _walkBackLeft=0; _decaSeen=Object.create(null); _decaSeenCount=0; }
 
         let pick=null;
         if(!cands.length){
@@ -11156,7 +11220,7 @@ function _getKeyStyle(){
               else if(cur==='jazz') nxt=bright?'classical':'sham minor';
               _autoStyle=nxt; _styleLocked=true;
             }
-            _walkPhase='out'; _walkAway=0; _walkBackLeft=0;
+            _walkPhase='out'; _walkAway=0; _walkBackLeft=0; _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey='';
           }
         } else {
           // OUT — pick creative 1-note step
@@ -11170,7 +11234,8 @@ function _getKeyStyle(){
             const atPlainHome=pick.root===H && (pick.parentMode==='AEOLIAN'||pick.parentMode==='IONIAN') && (!pick.alt||pick.alt==='NA') && pick.kind==='hepta';
             if(!atPlainHome){
               _walkAway=(_walkAway||0)+1;
-              if(_walkAway>=8){ _walkPhase='return'; _walkBackLeft=8; }
+              // Exhaust the current decatonic's ten pitch classes before planning the homeward route.
+              if(_decaSeenCount>=10){ _walkPhase='return'; _walkBackLeft=12; }
             }
           }
         }
@@ -11280,10 +11345,10 @@ function _getKeyStyle(){
           const stName=(_STYLE_LABEL&&_STYLE_LABEL[st])?_STYLE_LABEL[st]:st;
           homeLbl+=' · '+stName;
         } else {
-          homeLbl+=' · notes '+u.n+'/11';
+          homeLbl+=' · decatonic notes '+u.n+'/10';
         }
-        if(_walkPhase==='out') homeLbl+=' · out '+(_walkAway||0)+'/8 · hold 2 bars';
-        else if(_walkPhase==='return') homeLbl+=' · return in '+(_walkBackLeft||0);
+        if(_walkPhase==='out') homeLbl+=' · exploring · notes used '+(_decaSeenCount||0)+'/10 · hexatonic routes preferred';
+        else if(_walkPhase==='return') homeLbl+=' · returning home via smooth scale route';
         else homeLbl+=' · home';
         if(_exileKind) homeLbl+=' · exile '+_exileKind;
         const bPart=useBpm?(' · ~'+useBpm+' BPM'):(bpm?(' · ~'+bpm+' BPM'):'');
