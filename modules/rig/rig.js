@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.888
+// version: 4.9.8.890-q-recovery
 // Realtime NAM (WASM) + TONE3000 client + RIG UI (pedal/amp/cab)
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.888';
+var MODULE_VERSION = '4.9.8.890-q-recovery';
 var _booted=false;
 var _uiBound=false;
 
@@ -1016,13 +1016,20 @@ window.T3K=T3K;
   // SampleStore is defined further down this block — defer so it exists when we read it.
   setTimeout(()=>{ loadSnapsFromDisk(); }, 0);
 
-  // tier change (slot-aware)
+  // Tier changes rebuild only the realtime model here. Rebuilding the legacy/offline
+  // NAMEngine synchronously during live playback can stall the main thread while the
+  // AudioWorklet is trying to stream audio. The worklet keeps the currently-running
+  // model until the replacement has compiled and is ready to swap at a render-block
+  // boundary, so a failed Q1.0 -> Q0.5 build leaves the previous model intact.
+  // Offline export remains tied to the NAMEngine tier last loaded; it is deliberately
+  // not rebuilt in this live-playback event handler.
   panel&&panel.addEventListener('change',(e)=>{
     if(!e.target.classList.contains('rigTier')) return;
     const slotDiv=e.target.closest('.rigSlot'); const slot=slotDiv?slotDiv.dataset.slot:'amp';
     const st=S[slot]; if(st&&st.json){
-      if(slot==='amp') NAMEngine.loadFromJSON(st.json,parseFloat(e.target.value));
-      try{ NAMRealtime.setModel(slot,st.json,parseFloat(e.target.value)); }catch(err){ console.warn(err); } }
+      try{ NAMRealtime.setModel(slot,st.json,parseFloat(e.target.value)); }
+      catch(err){ console.warn('[rig] realtime tier change failed',err); }
+    }
   });
 
   function clearSlot(slot){
