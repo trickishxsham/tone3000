@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.887
+// version: 4.9.8.888
 // Realtime NAM (WASM) + TONE3000 client + RIG UI (pedal/amp/cab)
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.887';
+var MODULE_VERSION = '4.9.8.888';
 var _booted=false;
 var _uiBound=false;
 
@@ -53,16 +53,18 @@ const NAMRealtime = (function(){
     function mk(){
       const inGain=context.createGain(); inGain.gain.value=1;
       const drive=context.createWaveShaper(); drive.curve=makeDriveCurve(0); drive.oversample='2x';
-      const gate=context.createDynamicsCompressor();   // used as downward gate via threshold
+      const gate=context.createDynamicsCompressor(); // retained only for legacy snapshot compatibility; not exposed in UI
       gate.threshold.value=-80; gate.knee.value=0; gate.ratio.value=20; gate.attack.value=0.003; gate.release.value=0.15;
+      const comp=context.createDynamicsCompressor(); comp.threshold.value=-24; comp.knee.value=18; comp.ratio.value=2.5; comp.attack.value=0.01; comp.release.value=0.12;
+      const lowCut=context.createBiquadFilter(); lowCut.type='highpass'; lowCut.frequency.value=35; lowCut.Q.value=0.707;
       const bass=context.createBiquadFilter(); bass.type='lowshelf'; bass.frequency.value=120; bass.gain.value=0;
       const mid=context.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=800; mid.Q.value=0.7; mid.gain.value=0;
       const treble=context.createBiquadFilter(); treble.type='highshelf'; treble.frequency.value=3000; treble.gain.value=0;
+      const highCut=context.createBiquadFilter(); highCut.type='lowpass'; highCut.frequency.value=18000; highCut.Q.value=0.707;
       const outGain=context.createGain(); outGain.gain.value=1;
-      const wetSend=context.createGain(); wetSend.gain.value=0;   // dry by default; feeds shared rig reverb
+      const wetSend=context.createGain(); wetSend.gain.value=0; // separate restrained shared reverb send; defaults dry
       wetSend.connect(_rigVerb);
-      // internal wiring: in->drive->gate->bass->mid->treble->out (NAM node splices between gate and bass externally)
-      return { inGain, drive, gate, bass, mid, treble, outGain, wetSend, gateOn:false, eqOn:true, driveAmt:0 };
+      return { inGain, drive, gate, comp, lowCut, bass, mid, treble, highCut, outGain, wetSend, gateOn:false, compOn:false, eqOn:true, driveAmt:0 };
     }
     if(!fx.pedal){ fx.pedal=mk(); fx.amp=mk(); fx.cab=mk(); }
   }
@@ -154,7 +156,7 @@ const NAMRealtime = (function(){
     // tear down every node's outputs
     try{ src.disconnect(); }catch(e){}
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(!f)continue;
-      for(const n of [f.inGain,f.drive,f.gate,f.bass,f.mid,f.treble,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
+      for(const n of [f.inGain,f.drive,f.gate,f.comp,f.lowCut,f.bass,f.mid,f.treble,f.highCut,f.outGain,f.wetSend]){ try{n.disconnect();}catch(e){} } }
     try{ if(nodePedal) nodePedal.disconnect(); }catch(e){}
     try{ if(nodeAmp) nodeAmp.disconnect(); }catch(e){}
     try{ if(cab) cab.disconnect(); }catch(e){}
@@ -164,17 +166,19 @@ const NAMRealtime = (function(){
     for(const k of ['pedal','amp','cab']){ const f=fx[k]; if(f&&_rigVerb) try{ f.wetSend.connect(_rigVerb); }catch(e){} }
     if(_rigVerb && _rigVerbSum) try{ _rigVerb.connect(_rigVerbSum); }catch(e){}
     // helper: wire one slot's fx around a processing node. Returns tail.
-    // chain: prev -> inGain -> drive -> [gate] -> node -> [bass->mid->treble] -> outGain (+wet send)
+    // chain: prev -> input -> drive -> [compressor] -> NAM/IR -> low-cut -> EQ -> high-cut -> output; reverb is parallel send
     function wireSlot(prev, f, node){
       if(!prev || !f) return prev;
       prev.connect(f.inGain);
       f.inGain.connect(f.drive);
       let t=f.drive;
-      if(f.gateOn){ t.connect(f.gate); t=f.gate; }
+      if(f.compOn){ t.connect(f.comp); t=f.comp; }
       if(node){ t.connect(node); t=node; }
+      t.connect(f.lowCut); t=f.lowCut;
       if(f.eqOn){ t.connect(f.bass); f.bass.connect(f.mid); f.mid.connect(f.treble); t=f.treble; }
+      t.connect(f.highCut); t=f.highCut;
       t.connect(f.outGain);
-      f.outGain.connect(f.wetSend);   // parallel wet send (dry level unchanged)
+      f.outGain.connect(f.wetSend);
       return f.outGain;
     }
     try{
@@ -195,19 +199,30 @@ const NAMRealtime = (function(){
   // parameter setters per slot
   function setParam(slot, param, value){
     const f=fx[slot]; if(!f) return;
-    if(param==='input') f.inGain.gain.value=Math.pow(10, value/20);       // dB
-    else if(param==='output') f.outGain.gain.value=Math.pow(10, value/20); // dB
-    else if(param==='threshold') f.gate.threshold.value=value;             // dB
-    else if(param==='bass') f.bass.gain.value=(value-5)*3;                 // 0-10 -> -15..+15 dB
+    if(param==='input') f.inGain.gain.value=Math.pow(10,value/20);
+    else if(param==='output') f.outGain.gain.value=Math.pow(10,value/20);
+    else if(param==='lowCut') f.lowCut.frequency.value=Math.max(20,Math.min(1000,value));
+    else if(param==='highCut') f.highCut.frequency.value=Math.max(1000,Math.min(20000,value));
+    else if(param==='bassFreq') f.bass.frequency.value=Math.max(40,Math.min(500,value));
+    else if(param==='midFreq') f.mid.frequency.value=Math.max(100,Math.min(8000,value));
+    else if(param==='midQ') f.mid.Q.value=Math.max(0.3,Math.min(5,value));
+    else if(param==='trebleFreq') f.treble.frequency.value=Math.max(1000,Math.min(12000,value));
+    else if(param==='compThreshold') f.comp.threshold.value=value;
+    else if(param==='compRatio') f.comp.ratio.value=Math.max(1,Math.min(12,value));
+    else if(param==='compAttack') f.comp.attack.value=Math.max(0.001,Math.min(0.2,value));
+    else if(param==='compRelease') f.comp.release.value=Math.max(0.02,Math.min(1,value));
+    else if(param==='bass') f.bass.gain.value=(value-5)*3;
     else if(param==='middle') f.mid.gain.value=(value-5)*3;
     else if(param==='treble') f.treble.gain.value=(value-5)*3;
-    else if(param==='drive'){ f.driveAmt=value; f.drive.curve=makeDriveCurve(value); }  // 0-10 saturation
-    else if(param==='wet') f.wetSend.gain.value=Math.max(0,Math.min(1,value/10));         // 0-10 -> 0..1 reverb send
+    else if(param==='drive'){ f.driveAmt=value; f.drive.curve=makeDriveCurve(value); }
+    else if(param==='reverb') f.wetSend.gain.value=Math.max(0,Math.min(0.35,value/100));
   }
   function setFxEnabled(slot, which, on){
     const f=fx[slot]; if(!f) return;
-    if(which==='gate') f.gateOn=on; else if(which==='eq') f.eqOn=on;
-    route(_pedalOn,_ampOn,_irOn);   // rewire
+    if(which==='gate') f.gateOn=false; // legacy snapshot field accepted; gate intentionally absent from current UI
+    else if(which==='compressor') f.compOn=!!on;
+    else if(which==='eq') f.eqOn=!!on;
+    route(_pedalOn,_ampOn,_irOn);
   }
   // ── main-thread model build: flatten -> emit WASM bytes -> async compile -> post module.
   //   A token per slot means a rapid second load supersedes the first (no stale swap).
@@ -692,7 +707,37 @@ window.T3K=T3K;
   const fileNam=document.getElementById('rigFileNam'), fileIr=document.getElementById('rigFileIr');
   const rigStat=document.getElementById('rigStat');
   // per-slot state
-  const S={ pedal:{loaded:false,json:null,toneId:null,modelId:null,modelName:''}, amp:{loaded:false,json:null,toneId:null,modelId:null,modelName:''}, cab:{loaded:false,toneId:null,modelId:null,modelName:''} };
+  const S={ pedal:{loaded:false,json:null,toneId:null,modelId:null,modelName:'',toneTitle:'',variants:[]}, amp:{loaded:false,json:null,toneId:null,modelId:null,modelName:'',toneTitle:'',variants:[]}, cab:{loaded:false,toneId:null,modelId:null,modelName:'',toneTitle:'',variants:[]} };
+  // Inline capture selector: remains attached to the loaded tone and only changes its model/capture.
+  function ensureVariantSelect(slot){
+    const el=slotEl(slot); if(!el) return null;
+    let sel=el.querySelector('.rigVariant'); if(sel) return sel;
+    sel=document.createElement('select'); sel.className='rigVariant'; sel.setAttribute('aria-label',slot+' NAM variant');
+    sel.style.cssText='display:none;max-width:100%;min-width:115px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:6px;padding:5px;font-size:0.78em;';
+    const name=el.querySelector('.rigName'); if(name&&name.parentNode) name.insertAdjacentElement('afterend',sel); else el.appendChild(sel);
+    sel.addEventListener('change',async()=>{
+      const st=S[slot], idx=Number(sel.value), model=st&&st.variants&&st.variants[idx];
+      if(!st||!model||String(model.id)===String(st.modelId)) return;
+      sel.disabled=true;
+      try{ await loadToneModel({id:st.toneId,title:st.toneTitle||st.toneName||st.modelName,format:slot==='cab'?'ir':'nam'},model,{keepModal:false,variantSwitch:true,slotOverride:slot}); }
+      catch(err){ console.warn('[T3K variant switch]',err); }
+      finally{ sel.disabled=false; refreshVariantSelect(slot); if(st.modelId==null) sel.value=''; }
+    });
+    return sel;
+  }
+  function refreshVariantSelect(slot){
+    const st=S[slot], sel=ensureVariantSelect(slot); if(!st||!sel) return;
+    const list=Array.isArray(st.variants)?st.variants:[];
+    if(!st.loaded||!st.toneId||list.length<2){ sel.style.display='none'; sel.innerHTML=''; return; }
+    sel.innerHTML=list.map((m,i)=>'<option value="'+i+'">'+escapeT3k(m.name||('Variant '+(i+1)))+'</option>').join('');
+    const idx=list.findIndex(m=>String(m.id)===String(st.modelId));
+    sel.value=idx>=0?String(idx):'0'; sel.style.display='inline-block';
+  }
+  async function hydrateVariants(slot){
+    const st=S[slot]; if(!st||!st.toneId) return;
+    try{ const res=await T3K.listModels(st.toneId); st.variants=(res&&res.data)||res||[]; refreshVariantSelect(slot); }
+    catch(e){ console.warn('[T3K] variant list refresh failed',e); refreshVariantSelect(slot); }
+  }
   let fileTargetSlot=null, t3kTargetSlot=null;
   function setStat(t){ if(rigStat) rigStat.textContent=t||''; }
   function slotEl(slot){ return panel && panel.querySelector('.rigSlot[data-slot="'+slot+'"]'); }
@@ -763,44 +808,47 @@ window.T3K=T3K;
   // Shell calls this after load / open
   window.__rigBindUI = bindPanelUI;
   bindPanelUI();
+  ['pedal','amp','cab'].forEach(ensureVariantSelect);
 
   // Build GATEWAY-style param panel for each slot (Input/Threshold/Bass/Middle/Treble/Output + gate/EQ)
   function buildFxPanel(slot){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||fp._built) return;
     fp._built=true;
     fp.style.cssText='display:none;background:#1e1033;border:1px solid #7c3aed;border-radius:5px;padding:8px;margin:2px 0 4px 50px;';
-    // knob rows: [param, label, min, max, default, unit]
+    // DSP controls are intentionally independent of the Tone3000 model and quality tier.
     const knobs=[
-      ['input','Input',-20,20,0,'dB'],
-      ['drive','Drive',0,10,0,''],
-      ['threshold','Threshold',-80,0,-80,'dB'],
-      ['bass','Bass',0,10,5,''],
-      ['middle','Middle',0,10,5,''],
-      ['treble','Treble',0,10,5,''],
-      ['wet','Wet',0,10,0,''],
-      ['output','Output',-20,20,0,'dB']
+      ['input','Input',-20,20,0,' dB'], ['drive','Drive',0,10,0,''],
+      ['lowCut','Low Cut',20,500,35,' Hz'], ['bassFreq','Bass Freq',40,500,120,' Hz'],
+      ['bass','Bass Gain',0,10,5,''], ['midFreq','Mid Freq',100,8000,800,' Hz'],
+      ['midQ','Mid Q',0.3,5,0.7,''], ['middle','Mid Gain',0,10,5,''],
+      ['trebleFreq','Treble Freq',1000,12000,3000,' Hz'], ['treble','Treble Gain',0,10,5,''],
+      ['highCut','High Cut',1000,20000,18000,' Hz'], ['reverb','Reverb Send',0,100,0,'%'],
+      ['compThreshold','Comp Threshold',-60,0,-24,' dB'], ['compRatio','Comp Ratio',1,12,2.5,':1'],
+      ['compAttack','Comp Attack',1,200,10,' ms'], ['compRelease','Comp Release',20,1000,120,' ms'],
+      ['output','Output',-20,20,0,' dB']
     ];
-    let html='<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;">';
+    let html='<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;\">';
     for(const [p,label,mn,mx,dv,unit] of knobs){
-      html+='<div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:60px;flex:1;">'
-        +'<span style="color:#9ab;font-size:0.9em;font-weight:700;">'+label+'</span>'
-        +'<input type="range" class="fxKnob" data-slot="'+slot+'" data-param="'+p+'" min="'+mn+'" max="'+mx+'" step="0.1" value="'+dv+'" style="width:100%;accent-color:#38bdf8;">'
-        +'<span class="fxVal" data-for="'+p+'" style="color:#7dd3fc;font-size:0.85em;">'+dv.toFixed(1)+unit+'</span>'
+      html+='<div style=\"display:flex;flex-direction:column;align-items:stretch;gap:3px;min-width:0;\">'
+        +'<span style=\"color:#9ab;font-size:0.82em;font-weight:700;\">'+label+'</span>'
+        +'<input type=\"range\" class=\"fxKnob\" data-slot=\"'+slot+'\" data-param=\"'+p+'\" min=\"'+mn+'\" max=\"'+mx+'\" step=\"'+(['midQ','compRatio'].includes(p)?'0.1':(p==='compAttack'||p==='compRelease'?'1':'0.1'))+'\" value=\"'+dv+'\" style=\"width:100%;accent-color:#38bdf8;\">'
+        +'<span class=\"fxVal\" data-for=\"'+p+'\" style=\"color:#7dd3fc;font-size:0.78em;\">'+dv+unit+'</span>'
         +'</div>';
     }
-    html+='</div><div style="display:flex;gap:20px;margin-top:6px;justify-content:center;">'
-      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="gate" style="accent-color:#10b981;">Noise Gate</label>'
-      +'<label style="display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;"><input type="checkbox" class="fxToggle" data-slot="'+slot+'" data-fx="eq" checked style="accent-color:#10b981;">EQ</label>'
-      +'</div>';
+    html+='</div><div style=\"display:flex;gap:20px;margin-top:8px;justify-content:center;flex-wrap:wrap;\">'
+      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"compressor\" style=\"accent-color:#10b981;\">Compressor</label>'
+      +'<label style=\"display:flex;align-items:center;gap:5px;color:#9ab;cursor:pointer;\"><input type=\"checkbox\" class=\"fxToggle\" data-slot=\"'+slot+'\" data-fx=\"eq\" checked style=\"accent-color:#10b981;\">EQ</label>'
+      +'</div><div style=\"color:#64748b;font-size:0.75em;margin-top:5px;\">Noise gate removed from controls: NAM input has no physical pickup hum to gate. IR/cab on-off remains independent.</div>';
     fp.innerHTML=html;
     const _unitOf={}; for(const [p,,,,,u] of knobs){ _unitOf[p]=u; }
     // wire knobs
     fp.querySelectorAll('.fxKnob').forEach(k=>{
       k.addEventListener('input',()=>{
-        const val=parseFloat(k.value), param=k.dataset.param, unit=_unitOf[param]||'';
+        const raw=parseFloat(k.value), param=k.dataset.param, unit=(knobs.find(x=>x[0]===param)||[])[5]||'';
+        const val=(param==='compAttack'||param==='compRelease')?raw/1000:raw;
         window.ensureAudio&&window.ensureAudio();
         NAMRealtime.setParam(k.dataset.slot, param, val);
-        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=val.toFixed(1)+unit;
+        const vs=fp.querySelector('.fxVal[data-for="'+param+'"]'); if(vs) vs.textContent=(Number.isInteger(raw)?String(raw):raw.toFixed(1))+unit;
       });
     });
     fp.querySelectorAll('.fxToggle').forEach(t=>{
@@ -854,9 +902,9 @@ window.T3K=T3K;
   }
   function snapCapture(){
     return {
-      pedal:{ json:S.pedal.json, loaded:S.pedal.loaded, toneId:S.pedal.toneId||null, modelId:S.pedal.modelId||null, modelName:S.pedal.modelName||'', tier:(()=>{const s=slotEl('pedal').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('pedal').querySelector('.rigName').textContent, fx:grabFx('pedal') },
-      amp:{ json:S.amp.json, loaded:S.amp.loaded, toneId:S.amp.toneId||null, modelId:S.amp.modelId||null, modelName:S.amp.modelName||'', tier:(()=>{const s=slotEl('amp').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('amp').querySelector('.rigName').textContent, fx:grabFx('amp') },
-      cab:{ toneId:S.cab.toneId||null, modelId:S.cab.modelId||null, modelName:S.cab.modelName||'', buf:(window._IRCAB&&window._IRCAB.buffer)||null, ir:serializeIR((window._IRCAB&&window._IRCAB.buffer)||null), loaded:S.cab.loaded, name:slotEl('cab').querySelector('.rigName').textContent, fx:grabFx('cab') },
+      pedal:{ json:S.pedal.json, loaded:S.pedal.loaded, toneId:S.pedal.toneId||null, modelId:S.pedal.modelId||null, modelName:S.pedal.modelName||'', toneTitle:S.pedal.toneTitle||'', variants:S.pedal.variants||[], tier:(()=>{const s=slotEl('pedal').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('pedal').querySelector('.rigName').textContent, fx:grabFx('pedal') },
+      amp:{ json:S.amp.json, loaded:S.amp.loaded, toneId:S.amp.toneId||null, modelId:S.amp.modelId||null, modelName:S.amp.modelName||'', toneTitle:S.amp.toneTitle||'', variants:S.amp.variants||[], tier:(()=>{const s=slotEl('amp').querySelector('.rigTier');return s&&s.style.display!=='none'?parseFloat(s.value):null;})(), name:slotEl('amp').querySelector('.rigName').textContent, fx:grabFx('amp') },
+      cab:{ toneId:S.cab.toneId||null, modelId:S.cab.modelId||null, modelName:S.cab.modelName||'', toneTitle:S.cab.toneTitle||'', variants:S.cab.variants||[], buf:(window._IRCAB&&window._IRCAB.buffer)||null, ir:serializeIR((window._IRCAB&&window._IRCAB.buffer)||null), loaded:S.cab.loaded, name:slotEl('cab').querySelector('.rigName').textContent, fx:grabFx('cab') },
       on:{ pedal:NAMRealtime.pedalOn, amp:NAMRealtime.ampOn, ir:NAMRealtime.irOn }
     };
   }
@@ -903,9 +951,11 @@ window.T3K=T3K;
   function restoreFx(slot, fx){
     const fp=panel.querySelector('.rigFxPanel[data-slot="'+slot+'"]'); if(!fp||!fp._built||!fx) return;
     fp.querySelectorAll('.fxKnob').forEach(k=>{ const p=k.dataset.param;
-      if(fx.knobs[p]!=null){ k.value=fx.knobs[p]; NAMRealtime.setParam(slot,p,fx.knobs[p]);
-        const unit=(p==='input'||p==='threshold'||p==='output')?'dB':'';
-        const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=fx.knobs[p].toFixed(1)+unit; } });
+      if(fx.knobs[p]!=null){ k.value=fx.knobs[p];
+        const raw=parseFloat(fx.knobs[p]); const val=(p==='compAttack'||p==='compRelease')?raw/1000:raw;
+        NAMRealtime.setParam(slot,p,val);
+        const unit=({'input':' dB','output':' dB','lowCut':' Hz','highCut':' Hz','bassFreq':' Hz','midFreq':' Hz','midQ':'','trebleFreq':' Hz','compThreshold':' dB','compRatio':':1','compAttack':' ms','compRelease':' ms','reverb':'%'})[p]||'';
+        const vs=fp.querySelector('.fxVal[data-for="'+p+'"]'); if(vs) vs.textContent=(Number.isInteger(raw)?String(raw):raw.toFixed(1))+unit; } });
     fp.querySelectorAll('.fxToggle').forEach(t=>{ const want=!!fx[t.dataset.fx];
       if(t.checked!==want){ t.checked=want; NAMRealtime.setFxEnabled(slot,t.dataset.fx,want); } });
   }
@@ -914,7 +964,7 @@ window.T3K=T3K;
     window.ensureAudio&&window.ensureAudio();
     setStat('recalling '+(SNAP_LABELS[i]||i)+'…');
     // pedal
-    S.pedal.json=sn.pedal.json; S.pedal.loaded=sn.pedal.loaded; S.pedal.toneId=sn.pedal.toneId||null; S.pedal.modelId=sn.pedal.modelId||null; S.pedal.modelName=sn.pedal.modelName||'';
+    S.pedal.json=sn.pedal.json; S.pedal.loaded=sn.pedal.loaded; S.pedal.toneId=sn.pedal.toneId||null; S.pedal.modelId=sn.pedal.modelId||null; S.pedal.modelName=sn.pedal.modelName||''; S.pedal.toneTitle=sn.pedal.toneTitle||''; S.pedal.variants=sn.pedal.variants||[];
     const pSel=slotEl('pedal').querySelector('.rigTier');
     if(sn.pedal.loaded&&sn.pedal.json){
       const pt=NAMEngine.tiers(sn.pedal.json);
@@ -923,9 +973,9 @@ window.T3K=T3K;
       else if(pSel){ pSel.style.display='none'; pSel.innerHTML=''; }
       NAMRealtime.setModel('pedal',sn.pedal.json,sn.pedal.tier);
     } else if(pSel){ pSel.style.display='none'; pSel.innerHTML=''; }
-    slotEl('pedal').querySelector('.rigName').textContent=sn.pedal.name||'';
+    slotEl('pedal').querySelector('.rigName').textContent=sn.pedal.name||''; refreshVariantSelect('pedal'); if(S.pedal.toneId&&!S.pedal.variants.length) hydrateVariants('pedal');
     // amp
-    S.amp.json=sn.amp.json; S.amp.loaded=sn.amp.loaded; S.amp.toneId=sn.amp.toneId||null; S.amp.modelId=sn.amp.modelId||null; S.amp.modelName=sn.amp.modelName||'';
+    S.amp.json=sn.amp.json; S.amp.loaded=sn.amp.loaded; S.amp.toneId=sn.amp.toneId||null; S.amp.modelId=sn.amp.modelId||null; S.amp.modelName=sn.amp.modelName||''; S.amp.toneTitle=sn.amp.toneTitle||''; S.amp.variants=sn.amp.variants||[];
     const aSel=slotEl('amp').querySelector('.rigTier');
     if(sn.amp.loaded&&sn.amp.json){
       const at=NAMEngine.tiers(sn.amp.json);
@@ -935,12 +985,12 @@ window.T3K=T3K;
       NAMEngine.loadFromJSON(sn.amp.json, sn.amp.tier!=null?sn.amp.tier:undefined);
       NAMRealtime.setModel('amp',sn.amp.json,sn.amp.tier);
     } else if(aSel){ aSel.style.display='none'; aSel.innerHTML=''; }
-    slotEl('amp').querySelector('.rigName').textContent=sn.amp.name||'';
+    slotEl('amp').querySelector('.rigName').textContent=sn.amp.name||''; refreshVariantSelect('amp'); if(S.amp.toneId&&!S.amp.variants.length) hydrateVariants('amp');
     // cab — rebuild the AudioBuffer if this snap came from disk (buf stripped, ir kept)
-    S.cab.loaded=sn.cab.loaded; S.cab.toneId=sn.cab.toneId||null; S.cab.modelId=sn.cab.modelId||null; S.cab.modelName=sn.cab.modelName||'';
+    S.cab.loaded=sn.cab.loaded; S.cab.toneId=sn.cab.toneId||null; S.cab.modelId=sn.cab.modelId||null; S.cab.modelName=sn.cab.modelName||''; S.cab.toneTitle=sn.cab.toneTitle||''; S.cab.variants=sn.cab.variants||[];
     if(sn.cab.loaded && !sn.cab.buf && sn.cab.ir){ try{ sn.cab.buf=deserializeIR(sn.cab.ir); }catch(e){ console.warn('[snap IR rebuild]',e); } }
     NAMRealtime.setIR(sn.cab.loaded?sn.cab.buf:null);
-    slotEl('cab').querySelector('.rigName').textContent=sn.cab.name||'';
+    slotEl('cab').querySelector('.rigName').textContent=sn.cab.name||''; refreshVariantSelect('cab'); if(S.cab.toneId&&!S.cab.variants.length) hydrateVariants('cab');
     // one rewire with the snapshot's on-states, then knobs/toggles
     await NAMRealtime.route(!!(sn.on.pedal&&sn.pedal.loaded), !!(sn.on.amp&&sn.amp.loaded), !!(sn.on.ir&&sn.cab.loaded));
     restoreFx('pedal',sn.pedal.fx); restoreFx('amp',sn.amp.fx); restoreFx('cab',sn.cab.fx);
@@ -976,7 +1026,7 @@ window.T3K=T3K;
   });
 
   function clearSlot(slot){
-    S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName='';
+    S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName=''; S[slot].toneTitle=''; S[slot].variants=[]; refreshVariantSelect(slot);
     if(slot==='cab'){ S.cab.loaded=false; NAMRealtime.setIR(null);
       NAMRealtime.route(NAMRealtime.pedalOn, NAMRealtime.ampOn, false).then(()=>{paint();toggleBtn();}); }
     else { S[slot].loaded=false; S[slot].json=null;
@@ -997,7 +1047,7 @@ window.T3K=T3K;
     (isZip?extractNamFromZip(f):f.text()).then(txt=>applyNam(txt, slot, f.name)).catch(err=>setStat(slot+' load failed: '+err.message));
   }
   function applyNam(txt, slot, label){
-    const json=JSON.parse(txt); S[slot].json=json; S[slot].loaded=true; S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName='';
+    const json=JSON.parse(txt); S[slot].json=json; S[slot].loaded=true; S[slot].toneId=null; S[slot].modelId=null; S[slot].modelName=''; S[slot].toneTitle=''; S[slot].variants=[]; refreshVariantSelect(slot);
     window.ensureAudio&&window.ensureAudio();
     if(slot==='amp'){
       const tiers=NAMEngine.tiers(json); const tierSel=slotEl('amp').querySelector('.rigTier');
@@ -1020,7 +1070,7 @@ window.T3K=T3K;
     setStat('');
   }
   function loadIrFile(f){
-    S.cab.toneId=null; S.cab.modelId=null; S.cab.modelName='';
+    S.cab.toneId=null; S.cab.modelId=null; S.cab.modelName=''; S.cab.toneTitle=''; S.cab.variants=[]; refreshVariantSelect('cab');
     setStat('loading cab…');
     window.ensureAudio&&window.ensureAudio();
     const ac=window.getAC&&window.getAC();
@@ -1057,6 +1107,7 @@ window.T3K=T3K;
     try{
       const res=await T3K.listModels(tone.id); const models=res.data||res;
       if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No models available for this tone in the selected architecture.</div>'; return; }
+      tone.models=models;
       if(models.length===1){ await loadToneModel(tone,models[0]); return; }
       renderModelVariants(tone,models);
     }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
@@ -1072,19 +1123,23 @@ window.T3K=T3K;
     t3kResults.querySelectorAll('.t3kModelRow').forEach(row=>row.addEventListener('click',()=>loadToneModel(tone,models[parseInt(row.dataset.i,10)])));
     const back=document.getElementById('t3kVariantsBack'); if(back) back.addEventListener('click',()=>runSearch());
   }
-  async function loadToneModel(tone,model){
+  async function loadToneModel(tone,model,opts){
+    opts=opts||{};
     if(!model||!model.model_url){ setStat('selected model has no download URL'); return; }
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading '+escapeT3k(model.name||'model')+'…</div>';
     if(t3kPager) t3kPager.innerHTML='';
     try{
-      const blob=await T3K.downloadModel(model.model_url); const slot=t3kTargetSlot||'amp';
+      const blob=await T3K.downloadModel(model.model_url); const slot=opts.slotOverride||t3kTargetSlot||'amp';
       const isIR=(tone.format==='ir')||(slot==='cab');
       const label=(tone.title||'TONE3000 tone')+(model.name?' — '+model.name:'');
       if(isIR){ await loadIrBlob(blob,label); }
       else { applyNam(await blob.text(),slot==='cab'?'amp':slot,label); }
       const target=isIR?'cab':(slot==='cab'?'amp':slot);
-      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=model.id==null?null:String(model.id); S[target].modelName=model.name||''; }
-      modal.style.display='none';
+      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=model.id==null?null:String(model.id); S[target].modelName=model.name||''; S[target].toneTitle=tone.title||tone.name||S[target].toneTitle||'';
+        if(Array.isArray(tone.models)) S[target].variants=tone.models;
+        if(!S[target].variants||!S[target].variants.length) { try{ const vr=await T3K.listModels(tone.id); S[target].variants=(vr&&vr.data)||vr||[]; }catch(e){ S[target].variants=[model]; } }
+        refreshVariantSelect(target); }
+      if(opts.keepModal!==true) modal.style.display='none';
     }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+escapeT3k(msg)+'</div>';
       console.warn('[T3K] model load failed:',err); }
