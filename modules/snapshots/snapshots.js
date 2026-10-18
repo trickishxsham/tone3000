@@ -1,9 +1,9 @@
-// modules/snapshot/snapshots.js
-// version: 4.9.8.886
+// modules/snapshots/snapshots.js
+// version: 4.9.8.888
 // A–G snapshot orchestration, random starter rigs, overwrite workflow, and portable export.
 (function(){
 'use strict';
-var VERSION='4.9.8.887', LETTERS='ABCDEFG', FORMAT='IMPROVS2-RIG-SNAPSHOTS';
+var VERSION='4.9.8.888', LETTERS='ABCDEFG', FORMAT='IMPROVS2-RIG-SNAPSHOTS';
 var GENERATE_INTENT='improvs2_snapshot_randomize_pending';
 function el(id){return document.getElementById(id);}
 function status(msg){var s=el('rigSnapStat');if(s)s.textContent=msg;try{if(window.RigSnapshotBridge)window.RigSnapshotBridge.setStatus(msg);}catch(e){}}
@@ -51,9 +51,6 @@ async function candidates(gear,format){
     if(out.length)break;
   }
   var seen={};out=out.filter(function(t){var id=t&&t.id;if(id==null||seen[String(id)])return false;seen[String(id)]=1;return String(t.format||format).toLowerCase()===format;});
-  // Preserve the gear category returned by the query. This is essential: amp+cab NAMs
-  // already contain a cabinet response and must never be paired with an extra IR.
-  out.forEach(function(t){try{t._snapshotGear=gear;}catch(e){}});
   return out;
 }
 async function chooseModel(tone){
@@ -109,29 +106,31 @@ async function generateRandomSnapshots(){
   status('Finding your seven specified pedal tones…');
   var ampOnlyPool=await candidates('amp','nam');
   var ampCabPool=await candidates('amp-cab','nam');
-  var ampPool=ampOnlyPool.concat(ampCabPool);
-  var irPool=[];try{irPool=await candidates('cab','ir');}catch(e){}
-  if(!ampPool.length)throw new Error('TONE3000 returned no amp/amp+cabinet NAM candidates.');
-  var irLetters=['A','C','E','G'];
-  if(!ampOnlyPool.length)throw new Error('No amp-only NAM candidates were returned; an IR must not be combined with an amp+cabinet NAM.');
-  if(!irPool.length)throw new Error('No IR candidates were returned, so the four IR snapshots cannot be built safely.');
+  var irPool=await candidates('cab','ir');
+  if(ampOnlyPool.length<1)throw new Error('TONE3000 returned no amp-only NAM candidates.');
+  if(ampCabPool.length<1)throw new Error('TONE3000 returned no amp+cabinet NAM candidates.');
+  if(!irPool.length)throw new Error('TONE3000 returned no IR candidates; cannot build four amp-only snapshots safely.');
+  // Randomly choose exactly four of the seven snapshot letters for amp-only + IR.
+  var irLetters=[]; while(irLetters.length<4){var letter=rand(LETTERS.split(''));if(irLetters.indexOf(letter)<0)irLetters.push(letter);}
   var completed=[];
   for(var i=0;i<PEDAL_PRESETS.length;i++){
-    var spec=PEDAL_PRESETS[i],idx=i;
+    var spec=PEDAL_PRESETS[i],idx=i,needsIr=irLetters.indexOf(spec.letter)>=0;
     status('Building snapshot '+spec.letter+': '+spec.query+' ('+(i+1)+'/7)…');
     var pedalTone=await findNamedPedal(spec), pedalModel=await chooseModel(pedalTone);
     await bridge.loadT3KModel('pedal',pedalTone,pedalModel);
-    var useIR=irLetters.indexOf(spec.letter)!==-1;
-    // A/C/E/G deliberately use amp-only NAMs so their additional IR is valid.
-    // B/D/F may use either an amp-only or an amp+cabinet NAM and never get an extra IR.
-    var ampChoice=await loadRandomSlot('amp',useIR?ampOnlyPool:ampPool,'amp/amp+cabinet');
-    bridge.clearIR();
-    if(useIR){await loadRandomSlot('cab',irPool,'IR');}
+    if(needsIr){
+      await loadRandomSlot('amp',ampOnlyPool.slice(),'amp-only');
+      bridge.clearIR();
+      await loadRandomSlot('cab',irPool.slice(),'IR');
+    }else{
+      await loadRandomSlot('amp',ampCabPool.slice(),'amp+cabinet');
+      bridge.clearIR();
+    }
     await bridge.saveCurrent(idx);
     completed.push(spec.letter);
   }
   localStorage.removeItem(GENERATE_INTENT);
-  status('Built A–G. A/C/E/G use amp-only NAMs plus an IR; B/D/F use a random amp-only or amp+cabinet NAM without an extra IR. Tweak a rig, then SAVE and tap its letter to overwrite it.');
+  status('Built A–G with your seven pedal choices and random amp/amp+cabinet models. Tweak a rig, then SAVE and tap its letter to overwrite it.');
   return {filled:completed.length,letters:completed};
 }
 function bind(){
