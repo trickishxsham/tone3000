@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.900-mayer-dsp
+// version: 4.9.8.905-16k-adaptive-buffer
 // Legacy NAMRealtime compatibility layer + eight-slot stereo NAM rig and chain DSP
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.900';
+var MODULE_VERSION = '4.9.8.905';
 var _booted=false;
 var _uiBound=false;
 
@@ -234,7 +234,7 @@ const NAMRealtime = (function(){
       const em=emitChain(spec);
       const module=await WebAssembly.compile(em.bytes);
       if(tok!==_buildTok[slot]) return;                    // superseded
-      const msg={type:'model', module, layout:em.layout};
+      const msg={type:'model', module, layout:em.layout, modelRate:Number(spec.sampleRate)||Number(ac&&ac.sampleRate)||44100};
       if(slot==='pedal'){ if(nodePedal){ ready=false; nodePedal.port.postMessage(msg,_xfer(msg)); } else pendingPedal=msg; }
       else { if(nodeAmp){ ready=false; nodeAmp.port.postMessage(msg,_xfer(msg)); } else pendingAmp=msg; }
     }catch(err){
@@ -279,7 +279,7 @@ const NAMRealtime = (function(){
 
     // memory layout (f32 indices)
     let idx=0;
-    const IO_IN=idx; idx+=128; const IO_OUT=idx; idx+=128;
+    const IO_CAP=512; const IO_IN=idx; idx+=IO_CAP; const IO_OUT=idx; idx+=IO_CAP;
     const S_cond=idx; idx+=1;                       // raw dry sample: la0 input AND every mixin's condition
     const writesF=[], writesI=[];
     const las=spec.layerArrays.map((la)=>{
@@ -296,8 +296,12 @@ const NAMRealtime = (function(){
       r.PT=idx; idx+=la.dilations.length*7;
       return r;
     });
-    for(let i=1;i<las.length;i++)
-      if(las[i].la.inputSize!==las[i-1].la.headOut) throw new Error('realtime NAM: layer-array chain size mismatch');
+    // Match NAMEngine.process: the next layer-array consumes the previous array's
+    // head output (xViews = hout.views). Channel counts may differ between arrays.
+    for(let i=1;i<las.length;i++){
+      if(las[i].la.inputSize!==las[i-1].la.headOut)
+        throw new Error('realtime NAM: layer-array input size does not match previous head output');
+    }
     const totalF32=idx;
     // per-la weight offsets + param table (written by the worklet via writesI)
     for(const r of las){
@@ -329,6 +333,8 @@ const NAMRealtime = (function(){
       P(SC(S_cond,G(X)));
       las.forEach((r,ai)=>{
         const la=r.la, C=la.channels, N=la.dilations.length;
+        // Matches NAMEngine.process(): each array re-channels the previous array's
+        // head output. The raw dry sample remains the conditioning input for every array.
         const inBase = ai===0 ? S_cond : las[ai-1].S_out;
         const slope=la.slopes[0];
         // rechannel: cur[c]=sum_ic rech[c*inputSize+ic]*in[ic] (small -> unroll)
@@ -398,54 +404,150 @@ const NAMRealtime = (function(){
   const PROCESSOR_SRC = `
 class NAMProcessor extends AudioWorkletProcessor {
   constructor(){
-    super();
-    this.cur=null; this.next=null; this.bypass=true; this._pinged=false;
-    this._ovr=0; this._fade=0;
+    super(); this.cur=null; this.next=null; this.bypass=true; this._pinged=false;
+    this._slow=0; this._overruns=0; this._fade=0; this._warnedMax=false;
+    this._srcQ=null; this._wetQ=[]; this._dryQ=[]; this._qRead=0; this._rateKey=''; this._streamReady=false;
     this.port.onmessage=(e)=>{
       const d=e.data;
       if(d.type==='model'){
         try{
-          const inst=new WebAssembly.Instance(d.module);   // module precompiled on main thread
+          const inst=new WebAssembly.Instance(d.module);
           const buf=inst.exports.m.buffer;
           const memF=new Float32Array(buf), memI=new Int32Array(buf);
           for(const w of d.layout.writesF) memF.set(w.data, w.off);
           for(const w of d.layout.writesI) memI.set(w.data, w.off);
-          this.next={ p:inst.exports.p, memF, ioIn:d.layout.ioIn, ioOut:d.layout.ioOut };
-          this.bypass=false; this._pinged=false; this._ovr=0;
-          this.port.postMessage({type:'ready'});
-        }catch(err){ this.port.postMessage({type:'error',msg:err.message}); }
-      }
-      else if(d.type==='bypass'){ this.bypass=d.value; }
+          this.next={p:inst.exports.p,memF,ioIn:d.layout.ioIn,ioOut:d.layout.ioOut,
+            modelRate:Number(d.modelRate)||sampleRate,blockSize:160,outHistory:new Array(16).fill(0)};
+          this.bypass=false; this._pinged=false; this._slow=0; this._overruns=0; this._warnedMax=false;
+          this._resetQueues(); this.port.postMessage({type:'ready',modelRate:this.next.modelRate,hostRate:sampleRate,blockSize:160});
+        }catch(err){this.port.postMessage({type:'error',msg:err.message});}
+      } else if(d.type==='bypass') this.bypass=d.value;
     };
   }
-  process(inputs,outputs){
-    const inp=inputs[0], out=outputs[0];
-    if(!inp||!inp.length){ return true; }
-    const inCh=inp[0], L=inCh.length;
-    const outL=out[0], outR=out[1]||out[0];
-    if(this.next){ this.cur=this.next; this.next=null; this._fade=128; }  // swap at block edge
-    const m=this.cur;
-    if(this.bypass||!m){ for(let i=0;i<L;i++){ outL[i]=inCh[i]; if(out[1])outR[i]=inCh[i]; } return true; }
-    if(!this._pinged){ this._pinged=true; this.port.postMessage({type:'processing'}); }
-    const t0=(typeof performance!=='undefined'&&performance.now)?performance.now():0;
-    let off=0;
-    while(off<L){                                     // io region is 128 floats — chunk if bigger
-      const n=Math.min(128,L-off);
-      for(let i=0;i<n;i++) m.memF[m.ioIn+i]=inCh[off+i];
-      m.p(n);
-      if(this._fade>0){
-        const F=128;
-        for(let i=0;i<n;i++){ const done=128-this._fade+i; const g=done<F? done/F : 1;
-          const y=m.memF[m.ioOut+i]*g + inCh[off+i]*(1-g); outL[off+i]=y; if(out[1])outR[off+i]=y; }
-        this._fade=Math.max(0,this._fade-n);
-      } else {
-        for(let i=0;i<n;i++){ const y=m.memF[m.ioOut+i]; outL[off+i]=y; if(out[1])outR[off+i]=y; }
-      }
-      off+=n;
+  _resetQueues(){
+    this._srcQ=null; this._wetQ=[]; this._dryQ=[]; this._qRead=0; this._rateKey=''; this._streamReady=false; this._planKey='';
+  }
+  _sinc(x){ if(Math.abs(x)<1e-8)return 1; const p=Math.PI*x; return Math.sin(p)/p; }
+  _makeQueue(m){
+    const ratio=sampleRate/m.modelRate;
+    const radius=Math.max(8,Math.ceil(8*Math.max(1,ratio)));
+    this._srcRadius=radius; this._ratio=ratio; this._sameRate=Math.abs(sampleRate-m.modelRate)<1;
+    this._hostRate=sampleRate; this._rateKey=sampleRate+':'+m.modelRate;
+    this._srcQ=new Array(radius).fill(0); this._wetQ=[]; this._dryQ=[]; this._qRead=0; this._streamReady=false; this._planKey='';
+    this._buildPlans(m,m.blockSize);
+  }
+  _buildPlans(m,B){
+    const ratio=this._ratio,H=Math.max(1,Math.round(B*sampleRate/m.modelRate)),R=this._srcRadius;
+    this._hostCount=H; this._planKey=B+':'+H;
+    this._downStart=new Int32Array(B); this._downWeights=new Array(B);
+    this._upStart=new Int32Array(H); this._upWeights=new Array(H);
+    if(this._sameRate)return;
+    const cutoff=Math.min(1,1/ratio)*0.94;
+    for(let i=0;i<B;i++){
+      const pos=R+i*ratio,base=Math.floor(pos),frac=pos-base,start=base-R+1,w=new Float32Array(R*2);let sum=0;
+      for(let j=0;j<w.length;j++){const k=-R+1+j,d=frac-k,ad=Math.abs(d);let v=0;if(ad<R)v=cutoff*this._sinc(cutoff*d)*this._sinc(d/R);w[j]=v;sum+=v;}
+      if(Math.abs(sum)>1e-9)for(let j=0;j<w.length;j++)w[j]/=sum;
+      this._downStart[i]=start;this._downWeights[i]=w;
     }
-    if(t0){ const dt=performance.now()-t0; const budgetMs=(L/sampleRate)*1000;
-      if(dt>budgetMs*0.7){ this._ovr++; if(this._ovr===20){ this.port.postMessage({type:'overrun'}); } }
-      else if(this._ovr>0){ this._ovr--; } }
+    const RU=8;
+    for(let i=0;i<H;i++){
+      const pos=i/ratio-RU,base=Math.floor(pos),frac=pos-base,start=base-RU+1,w=new Float32Array(RU*2);let sum=0;
+      for(let j=0;j<w.length;j++){const k=-RU+1+j,d=frac-k,ad=Math.abs(d);let v=0;if(ad<RU)v=this._sinc(d)*this._sinc(d/RU);w[j]=v;sum+=v;}
+      if(Math.abs(sum)>1e-9)for(let j=0;j<w.length;j++)w[j]/=sum;
+      this._upStart[i]=start;this._upWeights[i]=w;
+    }
+  }
+  _getModelOut(k,cur,m){
+    const n=cur.length;
+    if(k<0){const j=m.outHistory.length+k;return j>=0?m.outHistory[j]:0;}
+    if(k>=n)return cur[n-1]||0;
+    return cur[k];
+  }
+  _lanczosInput(q,pos,radius,cutoff){
+    const lo=Math.max(0,Math.floor(pos-radius)+1), hi=Math.min(q.length-1,Math.floor(pos+radius));
+    let sum=0,ws=0;
+    for(let k=lo;k<=hi;k++){
+      const d=pos-k, ad=Math.abs(d); if(ad>=radius)continue;
+      const w=cutoff*this._sinc(cutoff*d)*this._sinc(d/radius);
+      sum+=q[k]*w; ws+=w;
+    }
+    return Math.abs(ws)>1e-9?sum/ws:0;
+  }
+  _lanczosOutput(pos,cur,m){
+    const radius=8, lo=Math.floor(pos-radius)+1, hi=Math.floor(pos+radius);
+    let sum=0,ws=0;
+    for(let k=lo;k<=hi;k++){
+      const d=pos-k, ad=Math.abs(d); if(ad>=radius)continue;
+      const w=this._sinc(d)*this._sinc(d/radius);
+      sum+=this._getModelOut(k,cur,m)*w; ws+=w;
+    }
+    return Math.abs(ws)>1e-9?sum/ws:0;
+  }
+  _enqueueBlock(m,sourceStart,hostCount,modelOut,wet){
+    const q=this._srcQ, radius=this._srcRadius, ratio=this._ratio, B=m.blockSize;
+    const dry=new Float32Array(hostCount);
+    // Align the bypass crossfade with the resampler's eight-model-sample causal delay.
+    const delay= this._sameRate ? 0 : 8*ratio;
+    for(let i=0;i<hostCount;i++){
+      const p=radius+i-delay, a=Math.floor(p), f=p-a;
+      const x0=q[Math.max(0,Math.min(q.length-1,a))]||0;
+      const x1=q[Math.max(0,Math.min(q.length-1,a+1))]||0;
+      dry[i]=x0+(x1-x0)*f;
+    }
+    for(let i=0;i<hostCount;i++){
+      let y;
+      if(this._sameRate)y=modelOut[i]||0;
+      else {const start=this._upStart[i],w=this._upWeights[i];let v=0;for(let j=0;j<w.length;j++)v+=this._getModelOut(start+j,modelOut,m)*w[j];y=v;}
+      wet[i]=y;
+    }
+    for(let i=0;i<hostCount;i++){this._wetQ.push(wet[i]);this._dryQ.push(dry[i]);}
+    if(this._wetQ.length-this._qRead>=2*hostCount)this._streamReady=true;
+  }
+  process(inputs,outputs){
+    const inp=inputs[0],out=outputs[0];
+    if(!inp||!inp.length)return true;
+    const inCh=inp[0],L=inCh.length,outL=out[0],outR=out[1]||out[0];
+    if(this.next){this.cur=this.next;this.next=null;this._resetQueues();this._fade=128;}
+    const m=this.cur;
+    if(this.bypass||!m){for(let i=0;i<L;i++){outL[i]=inCh[i];if(out[1])outR[i]=inCh[i];}return true;}
+    if(!this._pinged){this._pinged=true;this.port.postMessage({type:'processing',modelRate:m.modelRate,hostRate:sampleRate});}
+    if(!this._srcQ||this._rateKey!==sampleRate+':'+m.modelRate)this._makeQueue(m);
+    for(let i=0;i<L;i++)this._srcQ.push(inCh[i]);
+    let workMs=0;
+    // At most one NAM block per render quantum: never burst four blocks on the audio thread.
+    const B=m.blockSize, ratio=this._ratio, radius=this._srcRadius;
+    const H=Math.max(1,Math.round(B*sampleRate/m.modelRate));
+    const planKey=B+':'+H;if(this._planKey!==planKey)this._buildPlans(m,B);
+    if(this._srcQ.length>=radius+H+radius){
+      const t0=performance.now?performance.now():0;
+      const q=this._srcQ, modelIn=new Float32Array(B), modelOut=new Float32Array(B);
+      if(this._sameRate){for(let i=0;i<B;i++)modelIn[i]=q[radius+i]||0;}
+      else {
+        for(let i=0;i<B;i++){const start=this._downStart[i],w=this._downWeights[i];let v=0;for(let j=0;j<w.length;j++)v+=(q[start+j]||0)*w[j];modelIn[i]=v;}
+      }
+      m.memF.set(modelIn,m.ioIn);m.p(B);modelOut.set(m.memF.subarray(m.ioOut,m.ioOut+B));
+      this._enqueueBlock(m,0,H,modelOut,new Float32Array(H));
+      m.outHistory=m.outHistory.concat(Array.from(modelOut)).slice(-16);
+      // Slide by H while retaining the most recent R samples as FIR history.
+      q.splice(0,H);
+      if(t0){const dt=performance.now()-t0;workMs=dt;const budgetMs=(B/m.modelRate)*1000;
+        // Increase only when the block is still inside its budget but losing headroom.
+        if(dt>budgetMs*0.62&&dt<budgetMs*0.9)this._slow++;else this._slow=0;
+        if(this._slow>=2){
+          const steps=[160,192,240,320,480],at=steps.indexOf(m.blockSize);
+          if(at>=0&&at<steps.length-1){m.blockSize=steps[at+1];this._slow=0;this._planKey='';this.port.postMessage({type:'buffer',blockSize:m.blockSize,modelRate:m.modelRate,reason:'processing headroom'});}
+          else if(at===steps.length-1&&!this._warnedMax){this._warnedMax=true;this.port.postMessage({type:'overrun',blockSize:m.blockSize,modelRate:m.modelRate,reason:'maximum block reached'});}
+        }
+      }
+    }
+    for(let i=0;i<L;i++){
+      let y=0,dry=0;
+      if(this._streamReady&&this._qRead<this._wetQ.length){y=this._wetQ[this._qRead]||0;dry=this._dryQ[this._qRead]||0;this._qRead++;}
+      if(this._fade>0){const g=(128-this._fade)/128;y=dry*(1-g)+y*g;this._fade--;}
+      outL[i]=y;if(out[1])outR[i]=y;
+    }
+    if(this._qRead>4096){this._wetQ=this._wetQ.slice(this._qRead);this._dryQ=this._dryQ.slice(this._qRead);this._qRead=0;}
+    if(workMs>0){const callbackMs=(L/sampleRate)*1000;if(workMs>callbackMs*0.8){this._overruns++;if(this._overruns>=2)this.port.postMessage({type:'deadline-risk',workMs:+workMs.toFixed(2),callbackMs:+callbackMs.toFixed(2),blockSize:m.blockSize});}else this._overruns=Math.max(0,this._overruns-1);}
     return true;
   }
 }
@@ -535,36 +637,106 @@ registerProcessor('nam-processor',NAMProcessor);
 
   // flatten a NAM json (or SlimmableContainer tier) into the emitter's spec.
   function flattenModel(json,tier){
-    let arch=json.architecture, cfg=json.config, sr=json.sample_rate;
+    if(!json || typeof json!=='object') throw new Error('realtime NAM: invalid model JSON');
+    let arch=json.architecture, cfg=json.config, sr=json.sample_rate, weights;
     if(arch==='SlimmableContainer'){
-      const subs=cfg.submodels;
-      const pick=tier!=null?subs.find(s=>s.max_value===tier):subs.reduce((a,b)=>b.max_value>a.max_value?b:a);
-      arch=pick.model.architecture; cfg=pick.model.config; sr=json.sample_rate||sr;
-      var weights=pick.model.weights;
+      const subs=cfg&&cfg.submodels;
+      if(!Array.isArray(subs)||!subs.length) throw new Error('realtime NAM: SlimmableContainer has no submodels');
+      // A2 Slimmable files contain Lite and Full tiers. Unless explicitly requested,
+      // select the smallest tier (A2 Lite) instead of the previous Full-first default.
+      const pick=tier!=null
+        ? subs.find(x=>Number(x.max_value)===Number(tier))
+        : subs.reduce((a,b)=>Number(b.max_value)<Number(a.max_value)?b:a);
+      if(!pick||!pick.model) throw new Error('realtime NAM: requested SlimmableContainer tier is unavailable');
+      arch=pick.model.architecture; cfg=pick.model.config; sr=pick.model.sample_rate||json.sample_rate||sr; weights=pick.model.weights;
     } else weights=json.weights;
-    if(arch!=='WaveNet') throw new Error('realtime NAM: only WaveNet supported');
-    let wp=0; const nextN=(n)=>{ const s=weights.slice(wp,wp+n); wp+=n; return s; };
-    const layerArrays=cfg.layers.map(lc=>{
-      const gated=Array.isArray(lc.gating_mode)?lc.gating_mode.some(g=>g&&g!=='none'):!!lc.gating_mode;
-      if(gated) throw new Error('realtime NAM: gated path unsupported');
-      if(lc.bottleneck!==undefined && lc.bottleneck!==lc.channels) throw new Error('realtime NAM: bottleneck unsupported');
-      for(const k of ['conv_pre_film','conv_post_film','input_mixin_pre_film','input_mixin_post_film','activation_pre_film','activation_post_film','layer1x1_post_film','head1x1_post_film']) if(lc[k]&&lc[k].active) throw new Error('realtime NAM: FiLM unsupported');
-      const C=lc.channels, N=lc.dilations.length;
-      const slopes=lc.dilations.map((_,i)=>{ const a=Array.isArray(lc.activation)?lc.activation[i]:lc.activation; return (a&&a.negative_slope!=null)?a.negative_slope:0.01; });
-      // count total weights for this layer-array in exact consumption order, then slice one flat block
-      const head=lc.head; let count=C*lc.input_size;
-      for(let i=0;i<N;i++){ const k=lc.kernel_sizes[i]; count+=C*C*k + C + C*lc.condition_size + C*C + C; }
-      count += head.out_channels*C*head.kernel_size + (head.bias?head.out_channels:0);
+    if(arch!=='WaveNet') throw new Error('realtime NAM: unsupported architecture '+String(arch));
+    if(!cfg||!Array.isArray(cfg.layers)||!cfg.layers.length) throw new Error('realtime NAM: WaveNet config has no layers');
+    if(cfg.condition_dsp) throw new Error('realtime NAM: models with condition_dsp are not supported by the realtime path');
+    if(cfg.head!=null) throw new Error('realtime NAM: top-level WaveNet head is not supported by the realtime path');
+    if(!Array.isArray(weights) && !ArrayBuffer.isView(weights)) throw new Error('realtime NAM: model weights are missing');
+    let wp=0;
+    const nextN=(n)=>{
+      if(!Number.isInteger(n)||n<0) throw new Error('realtime NAM: invalid computed weight count');
+      const part=weights.slice(wp,wp+n);
+      if(part.length!==n) throw new Error('realtime NAM: truncated weights (expected '+n+' values at offset '+wp+')');
+      wp+=n; return part;
+    };
+    function activationSlope(a,layerIndex){
+      if(a==null) return 0.01; // legacy NAM default is LeakyReLU(0.01)
+      if(typeof a==='string'){
+        const t=a.toLowerCase().replace(/[ _-]/g,'');
+        if(t==='leakyrelu'||t==='lrelu') return 0.01;
+        if(t==='relu') return 0;
+        throw new Error('realtime NAM: unsupported activation '+a+' (only LeakyReLU/ReLU are supported)');
+      }
+      if(typeof a!=='object') throw new Error('realtime NAM: invalid activation descriptor');
+      const type=String(a.type||a.name||'').toLowerCase().replace(/[ _-]/g,'');
+      if(type && !['leakyrelu','lrelu','relu','prelu'].includes(type))
+        throw new Error('realtime NAM: unsupported activation '+(a.type||a.name)+' (supported: LeakyReLU, ReLU, uniform PReLU)');
+      if(type==='relu') return 0;
+      if(a.negative_slope!=null){
+        const slope=Number(a.negative_slope);
+        if(!Number.isFinite(slope)||slope<0)throw new Error('realtime NAM: invalid activation negative_slope');
+        return slope;
+      }
+      // A2 PReLU can expose per-channel slopes. This emitter has one slope per layer,
+      // so permit it only when every channel uses the same finite, non-negative value.
+      if(Array.isArray(a.negative_slopes)&&a.negative_slopes.length){
+        const first=Number(a.negative_slopes[0]);
+        if(!Number.isFinite(first)||first<0||!a.negative_slopes.every(v=>Number(v)===first))
+          throw new Error('realtime NAM: channel-wise PReLU slopes are not supported');
+        return first;
+      }
+      if(type==='prelu')throw new Error('realtime NAM: PReLU is missing its negative slope');
+      return 0.01;
+    }
+    const layerArrays=cfg.layers.map((raw,idx)=>{
+      const lc=Object.assign({},raw);
+      const C=Number(lc.channels), N=Array.isArray(lc.dilations)?lc.dilations.length:0;
+      if(!Number.isInteger(C)||C<1||!N) throw new Error('realtime NAM: invalid layer-array dimensions at index '+idx);
+      const gating=lc.gating_mode;
+      const gated=lc.gated===true || (Array.isArray(gating)?gating.some(g=>g&&String(g).toLowerCase()!=='none'):!!(gating&&String(gating).toLowerCase()!=='none'));
+      if(gated) throw new Error('realtime NAM: gated/blended activation is not supported by the realtime path');
+      if(lc.bottleneck!==undefined && lc.bottleneck!==C) throw new Error('realtime NAM: bottleneck is not supported by the realtime path');
+      for(const k of ['conv_pre_film','conv_post_film','input_mixin_pre_film','input_mixin_post_film','activation_pre_film','activation_post_film','layer1x1_post_film','head1x1_post_film','1x1_post_film'])
+        if(lc[k]&&lc[k].active!==false) throw new Error('realtime NAM: FiLM feature '+k+' is not supported by the realtime path');
+      const h1=lc.head1x1||lc.head_1x1;
+      if(h1&&h1.active) throw new Error('realtime NAM: active per-layer head1x1 is not supported by the realtime path');
+      const layer1=lc.layer1x1||lc.layer_1x1||lc['1x1'];
+      if(layer1&&layer1.active===false) throw new Error('realtime NAM: disabled layer1x1 is not supported by the realtime path');
+      if((lc.groups_input!=null&&Number(lc.groups_input)!==1) || (lc.groups_input_mixin!=null&&Number(lc.groups_input_mixin)!==1) || (lc.groups_1x1!=null&&Number(lc.groups_1x1)!==1) || (lc['1x1_groups']!=null&&Number(lc['1x1_groups'])!==1) || (layer1&&layer1.groups!=null&&Number(layer1.groups)!==1))
+        throw new Error('realtime NAM: grouped convolutions are not supported by the realtime path');
+      // A2 WaveNet config uses scalar kernel_size + head_size/head_bias. Older A1 files
+      // use kernel_sizes[] + a per-array head descriptor. Normalize the simple A2 form
+      // into the same internal representation; their weight order is identical when
+      // there is no active head1x1, bottleneck, gating, or FiLM.
+      if(!Array.isArray(lc.kernel_sizes) && Number.isInteger(lc.kernel_size))
+        lc.kernel_sizes=Array(N).fill(lc.kernel_size);
+      if(!lc.head && Number.isInteger(lc.head_size))
+        lc.head={out_channels:lc.head_size,kernel_size:1,bias:!!lc.head_bias};
+      if(!Array.isArray(lc.kernel_sizes)||lc.kernel_sizes.length!==N||!lc.kernel_sizes.every(k=>Number.isInteger(k)&&k>=1))
+        throw new Error('realtime NAM: unsupported kernel configuration in layer array '+idx);
+      const head=lc.head;
+      if(!head||!Number.isInteger(head.out_channels)||head.out_channels<1||!Number.isInteger(head.kernel_size)||head.kernel_size<1)
+        throw new Error('realtime NAM: unsupported head configuration in layer array '+idx);
+      const inputSize=Number(lc.input_size), condSize=Number(lc.condition_size);
+      if(!Number.isInteger(inputSize)||inputSize<1||!Number.isInteger(condSize)||condSize<1)
+        throw new Error('realtime NAM: invalid input/condition size in layer array '+idx);
+      const act=lc.activation;
+      const slopes=Array.from({length:N},(_,i)=>activationSlope(Array.isArray(act)?act[i]:act,i));
+      let count=C*inputSize;
+      for(let i=0;i<N;i++) count+=C*C*lc.kernel_sizes[i]+C+C*condSize+C*C+C;
+      count+=head.out_channels*C*head.kernel_size+(head.bias?head.out_channels:0);
       const block=Float32Array.from(nextN(count));
-      return { inputSize:lc.input_size, condSize:lc.condition_size, channels:C,
-               dilations:lc.dilations.slice(), kernelSizes:lc.kernel_sizes.slice(), slopes,
-               headOut:head.out_channels, headK:head.kernel_size, headBias:!!head.bias, weights:block };
+      return {inputSize,condSize,channels:C,dilations:lc.dilations.slice(),kernelSizes:lc.kernel_sizes.slice(),slopes,headOut:head.out_channels,headK:head.kernel_size,headBias:!!head.bias,weights:block};
     });
-    const headScale=weights[wp];
-    const maxKernel=Math.max.apply(null, cfg.layers.map(l=>Math.max(l.head.kernel_size,Math.max.apply(null,l.kernel_sizes))));
-    return { layerArrays, headScale, maxKernel, sampleRate:sr };
+    const headScale=Number(weights[wp]);
+    if(!Number.isFinite(headScale)) throw new Error('realtime NAM: missing or invalid head_scale');
+    if(wp+1!==weights.length) throw new Error('realtime NAM: weight count mismatch (consumed '+(wp+1)+' of '+weights.length+')');
+    const maxKernel=Math.max.apply(null,layerArrays.map(l=>Math.max(l.headK,Math.max.apply(null,l.kernelSizes))));
+    return {layerArrays,headScale,maxKernel,sampleRate:sr};
   }
-
   return { route, setModel, setBypass, setInputGain, setIR, setParam, setFxEnabled,
            get pedalOn(){return _pedalOn;}, get ampOn(){return _ampOn;}, get irOn(){return _irOn;},
            get active(){return active;}, get ready(){return ready;}, flattenModel, emitChain };
@@ -1268,7 +1440,7 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* Build 898: independent eight-NAM stereo rig integration. */
+/* Build 903: signal-flow and stereo-routing corrections; retains Build 902 A2 Lite guards. */
 // IMPROVS2 Build 895 — independent eight-NAM stereo rig layer.
 // Left L1–L4 and Right R1–R4 use independent AudioWorklet processors. Each chain has its
 // own IR convolver and pan control. Existing 3-slot snapshots are migrated when recalled.
@@ -1276,7 +1448,7 @@ if(!namReady() && typeof window.loadModule === 'function'){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.900';
+const VERSION='4.9.8.905';
 const NAM_KEYS=['L1','L2','L3','L4','R1','R2','R3','R4'];
 const SIDES=['L','R'];
 const LABELS={L1:'NAM L1',L2:'NAM L2',L3:'NAM L3',L4:'NAM L4',R1:'NAM R1',R2:'NAM R2',R3:'NAM R3',R4:'NAM R4'};
@@ -1285,7 +1457,10 @@ const IR={L:{loaded:false,enabled:true,buffer:null,name:'Empty',toneId:null,mode
 const PAN={L:-0.75,R:0.75};
 const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5.6,trebleFreq:3000,treble:4.7,highCut:12000,reverb:8,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0};
 const DSP={L:Object.assign({},DSP_DEFAULT),R:Object.assign({},DSP_DEFAULT)};
-let ctx=null, source=null, splitter=null, panners={}, convolver={}, sideFx={}, fileTarget=null, t3kTarget=null;
+let ctx=null, source=null, inputSplitter=null, mixBus=null, mixDC=null, panRoutes={}, convolver={}, sideFx={}, fileTarget=null, t3kTarget=null;
+const INPUT_MODE_KEY='improvs2.rig.inputMode';
+function readInputMode(){try{const v=window.localStorage.getItem(INPUT_MODE_KEY);return ['stereo','left','right'].includes(v)?v:'stereo';}catch(e){return 'stereo';}}
+let inputMode=readInputMode();
 let snapshotSaveMode=false;
 const SNAPSHOTS=[null,null,null,null,null,null,null];
 function el(id){return document.getElementById(id);}
@@ -1328,41 +1503,136 @@ function dspControlsMarkup(side){
 }
 function paintDSPControls(){SIDES.forEach(side=>{const f=DSP[side];const bar=document.querySelector('.nam8-dspbar[data-dsp-side="'+side+'"]'),root=bar&&bar.parentNode;if(!root)return;const comp=root.querySelector('.nam8-comp-on');if(comp)comp.checked=!!f.compOn;const eq=root.querySelector('.nam8-eq-on');if(eq)eq.checked=!!f.eqOn;root.querySelectorAll('.nam8-dsp-param').forEach(input=>{const key=input.dataset.param,c=DSP_CONTROLS.find(x=>x.key===key);if(c){input.value=String(f[key]);const out=root.querySelector('output[data-dsp-value="'+key+'"][data-side="'+side+'"]');if(out)out.textContent=dspDisplayValue(c,f[key]);}});});}
 function paintSnapshots(){for(let i=0;i<7;i++){const b=snapshotButton(i);if(!b)continue;const has=!!SNAPSHOTS[i],h=b.dataset.hue||'#fbbf24';b.style.color=has?'#0b0b0b':h;b.style.background=has?h:(snapshotSaveMode?'#2a1a05':'rgba(10,10,10,0.55)');b.style.borderColor=snapshotSaveMode?'#b45309':h;b.style.boxShadow=has?'0 0 8px '+h+'88':'none';b.style.opacity=has?'1':'0.75';}const b=document.querySelector('#rigSnapRow .rigSnapSave');if(b){b.style.background=snapshotSaveMode?'#b45309':'#2a1a05';b.style.color=snapshotSaveMode?'#000':'#fbbf24';}}
-function paintRig(){NAM_KEYS.forEach(k=>{const row=document.querySelector('[data-nam8-slot="'+k+'"]');if(!row)return;const n=row.querySelector('.nam8-name');if(n)n.textContent=NAM[k].name||'Empty';const en=row.querySelector('.nam8-enabled');if(en)en.checked=!!NAM[k].enabled;const cl=row.querySelector('.nam8-clear');if(cl)cl.style.display=NAM[k].loaded?'inline-block':'none';const tier=row.querySelector('.nam8-tier');if(tier){tier.style.display=(tier.options.length>1)?'inline-block':'none';if(NAM[k].tier!=null)tier.value=String(NAM[k].tier);}});SIDES.forEach(s=>{const de=document.querySelector('.nam8-dsp-enable[data-side="'+s+'"]');if(de)de.checked=!!DSP[s].enabled;const ds=document.querySelector('[data-dsp-side="'+s+'"] .nam8-dsp-state');if(ds)ds.textContent=DSP[s].enabled?'DSP active · '+(DSP[s].compOn?'COMP ':'')+(DSP[s].eqOn?'EQ':''):'DSP bypassed';const row=document.querySelector('[data-nam8-ir="'+s+'"]');if(!row)return;const n=row.querySelector('.nam8-ir-name');if(n)n.textContent=IR[s].name||'Empty';const en=row.querySelector('.nam8-ir-enabled');if(en)en.checked=!!IR[s].enabled;const cl=row.querySelector('.nam8-ir-clear');if(cl)cl.style.display=IR[s].loaded?'inline-block':'none';const pan=row.querySelector('.nam8-pan');if(pan)pan.value=String(Math.round(PAN[s]*100));const pv=row.querySelector('.nam8-pan-val');if(pv)pv.textContent=(PAN[s]>=0?'+':'')+Math.round(PAN[s]*100);});paintDSPControls();const b=el('btnRig');if(b)b.classList.toggle('active',active());}
+function paintRig(){
+ NAM_KEYS.forEach(k=>{
+  const row=document.querySelector('[data-nam8-slot="'+k+'"]');if(!row)return;
+  const st=NAM[k],n=row.querySelector('.nam8-name');if(n)n.textContent=st.name||'Empty';
+  const en=row.querySelector('.nam8-enabled');if(en)en.checked=!!st.enabled;
+  const cl=row.querySelector('.nam8-clear');if(cl)cl.style.display=st.loaded?'inline-block':'none';
+  const tier=row.querySelector('.nam8-tier');
+  if(tier){
+   const subs=st.json&&st.json.architecture==='SlimmableContainer'&&st.json.config&&Array.isArray(st.json.config.submodels)?st.json.config.submodels:[];
+   const sig=subs.map(x=>String(x.max_value)+'|'+String(x.name||x.label||'')).join(';');
+   if(tier.dataset.signature!==sig){
+    tier.replaceChildren();const d=document.createElement('option');d.value='';d.textContent='Auto (Lite)';tier.appendChild(d);
+    subs.forEach(sub=>{const o=document.createElement('option');o.value=String(sub.max_value);o.textContent=String(sub.name||sub.label||('Tier '+sub.max_value));tier.appendChild(o);});
+    tier.dataset.signature=sig;
+   }
+   tier.style.display=subs.length>1?'inline-block':'none';tier.value=st.tier==null?'':String(st.tier);
+  }
+  const vs=row.querySelector('.nam8-model-variant');
+  if(vs){
+   const list=Array.isArray(st.variants)?st.variants:[];
+   const sig=list.map(m=>String(m.id)+'|'+String(m.name||'')).join(';');
+   if(vs.dataset.signature!==sig){vs.replaceChildren();const d=document.createElement('option');d.value='';d.textContent='Model variant';vs.appendChild(d);list.forEach(m=>{const o=document.createElement('option');o.value=String(m.id);o.textContent=String(m.name||('Model '+m.id));vs.appendChild(o);});vs.dataset.signature=sig;}
+   const current=list.some(m=>String(m.id)===String(st.modelId));vs.style.display=st.loaded&&st.toneId&&list.length>1?'inline-block':'none';vs.value=current?String(st.modelId):'';
+  }
+ });
+ SIDES.forEach(s=>{const de=document.querySelector('.nam8-dsp-enable[data-side="'+s+'"]');if(de)de.checked=!!DSP[s].enabled;const ds=document.querySelector('[data-dsp-side="'+s+'"] .nam8-dsp-state');if(ds)ds.textContent=DSP[s].enabled?'DSP active · '+(DSP[s].compOn?'COMP ':'')+(DSP[s].eqOn?'EQ':''):'DSP bypassed';const row=document.querySelector('[data-nam8-ir="'+s+'"]');if(!row)return;const n=row.querySelector('.nam8-ir-name');if(n)n.textContent=IR[s].name||'Empty';const en=row.querySelector('.nam8-ir-enabled');if(en)en.checked=!!IR[s].enabled;const cl=row.querySelector('.nam8-ir-clear');if(cl)cl.style.display=IR[s].loaded?'inline-block':'none';const pan=row.querySelector('.nam8-pan');if(pan)pan.value=String(Math.round(PAN[s]*100));const pv=row.querySelector('.nam8-pan-val');if(pv)pv.textContent=(PAN[s]>=0?'+':'')+Math.round(PAN[s]*100);});
+ paintDSPControls();const b=el('btnRig');if(b)b.classList.toggle('active',active());
+}
 async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error('Audio engine is not ready');ctx=c;if(typeof window._namLoadModule==='function')await window._namLoadModule(c);else throw new Error('NAM audio worklet loader is unavailable');return c;}
-async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete'});nd.port.onmessage=e=>{if(e.data&&e.data.type==='error')status(key+' NAM error: '+(e.data.msg||'unknown'));else if(e.data&&e.data.type==='overrun')status('⚠ '+key+' NAM is over budget; choose a lighter model tier');};nd.port.postMessage({type:'bypass',value:true});NAM[key].node=nd;return nd;}
+async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete'});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='error')status(key+' NAM error: '+(d.msg||'unknown'));else if(d.type==='buffer')status(key+' NAM buffer increased to '+d.blockSize+' samples');else if(d.type==='deadline-risk'||d.type==='overrun')status('⚠ '+key+' NAM is near its realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');};nd.port.postMessage({type:'bypass',value:true});NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
-async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken;const nd=await ensureNode(key);if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier);const emitted=window.NAMRealtime.emitChain(spec);const module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout};nd.port.postMessage(msg,transferList(msg));return true;}
-async function setNAM(key,json,meta){meta=meta||{};if(!NAM[key])throw new Error('Unknown NAM slot '+key);if(!json||typeof json!=='object')throw new Error('NAM file is not a JSON model');const st=NAM[key],tier=meta.tier==null?null:meta.tier;status('Preparing '+key+'…');const sent=await compileAndSend(key,json,tier);if(!sent)return false;st.json=json;st.loaded=true;st.enabled=meta.enabled!==false;st.tier=tier;st.name=meta.name||LABELS[key];st.toneId=meta.toneId==null?null:String(meta.toneId);st.modelId=meta.modelId==null?null:String(meta.modelId);st.modelName=meta.modelName||'';st.toneTitle=meta.toneTitle||'';st.variants=meta.variants||[];await route();paintRig();status(key+' loaded');return true;}
+async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken;const nd=await ensureNode(key);if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier);const modelRate=Number(spec.sampleRate),engineRate=Number(ctx&&ctx.sampleRate);if(modelRate>0&&engineRate>0&&Math.abs(modelRate-engineRate)>1){st.rateWarning='resampling '+engineRate+' → '+modelRate+' Hz; 160-sample adaptive blocks';console.info('[NAM8 SRC] '+key+': '+st.rateWarning);}else st.rateWarning='160-sample adaptive blocks at '+(modelRate||engineRate)+' Hz';const emitted=window.NAMRealtime.emitChain(spec);const module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate:modelRate||engineRate};nd.port.postMessage(msg,transferList(msg));return true;}
+async function setNAM(key,json,meta){meta=meta||{};if(!NAM[key])throw new Error('Unknown NAM slot '+key);if(!json||typeof json!=='object')throw new Error('NAM file is not a JSON model');const st=NAM[key],tier=meta.tier==null?null:meta.tier;status('Preparing '+key+'…');const sent=await compileAndSend(key,json,tier);if(!sent)return false;st.json=json;st.loaded=true;st.enabled=meta.enabled!==false;st.tier=tier;st.name=meta.name||LABELS[key];st.toneId=meta.toneId==null?null:String(meta.toneId);st.modelId=meta.modelId==null?null:String(meta.modelId);st.modelName=meta.modelName||'';st.toneTitle=meta.toneTitle||'';st.variants=meta.variants||[];await route();paintRig();status(key+' loaded'+(st.rateWarning?' · WARNING: '+st.rateWarning:''));return true;}
 function disconnect(node){try{if(node)node.disconnect();}catch(e){}}
-function ensurePanner(side){if(!panners[side]){panners[side]=ctx.createStereoPanner();panners[side].pan.value=PAN[side];}return panners[side];}
-function ensureSideFx(side){if(sideFx[side])return sideFx[side];const c=ctx, f=DSP[side];const input=c.createGain(),drive=c.createWaveShaper(),comp=c.createDynamicsCompressor(),low=c.createBiquadFilter(),bass=c.createBiquadFilter(),mid=c.createBiquadFilter(),treble=c.createBiquadFilter(),high=c.createBiquadFilter(),output=c.createGain(),verb=c.createGain(),verbConvolver=c.createConvolver();drive.oversample='2x';comp.knee.value=18;low.type='highpass';bass.type='lowshelf';mid.type='peaking';treble.type='highshelf';high.type='lowpass';low.Q.value=0.707;high.Q.value=0.707;verb.gain.value=0;verbConvolver.normalize=true;const verbLength=Math.max(1,Math.floor(c.sampleRate*1.7)),verbIR=c.createBuffer(2,verbLength,c.sampleRate);for(let ch=0;ch<2;ch++){const d=verbIR.getChannelData(ch);for(let i=0;i<verbLength;i++){const decay=Math.pow(1-i/verbLength,2.8);d[i]=(Math.random()*2-1)*decay*(0.3+0.7*Math.exp(-i/(c.sampleRate*0.22)));}}verbConvolver.buffer=verbIR;function apply(){input.gain.value=Math.pow(10,f.inputDb/20);const k=f.drive*8,a=new Float32Array(1024);for(let i=0;i<a.length;i++){const x=i/(a.length-1)*2-1;a[i]=k<.001?x:Math.tanh(k*x)/Math.tanh(k);}drive.curve=a;low.frequency.value=f.lowCut;bass.frequency.value=f.bassFreq;bass.gain.value=(f.bass-5)*3;mid.frequency.value=f.midFreq;mid.Q.value=f.midQ;mid.gain.value=(f.middle-5)*3;treble.frequency.value=f.trebleFreq;treble.gain.value=(f.treble-5)*3;high.frequency.value=f.highCut;comp.threshold.value=f.compThreshold;comp.ratio.value=f.compRatio;comp.attack.value=f.compAttack/1000;comp.release.value=f.compRelease/1000;output.gain.value=Math.pow(10,f.outputDb/20);verb.gain.value=Math.min(.35,Math.max(0,f.reverb/100));}
+function ensureSideFx(side){if(sideFx[side])return sideFx[side];const c=ctx, f=DSP[side];const input=c.createGain(),drive=c.createWaveShaper(),comp=c.createDynamicsCompressor(),low=c.createBiquadFilter(),bass=c.createBiquadFilter(),mid=c.createBiquadFilter(),treble=c.createBiquadFilter(),high=c.createBiquadFilter(),output=c.createGain(),verb=c.createGain(),verbConvolver=c.createConvolver();drive.oversample='2x';comp.knee.value=18;low.type='highpass';bass.type='lowshelf';mid.type='peaking';treble.type='highshelf';high.type='lowpass';low.Q.value=0.707;high.Q.value=0.707;verb.gain.value=0;verbConvolver.normalize=true;const verbLength=Math.max(1,Math.floor(c.sampleRate*1.7)),verbIR=c.createBuffer(2,verbLength,c.sampleRate);for(let ch=0;ch<2;ch++){const d=verbIR.getChannelData(ch);for(let i=0;i<verbLength;i++){const decay=Math.pow(1-i/verbLength,2.8);d[i]=(Math.random()*2-1)*decay*(0.3+0.7*Math.exp(-i/(c.sampleRate*0.22)));}}verbConvolver.buffer=verbIR;function apply(){
+ const on=!!f.enabled;
+ input.gain.value=on?Math.pow(10,f.inputDb/20):1;
+ const k=(on?f.drive:0)*8,a=new Float32Array(1024);
+ for(let i=0;i<a.length;i++){const x=i/(a.length-1)*2-1;a[i]=k<.001?x:Math.tanh(k*x)/Math.tanh(k);}drive.curve=a;drive.oversample='2x';
+ low.frequency.value=f.lowCut;bass.frequency.value=f.bassFreq;bass.gain.value=(f.bass-5)*3;
+ mid.frequency.value=f.midFreq;mid.Q.value=f.midQ;mid.gain.value=(f.middle-5)*3;
+ treble.frequency.value=f.trebleFreq;treble.gain.value=(f.treble-5)*3;high.frequency.value=f.highCut;
+ comp.threshold.value=f.compThreshold;comp.ratio.value=f.compRatio;comp.attack.value=f.compAttack/1000;comp.release.value=f.compRelease/1000;
+ output.gain.value=on?Math.pow(10,f.outputDb/20):1;verb.gain.value=on?Math.min(.35,Math.max(0,f.reverb/100)):0;
+}
 apply();sideFx[side]={input,drive,comp,low,bass,mid,treble,high,output,verb,verbConvolver,apply};return sideFx[side];}
 function applyMayerPreset(side){const f=DSP[side];Object.assign(f,{enabled:true,compOn:true,eqOn:true,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5.6,trebleFreq:3000,treble:4.7,highCut:12000,reverb:8,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0});if(sideFx[side])sideFx[side].apply();route().then(paintRig).catch(e=>status('Preset route failed: '+e.message));paintRig();}
 function ensureIR(side){if(!convolver[side]){convolver[side]=ctx.createConvolver();convolver[side].normalize=true;}convolver[side].buffer=IR[side].loaded&&IR[side].enabled?IR[side].buffer:null;return convolver[side];}
 let routeQueue=Promise.resolve();
-async function routeNow(){
-  const c=ctx||audioContext();if(!c)return;ctx=c;const src=window._namMasterNode||window._INSTVOL||null;const dst=window._MASTERCLIP||c.destination;if(!src){status('Waiting for instrument audio source');return;}source=src;
-  try{if(c.state==='suspended')await c.resume();}catch(e){}
-  // Disconnect only the old rig-owned source routes and all of our lane nodes before rebuilding.
-  disconnect(src);disconnect(splitter);NAM_KEYS.forEach(k=>disconnect(NAM[k].node));SIDES.forEach(s=>{disconnect(convolver[s]);disconnect(panners[s]);if(sideFx[s])Object.values(sideFx[s]).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});});
-  if(!active()){const comp=window._COMP_NODE;try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}paintRig();return;}
-  splitter=c.createChannelSplitter(2);
-  try{src.connect(splitter);}catch(e){status('Stereo input route failed: '+e.message);try{src.connect(dst);}catch(_){}return;}
-  for(const side of SIDES){
-    let prev=null;const channel=side==='L'?0:1;
-    const keys=sideKeys(side).filter(k=>NAM[k].loaded&&NAM[k].enabled);
-    for(const key of keys){const nd=await ensureNode(key);if(prev)prev.connect(nd);else splitter.connect(nd,channel,0);prev=nd;}
-    if(!prev)prev={connect:(node)=>splitter.connect(node,channel,0)};
-    if(IR[side].loaded&&IR[side].enabled&&IR[side].buffer){const ir=ensureIR(side);prev.connect(ir);prev=ir;}
-    const fx=ensureSideFx(side);fx.apply();if(DSP[side].enabled){prev.connect(fx.input);let t=fx.input;t.connect(fx.drive);t=fx.drive;if(DSP[side].compOn){t.connect(fx.comp);t=fx.comp;}t.connect(fx.low);t=fx.low;if(DSP[side].eqOn){t.connect(fx.bass);fx.bass.connect(fx.mid);fx.mid.connect(fx.treble);t=fx.treble;}t.connect(fx.high);fx.high.connect(fx.output);prev=fx.output;}
-    const pan=ensurePanner(side);pan.pan.value=PAN[side];prev.connect(pan);pan.connect(dst);if(DSP[side].enabled&&DSP[side].reverb>0){fx.output.connect(fx.verb);fx.verb.connect(fx.verbConvolver);fx.verbConvolver.connect(pan);}
-  }
-  paintRig();
+function setPanGains(side){
+ const route=panRoutes[side];if(!route)return;
+ const p=Math.max(-1,Math.min(1,Number(PAN[side])||0));
+ if(route.stereo){
+  // Stereo IR output is balanced without collapsing L/R into a mono signal.
+  route.left.gain.value=p>0?Math.cos(p*Math.PI/2):1;
+  route.right.gain.value=p<0?Math.cos(p*Math.PI/2):1;
+ }else{
+  // Mono chain: constant-power pan from hard L (-1) to hard R (+1).
+  const a=(p+1)*Math.PI/4;
+  route.left.gain.value=Math.cos(a);route.right.gain.value=Math.sin(a);
+ }
 }
-function route(){routeQueue=routeQueue.catch(function(){}).then(routeNow);return routeQueue;}
+function connectPan(side,signal,isStereo,fx,useDSP){
+ const c=ctx,split=isStereo?c.createChannelSplitter(2):null,left=c.createGain(),right=c.createGain(),merge=c.createChannelMerger(2);
+ if(isStereo){signal.connect(split);split.connect(left,0,0);split.connect(right,1,0);}else{signal.connect(left);signal.connect(right);}
+ left.connect(merge,0,0);right.connect(merge,0,1);
+ // Tone stack is after pan, matching the reference chain's post-pan processing.
+ if(useDSP){
+  let post=merge;post.connect(fx.low);post=fx.low;
+  if(DSP[side].eqOn){post.connect(fx.bass);fx.bass.connect(fx.mid);fx.mid.connect(fx.treble);post=fx.treble;}
+  post.connect(fx.high);fx.high.connect(fx.output);fx.output.connect(mixBus);
+ }else merge.connect(mixBus);
+ panRoutes[side]={split,left,right,merge,stereo:!!isStereo};setPanGains(side);
+}
+async function routeNow(){
+ const c=ctx||audioContext();if(!c)return;ctx=c;
+ const src=window._namMasterNode||window._INSTVOL||null;const dst=window._MASTERCLIP||c.destination;
+ if(!src){status('Waiting for instrument audio source');return;}source=src;
+ try{if(c.state==='suspended')await c.resume();}catch(e){}
+ // Tear down only this rig's routes, then rebuild in a deterministic order.
+ disconnect(src);disconnect(inputSplitter);disconnect(mixBus);disconnect(mixDC);
+ NAM_KEYS.forEach(k=>disconnect(NAM[k].node));
+ SIDES.forEach(side=>{
+  disconnect(convolver[side]);
+  const pr=panRoutes[side];if(pr)Object.values(pr).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
+  if(sideFx[side])Object.values(sideFx[side]).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
+ });
+ panRoutes={};
+ if(!active()){
+  const comp=window._COMP_NODE;try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}paintRig();return;
+ }
+ // The browser context is requested at 48 kHz (see ensureAudio). Keep both source
+ // channels available: Stereo = L->Left, R->Right; Left/Right duplicate that selected
+ // input into both chains. No implicit L+R mono sum in the stereo rig.
+ inputSplitter=c.createChannelSplitter(2);src.connect(inputSplitter);
+ mixBus=c.createGain();mixBus.channelCount=2;mixBus.channelCountMode='explicit';mixBus.channelInterpretation='speakers';
+ mixDC=c.createBiquadFilter();mixDC.type='highpass';mixDC.frequency.value=5;mixDC.Q.value=0.707;
+ mixBus.connect(mixDC);mixDC.connect(dst);
+ for(const side of SIDES){
+  const all=sideKeys(side).filter(k=>NAM[k].loaded);
+  const keys=all.filter(k=>NAM[k].enabled);
+  const irActive=!!(IR[side].loaded&&IR[side].enabled&&IR[side].buffer);
+  // A loaded-but-bypassed NAM by itself must not create a second dry path.
+  const sideConfigured=keys.length>0||irActive||!!DSP[side].enabled;
+  if(!sideConfigured)continue;
+  const fx=ensureSideFx(side);fx.apply();
+  const inputIndex=inputMode==='left'?0:(inputMode==='right'?1:(side==='L'?0:1));
+  inputSplitter.connect(fx.input,inputIndex,0);
+  // Pre-chain: input trim -> drive -> optional compressor -> serial NAM slots.
+  // This is the meaningful input stage; it must shape the signal entering NAM,
+  // not be mislabeled output gain after the model.
+  fx.input.connect(fx.drive);let t=fx.drive;
+  if(DSP[side].enabled&&DSP[side].compOn){t.connect(fx.comp);t=fx.comp;}
+  for(const key of keys){const nd=await ensureNode(key);t.connect(nd);t=nd;}
+  if(irActive){const ir=ensureIR(side);t.connect(ir);t=ir;}
+  // Reverb is a parallel send from the NAM/IR chain. Its stereo return joins before
+  // pan, then this side's pan -> tone stack -> output trim feeds the stereo mix bus.
+  const sideBus=c.createGain();t.connect(sideBus);
+  if(DSP[side].enabled){
+   t.connect(fx.verb);fx.verb.connect(fx.verbConvolver);fx.verbConvolver.connect(sideBus);
+  }
+  const stereoIR=!!(irActive&&IR[side].buffer.numberOfChannels>1);
+  const stereoOutput=stereoIR||(!!DSP[side].enabled&&Number(DSP[side].reverb)>0);
+  connectPan(side,sideBus,stereoOutput,fx,!!DSP[side].enabled);
+ }
+ paintRig();
+}
+function route(){routeQueue=routeQueue.catch(function(){}).then(routeNow).catch(function(err){status('Rig route failed: '+(err&&err.message||err)+' · dry fallback');const c=ctx||audioContext(),src=window._namMasterNode||window._INSTVOL||null,dst=window._MASTERCLIP||(c&&c.destination),comp=window._COMP_NODE;if(src){try{src.disconnect();}catch(e){}try{if(comp)src.connect(comp);else if(dst)src.connect(dst);}catch(e){}}throw err;});return routeQueue;}
 async function setIR(side,buffer,meta){meta=meta||{};if(!IR[side])throw new Error('Unknown IR side '+side);IR[side].buffer=buffer||null;IR[side].loaded=!!buffer;IR[side].enabled=meta.enabled!==false;IR[side].name=buffer?(meta.name||('IR '+side)):'Empty';IR[side].toneId=meta.toneId==null?null:String(meta.toneId);IR[side].modelId=meta.modelId==null?null:String(meta.modelId);IR[side].modelName=meta.modelName||'';IR[side].toneTitle=meta.toneTitle||'';await route();paintRig();}
-async function clearNAM(key){NAM[key].compileToken++;NAM[key].json=null;NAM[key].loaded=false;NAM[key].enabled=false;NAM[key].tier=null;NAM[key].name='Empty';NAM[key].toneId=null;NAM[key].modelId=null;NAM[key].modelName='';NAM[key].toneTitle='';NAM[key].variants=[];disconnect(NAM[key].node);NAM[key].node=null;await route();paintRig();}
+async function clearNAM(key){NAM[key].compileToken++;NAM[key].json=null;NAM[key].loaded=false;NAM[key].enabled=false;NAM[key].tier=null;NAM[key].name='Empty';NAM[key].toneId=null;NAM[key].modelId=null;NAM[key].modelName='';NAM[key].toneTitle='';NAM[key].variants=[];NAM[key].rateWarning='';disconnect(NAM[key].node);NAM[key].node=null;await route();paintRig();}
 async function clearIR(side){IR[side]={loaded:false,enabled:true,buffer:null,name:'Empty',toneId:null,modelId:null,modelName:'',toneTitle:''};await route();paintRig();}
 function serializeIR(buf){if(!buf)return null;const chans=[];for(let c=0;c<buf.numberOfChannels;c++)chans.push(new Float32Array(buf.getChannelData(c)));return {sampleRate:buf.sampleRate,length:buf.length,chans};}
 function deserializeIR(o){if(!o||!o.chans||!o.chans.length)return null;const c=ctx||audioContext();if(!c)return null;const b=c.createBuffer(o.chans.length,o.length,o.sampleRate);o.chans.forEach((x,i)=>b.getChannelData(i).set(x));return b;}
@@ -1378,19 +1648,19 @@ async function saveSnapshot(i){if(i<0||i>6)throw new Error('Snapshot index must 
 async function recallSnapshot(i){let sn=SNAPSHOTS[i];if(!sn){const stat=el('rigSnapStat');if(stat)stat.textContent='Slot '+('ABCDEFG'[i]||i)+' is empty';return;}await restoreSnapshot(sn);const stat=el('rigSnapStat');if(stat){stat.textContent='ABCDEFG'[i]+' ✓';setTimeout(()=>{if(stat.textContent==='ABCDEFG'[i]+' ✓')stat.textContent='';},1600);}}
 async function loadNAMFile(file,key){if(!file)return;let text;if(/\.zip$/i.test(file.name)){text=await extractNAMZip(file);}else{text=await file.text();}const json=JSON.parse(text);await setNAM(key,json,{name:file.name,enabled:true});}
 async function extractNAMZip(file){const buf=await file.arrayBuffer(),dv=new DataView(buf),u8=new Uint8Array(buf);let eocd=-1;for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-65558);i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}}if(eocd<0)throw new Error('Not a ZIP file');const count=dv.getUint16(eocd+10,true);let p=dv.getUint32(eocd+16,true);for(let e=0;e<count;e++){if(dv.getUint32(p,true)!==0x02014b50)throw new Error('Invalid ZIP central directory');const method=dv.getUint16(p+10,true),size=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),el=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),off=dv.getUint32(p+42,true),name=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));if(/\.(nam|json)$/i.test(name)){const localName=dv.getUint16(off+26,true),localExtra=dv.getUint16(off+28,true),start=off+30+localName+localExtra,compressed=u8.subarray(start,start+size);if(method===0)return new TextDecoder().decode(compressed);if(method===8&&window.DecompressionStream){const stream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));return new TextDecoder().decode(await new Response(stream).arrayBuffer());}throw new Error('Unsupported ZIP compression method '+method);}p+=46+nl+el+cl;}throw new Error('ZIP contains no .nam or .json model');}
-function buildUI(){const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;letter-spacing:.5px;margin:1px 0 4px;">8× NAM STEREO RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Four independent NAM processors per channel. Each side has its own IR and pan.</div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:9px;"></div><input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
+function buildUI(){const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;letter-spacing:.5px;margin:1px 0 4px;">8× NAM STEREO RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Four serial NAM slots per channel. Each chain has its own IR and pan.</div><div style="display:flex;align-items:center;gap:7px;margin:5px 0 8px;flex-wrap:wrap;color:#cbd5e1;"><strong>INPUT MODE</strong><select id="nam8InputMode" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="stereo">Stereo (L → Left, R → Right)</option><option value="left">Left input → both chains</option><option value="right">Right input → both chains</option></select><span style="font-size:.78em;color:#94a3b8;">Saved separately from snapshots</span></div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:9px;"></div><input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
  const grid=layout.querySelector('.nam8-grid');for(const side of SIDES){const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid '+(side==='L'?'#2563eb':'#be185d')+';border-radius:7px;padding:7px;min-width:0;';section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;"><strong style="color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';font-size:1.08em;">'+(side==='L'?'LEFT CHAIN':'RIGHT CHAIN')+'</strong><label style="display:flex;align-items:center;gap:5px;color:#cbd5e1;white-space:nowrap;">PAN <input class="nam8-pan" data-side="'+side+'" type="range" min="-100" max="100" step="1" value="'+Math.round(PAN[side]*100)+'" style="width:95px;accent-color:'+(side==='L'?'#60a5fa':'#f472b6')+'"><span class="nam8-pan-val" style="min-width:35px;text-align:right;">'+Math.round(PAN[side]*100)+'</span></label></div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:5px;"></div><div class="nam8-dspbar" data-dsp-side="'+side+'" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:7px 0;padding:6px;background:#0b0f18;border-radius:5px;"><strong style="color:#c4b5fd;">CHAIN DSP</strong><label style="color:#cbd5e1;"><input class="nam8-dsp-enable" data-side="'+side+'" type="checkbox"> ENABLE</label><button type="button" class="nam8-mayer" data-side="'+side+'" style="padding:4px 7px;background:#312e81;color:#e0e7ff;border:1px solid #818cf8;border-radius:4px;">MAYER BLUES</button><span class="nam8-dsp-state" style="color:#94a3b8;font-size:.8em;">DSP bypassed</span></div><div data-nam8-ir="'+side+'" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px 4px 2px;border-top:1px dashed #64748b;margin-top:7px;"><strong style="width:42px;color:'+(side==='L'?'#5eead4':'#f0abfc')+';">IR '+side+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-ir-enabled" type="checkbox" checked>ON</label><button type="button" class="nam8-ir-file" style="padding:3px 6px;background:#12302b;color:#5eead4;border:1px solid #0d9488;border-radius:4px;">LOAD IR</button><button type="button" class="nam8-ir-t3k" style="padding:3px 6px;background:#0c2740;color:#7dd3fc;border:1px solid #38bdf8;border-radius:4px;">T3K</button><button type="button" class="nam8-ir-clear" style="display:none;padding:3px 6px;background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:4px;">CLEAR</button><span class="nam8-ir-name" style="color:#e2e8f0;flex:1;min-width:70px;overflow-wrap:anywhere;">Empty</span></div>';
- const slots=section.querySelector('.nam8-slots');for(const key of sideKeys(side)){const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:5px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';row.innerHTML='<strong style="width:47px;color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';">'+key+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-enabled" type="checkbox">ON</label><button type="button" class="nam8-file" style="padding:3px 6px;background:#1f1235;color:#c4b5fd;border:1px solid #4c1d95;border-radius:4px;">FILE</button><button type="button" class="nam8-t3k" style="padding:3px 6px;background:#0c2740;color:#7dd3fc;border:1px solid #38bdf8;border-radius:4px;">T3K</button><button type="button" class="nam8-clear" style="display:none;padding:3px 6px;background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:4px;">×</button><select class="nam8-tier" style="display:none;max-width:105px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:4px;padding:3px;font-size:.9em;"><option value="">default tier</option></select><span class="nam8-name" style="color:#e2e8f0;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;">Empty</span>';slots.appendChild(row);}
+ const slots=section.querySelector('.nam8-slots');for(const key of sideKeys(side)){const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:5px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';row.innerHTML='<strong style="width:47px;color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';">'+key+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-enabled" type="checkbox">ON</label><button type="button" class="nam8-file" style="padding:3px 6px;background:#1f1235;color:#c4b5fd;border:1px solid #4c1d95;border-radius:4px;">FILE</button><button type="button" class="nam8-t3k" style="padding:3px 6px;background:#0c2740;color:#7dd3fc;border:1px solid #38bdf8;border-radius:4px;">T3K</button><button type="button" class="nam8-clear" style="display:none;padding:3px 6px;background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:4px;">×</button><select class="nam8-tier" style="display:none;max-width:105px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:4px;padding:3px;font-size:.9em;"><option value="">Auto (Lite)</option></select><select class="nam8-model-variant" aria-label="NAM model variant" style="display:none;max-width:130px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:4px;padding:3px;font-size:.9em;"><option value="">Model variant</option></select><span class="nam8-name" style="color:#e2e8f0;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;">Empty</span>';slots.appendChild(row);}
  const dspBar=section.querySelector('.nam8-dspbar');if(dspBar)dspBar.insertAdjacentHTML('afterend',dspControlsMarkup(side));
  grid.appendChild(section);}
  // Replace the old snapshot save and A-G buttons with fresh nodes so legacy click handlers cannot fire.
  if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach(old=>{const b=old.cloneNode(false);old.replaceWith(b);});}
- panel.insertBefore(layout,snapRow||panel.lastChild);const namFile=el('nam8File'),irFile=el('nam8IRFile');
+ panel.insertBefore(layout,snapRow||panel.lastChild);const modeEl=el('nam8InputMode');if(modeEl)modeEl.value=inputMode;const namFile=el('nam8File'),irFile=el('nam8IRFile');
  layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;const row=t.closest('[data-nam8-slot]'),key=row&&row.getAttribute('data-nam8-slot'),irrow=t.closest('[data-nam8-ir]'),side=irrow&&irrow.getAttribute('data-nam8-ir');if(t.classList.contains('nam8-mayer')){applyMayerPreset(t.dataset.side);}else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=side;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(side,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(side).catch(err=>status(err.message));});
- layout.addEventListener('change',e=>{if(e.target.classList.contains('nam8-comp-on')||e.target.classList.contains('nam8-eq-on')){const side=e.target.dataset.side;DSP[side][e.target.classList.contains('nam8-comp-on')?'compOn':'eqOn']=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-dsp-enable')){const side=e.target.dataset.side;DSP[side].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-enabled')){const row=e.target.closest('[data-nam8-slot]');if(row){NAM[row.dataset.nam8Slot].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-ir-enabled')){const row=e.target.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-tier')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=e.target.value===''?null:Number(e.target.value);if(NAM[key].json)setNAM(key,NAM[key].json,{name:NAM[key].name,tier,enabled:NAM[key].enabled,toneId:NAM[key].toneId,modelId:NAM[key].modelId,modelName:NAM[key].modelName,toneTitle:NAM[key].toneTitle,variants:NAM[key].variants}).catch(err=>status(err.message));}}});
- layout.addEventListener('input',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;PAN[side]=Number(e.target.value)/100;const n=e.target.parentNode.querySelector('.nam8-pan-val');if(n)n.textContent=(PAN[side]>=0?'+':'')+e.target.value;if(panners[side])panners[side].pan.value=PAN[side];}else if(e.target.classList.contains('nam8-dsp-param')){const side=e.target.dataset.side,key=e.target.dataset.param,c=DSP_CONTROLS.find(x=>x.key===key);if(DSP[side]&&c){DSP[side][key]=Number(e.target.value);if(sideFx[side])sideFx[side].apply();const out=e.target.parentNode.querySelector('output');if(out)out.textContent=dspDisplayValue(c,e.target.value);}}});
+ layout.addEventListener('change',e=>{if(e.target.id==='nam8InputMode'){inputMode=['stereo','left','right'].includes(e.target.value)?e.target.value:'stereo';try{window.localStorage.setItem(INPUT_MODE_KEY,inputMode);}catch(err){}route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-comp-on')||e.target.classList.contains('nam8-eq-on')){const side=e.target.dataset.side,key=e.target.classList.contains('nam8-comp-on')?'compOn':'eqOn';DSP[side][key]=e.target.checked;if(e.target.checked)DSP[side].enabled=true;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-dsp-enable')){const side=e.target.dataset.side;DSP[side].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-enabled')){const row=e.target.closest('[data-nam8-slot]');if(row){NAM[row.dataset.nam8Slot].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-ir-enabled')){const row=e.target.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-tier')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=e.target.value===''?null:Number(e.target.value);if(NAM[key].json)setNAM(key,NAM[key].json,{name:NAM[key].name,tier,enabled:NAM[key].enabled,toneId:NAM[key].toneId,modelId:NAM[key].modelId,modelName:NAM[key].modelName,toneTitle:NAM[key].toneTitle,variants:NAM[key].variants}).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-model-variant')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,model=(NAM[key].variants||[]).find(m=>String(m.id)===String(e.target.value));if(model&&String(model.id)!==String(NAM[key].modelId))switchNAMVariant(key,model);}}});
+ layout.addEventListener('input',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;PAN[side]=Number(e.target.value)/100;const n=e.target.parentNode.querySelector('.nam8-pan-val');if(n)n.textContent=(PAN[side]>=0?'+':'')+e.target.value;setPanGains(side);}else if(e.target.classList.contains('nam8-dsp-param')){const side=e.target.dataset.side,key=e.target.dataset.param,c=DSP_CONTROLS.find(x=>x.key===key);if(DSP[side]&&c){DSP[side][key]=Number(e.target.value);if(sideFx[side])sideFx[side].apply();const out=e.target.parentNode.querySelector('output');if(out)out.textContent=dspDisplayValue(c,e.target.value);}}});
  // Pan changes are applied live; on release we reconnect only if graph has not yet been created.
- layout.addEventListener('pointerup',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;if(panners[side])panners[side].pan.value=PAN[side];}});
+ layout.addEventListener('pointerup',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;setPanGains(side);}});
  namFile.addEventListener('change',async()=>{const f=namFile.files&&namFile.files[0];if(!f||!fileTarget)return;const k=fileTarget;fileTarget=null;try{status('Loading '+k+'…');await loadNAMFile(f,k);}catch(e){status(k+' load failed: '+(e.message||e));}});
  irFile.addEventListener('change',async()=>{const f=irFile.files&&irFile.files[0];if(!f||!fileTarget)return;const s=fileTarget;fileTarget=null;try{status('Loading IR '+s+'…');const c=audioContext();if(!c)throw new Error('Audio engine not ready');const ab=await f.arrayBuffer();const b=await c.decodeAudioData(ab);await setIR(s,b,{name:f.name,enabled:true});status('IR '+s+' loaded');}catch(e){status('IR '+s+' load failed: '+(e.message||e));}});
  const rowSave=snapRow&&snapRow.querySelector('.rigSnapSave');if(rowSave)rowSave.addEventListener('click',e=>{e.stopPropagation();snapshotSaveMode=!snapshotSaveMode;const st=el('rigSnapStat');if(st)st.textContent=snapshotSaveMode?'Tap A–G to save current rig':'';paintSnapshots();});
@@ -1405,10 +1675,25 @@ function preferredA2Lite(models){
   // Match the named A2 Lite variant, not generic models that happen to contain “lite”.
   return models.find(m=>/\bA2[\s_-]*Lite\b/i.test(String(m&&m.name||'')))||null;
 }
-async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{if(t3kTarget.format==='ir'||String(tone.format).toLowerCase()==='ir'){const row=document.createElement('button');row.type='button';row.style.cssText='display:block;width:100%;padding:12px;background:#102a25;color:#5eead4;border:0;';row.textContent='Download and load this IR: '+(tone.title||tone.name||tone.id);row.onclick=()=>loadT3KTone(tone,{id:tone.id,model_url:tone.model_url,name:tone.title||tone.name},true);box.replaceChildren(row);return;}const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent='No downloadable model variants.';return;}const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite is available — loading the lighter model by default…';await loadT3KTone(tone,lite,false);return;}models.forEach(m=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||'NAM model')+' · ID '+m.id;b.onclick=()=>loadT3KTone(tone,m,false);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+e.message;}}
-async function loadT3KTone(tone,model,isIR){const box=el('nam8T3KResults');try{box.textContent='Downloading…';const blob=await T3K.downloadModel(model.model_url);const label=(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR||t3kTarget.format==='ir'){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());const side=t3kTarget.target;if(side==='BOTH'){await setIR('L',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});await setIR('R',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else await setIR(side,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else{const json=JSON.parse(await blob.text());await setNAM(t3kTarget.target,json,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:[model],enabled:true});}el('nam8T3KModal').style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);}}
+function explicitTierForVariant(json,model){
+  if(!json||json.architecture!=='SlimmableContainer'||!json.config||!Array.isArray(json.config.submodels))return null;
+  if(!/\bA2[\s_-]*Full\b/i.test(String(model&&model.name||'')))return null;
+  const vals=json.config.submodels.map(x=>Number(x&&x.max_value)).filter(Number.isFinite);
+  return vals.length?Math.max(...vals):null;
+}
+async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{if(t3kTarget.format==='ir'||String(tone.format).toLowerCase()==='ir'){const row=document.createElement('button');row.type='button';row.style.cssText='display:block;width:100%;padding:12px;background:#102a25;color:#5eead4;border:0;';row.textContent='Download and load this IR: '+(tone.title||tone.name||tone.id);row.onclick=()=>loadT3KTone(tone,{id:tone.id,model_url:tone.model_url,name:tone.title||tone.name},true);box.replaceChildren(row);return;}const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent='No downloadable model variants.';return;}const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite is available — loading the lighter model by default…';await loadT3KTone(tone,lite,false,models);return;}models.forEach(m=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||'NAM model')+' · ID '+m.id;b.onclick=()=>loadT3KTone(tone,m,false,models);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+e.message;}}
+async function loadT3KTone(tone,model,isIR,allModels){const box=el('nam8T3KResults');try{box.textContent='Downloading…';const blob=await T3K.downloadModel(model.model_url);const label=(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR||t3kTarget.format==='ir'){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());const side=t3kTarget.target;if(side==='BOTH'){await setIR('L',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});await setIR('R',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else await setIR(side,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else{const json=JSON.parse(await blob.text());await setNAM(t3kTarget.target,json,{name:label,tier:explicitTierForVariant(json,model),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:allModels||[model],enabled:true});}el('nam8T3KModal').style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);paintRig();}}
+async function switchNAMVariant(key,model){
+ const st=NAM[key];if(!st||!model||!st.toneId||!model.model_url)return;
+ const priorVariants=st.variants.slice(),priorEnabled=st.enabled;
+ try{
+  status('Loading '+(model.name||'model variant')+' into '+key+'…');
+  const blob=await T3K.downloadModel(model.model_url),json=JSON.parse(await blob.text());
+  await setNAM(key,json,{name:(st.toneTitle||st.toneId)+(model.name?' — '+model.name:''),tier:explicitTierForVariant(json,model),toneId:st.toneId,modelId:model.id,modelName:model.name||'',toneTitle:st.toneTitle,variants:priorVariants,enabled:priorEnabled});
+ }catch(e){status(key+' variant switch failed: '+(e.message||e));paintRig();}
+}
 async function loadT3KModel(slot,tone,model){if(slot==='cab'||slot==='IR'||slot==='IR-L'||slot==='IR-R'){t3kTarget={target:slot==='IR-R'?'R':slot==='IR-L'?'L':'BOTH',format:'ir'};}else{const map={pedal:'L1',amp:'L2',nam1:'L1',nam2:'L2'};t3kTarget={target:map[slot]||slot,format:'nam'};}const ir=t3kTarget.format==='ir';const isSimpleIR=ir;let blob;if(!model||!model.model_url)throw new Error('Missing TONE3000 model URL');blob=await T3K.downloadModel(model.model_url);const label=(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:'');if(isSimpleIR){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR('L',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});await setIR('R',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else await setNAM(t3kTarget.target,JSON.parse(await blob.text()),{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:[model]});}
-function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}if(window.RigSnapshotBridge===undefined)window.RigSnapshotBridge={};window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture:capture,saveCurrent:saveSnapshot,clearIR:async()=>{await clearIR('L');await clearIR('R');},recall:recallSnapshot,loadT3KModel:loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,pan:PAN,route:route,setModel:setNAM,clearSlot:clearNAM,setIR:setIR,clearIR:clearIR,setEnabled:async(k,on)=>{NAM[k].enabled=!!on;await route();paintRig();},setPan:(s,v)=>{PAN[s]=Math.max(-1,Math.min(1,v));if(panners[s])panners[s].pan.value=PAN[s];paintRig();},capture:capture,recall:restoreSnapshot,isActive:active};paintRig();}
+function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}if(window.RigSnapshotBridge===undefined)window.RigSnapshotBridge={};window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture:capture,saveCurrent:saveSnapshot,clearIR:async()=>{await clearIR('L');await clearIR('R');},recall:recallSnapshot,loadT3KModel:loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,pan:PAN,route:route,setModel:setNAM,clearSlot:clearNAM,setIR:setIR,clearIR:clearIR,setEnabled:async(k,on)=>{NAM[k].enabled=!!on;await route();paintRig();},setPan:(s,v)=>{PAN[s]=Math.max(-1,Math.min(1,v));setPanGains(s);paintRig();},capture:capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
 console.log('[modules] NAM8 stereo rig layer '+VERSION);
