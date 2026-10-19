@@ -695,6 +695,10 @@ body.carousel-mode .switch-row{display:none !important;}
 
 
 </style>
+<script>
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body class=" unlocked">
 <div id="tipBox"><div class="tip-title" id="tipTitle"></div><div id="tipBody"></div></div>
@@ -1374,7 +1378,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════════════════
+<!-- ══════════════════════════════��═══════════════════════
      PANEL 1 — SIMPLE (v1.4 locked — DO NOT MODIFY)
      ══════════════════════════════════════════════════════ -->
 <div class="panel active" id="panelSimple">
@@ -2824,7 +2828,7 @@ window.addEventListener('load',()=>{ setTimeout(()=>{ try{ applyEntitlements(); 
     e.preventDefault();
   },{passive:false,capture:true});
 })();
-// ── HIDDEN DEV RITUAL (v475) ──────────────────────────────────────────────────────────
+// ── HIDDEN DEV RITUAL (v475) ─────────────────────────────��────────────────────────────
 //    About → 'x' in "TRiCkiSh x ShAM" ×5 → About's ✕ → IM ×2 → PRO ×2 → "BUG REPORT?" →
 //    enter the phrase → dev toolkit toggles. Obscurity, not security: the phrase lives in
 //    source (lightly encoded so a text search misses it) — fine for a diagnostics menu.
@@ -3574,7 +3578,7 @@ function makeVoice(midi, vel, poly, meta){
     setF=(freq,w,rp)=>{ if(ksHandle) ksHandle.retune(freq, (rp!=null&&rp<0.02)); };   // small ramp = instant step (hammer/tap)
     stopOsc=rt=>{ if(ksHandle) ksHandle.release(); setTimeout(()=>{ if(ksHandle) ksHandle.kill(); }, 3000); };
   } else if(instrument==='strat'){
-    // ── Hendrix/Strat voice ────────────────────────────────────────────────────
+    // ── Hendrix/Strat voice ────────────────────���───────────────────────────────
     // Signal chain: oscs → HPF → warm-clip → presence EQ → LPF → out  (phaser removed for CPU)
     const oscMix=ac.createGain(); oscMix.gain.value=1; nodes.push(oscMix);
     // Two sawtooths (slightly detuned, like neck+middle single-coils) + 2nd harmonic warmth
@@ -6330,7 +6334,7 @@ function enforceSizeRun(nx, st){
 //   8/4 → 40% hexatonic (6) · 40% heptatonic (7) · 20% altered+octatonic (8)
 //   φ-consonance bias inside nextScaleSeq then picks the beautiful scale of that size.
 //   enforceSizeRun still caps consecutive same-size bars afterward.
-// ── GOLDEN-RATIO WEIGHTS (v543) ─────────────────────────────────────
+// ── GOLDEN-RATIO WEIGHTS (v543) ───────────────���─────────────────────
 //   Matt's ladder, applied literally:
 //     meters : 8/4 = φ×4/4 , 4/4 = φ×2/4     → 1 : φ : φ²  = 19.1% · 30.9% · 50.0%
 //     sizes  : hexa = φ×penta , hexa = φ×hepta , hepta = φ×octa
@@ -16103,7 +16107,7 @@ window.GlobalBoard={
 
 
 <script>
-// ══════════════════════════════════════════════════════════════
+// ══════════════════════════���═══════════════════════════════════
 //  PAGE READER  v4.9.8.861-lite16 — Colour Scale "spiral reading"
 //  Samples the loaded photo as a coarse grid, maps each cell's average
 //  RGB to the closest named scale via csColourToScale / SCALE_SIGS
