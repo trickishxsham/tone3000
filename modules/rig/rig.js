@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.908-serial-nam-8-ir-4
+// version: 4.9.8.909-mono-input-routing-fix
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.908';
+var MODULE_VERSION = '4.9.8.909';
 var _booted=false;
 var _uiBound=false;
 
@@ -1487,12 +1487,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 908 — single serial NAM rig: 8 NAM slots + 4 independent serial IR slots. */
+/* IMPROVS2 Build 909 — serial NAM/IR rig; explicit mono input routing fix. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.908';
+const VERSION='4.9.8.909';
 const NAM_KEYS=Array.from({length:8},(_,i)=>'L'+(i+1));
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
 const LABELS={}; NAM_KEYS.forEach(k=>LABELS[k]='NAM '+k);
@@ -1571,8 +1571,18 @@ async function routeNow(){
  clearGraph();graphSrc=src;graphCtx=c;
  if(!active()){const comp=window._COMP_NODE;try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}paintRig();return;}
  try{
-  inputSplitter=track(c.createChannelSplitter(2));src.connect(inputSplitter);chainInput=track(c.createGain());
-  const inL=track(c.createGain()),inR=track(c.createGain());inL.gain.value=inputMode==='both'?0.5:(inputMode==='left'?1:0);inR.gain.value=inputMode==='both'?0.5:(inputMode==='right'?1:0);inputSplitter.connect(inL,0,0);inputSplitter.connect(inR,1,0);inL.connect(chainInput);inR.connect(chainInput);
+  // Keep the serial chain input explicitly MONO. The previous Build 908 path
+  // fed two mono GainNodes into a default/max-channel GainNode; channel negotiation
+  // could leave the downstream chain with an empty/mismatched input in WebViews.
+  // L+R relies on WebAudio's speaker downmix (also works when the source is mono).
+  // L-only/R-only deliberately select an individual splitter channel.
+  chainInput=track(c.createGain());chainInput.channelCount=1;chainInput.channelCountMode='explicit';chainInput.channelInterpretation='speakers';
+  if(inputMode==='both'){
+    src.connect(chainInput);
+  }else{
+    inputSplitter=track(c.createChannelSplitter(2));src.connect(inputSplitter);
+    inputSplitter.connect(chainInput,inputMode==='left'?0:1,0);
+  }
   let t=chainInput;
   for(const key of NAM_KEYS){const st=NAM[key];if(!st.loaded||!st.enabled||!st.node)continue;const fx=ensureSlotFx(key);t.connect(fx.pre);fx.pre.connect(fx.drive);fx.drive.connect(st.node);t=st.node;if(st.fx.eqOn){t.connect(fx.low);fx.low.connect(fx.bass);fx.bass.connect(fx.mid);fx.mid.connect(fx.treble);fx.treble.connect(fx.high);t=fx.high;}t.connect(fx.post);t=fx.post;}
   for(const key of IR_KEYS){const ir=IR[key];if(!ir.loaded||!ir.enabled||!ir.buffer)continue;const node=ensureIRNode(key);t.connect(node);t=node;}
