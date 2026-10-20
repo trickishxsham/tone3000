@@ -1504,7 +1504,7 @@ const IR={L:{loaded:false,enabled:true,buffer:null,name:'Empty',toneId:null,mode
 const PAN={L:-0.75,R:0.75};
 const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5.6,trebleFreq:3000,treble:4.7,highCut:12000,reverb:8,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0};
 const DSP={L:Object.assign({},DSP_DEFAULT),R:Object.assign({},DSP_DEFAULT)};
-let ctx=null, source=null, inputSplitter=null, mixBus=null, mixDC=null, panRoutes={}, convolver={}, sideFx={}, fileTarget=null, t3kTarget=null;
+let ctx=null, source=null, inputSplitter=null, mixBus=null, mixDC=null, panRoutes={}, convolver={}, sideFx={}, sideBusNodes={}, routedSideState={}, graphSrc=null, graphCtx=null, fileTarget=null, t3kTarget=null;
 const INPUT_MODE_KEY='improvs2.rig.inputMode';
 const INPUT_SIDE_KEY='improvs2.rig.inputMode.';
 function readInputMode(){try{const v=window.localStorage.getItem(INPUT_MODE_KEY);return ['stereo','left','right'].includes(v)?v:'stereo';}catch(e){return 'stereo';}}
@@ -1633,70 +1633,87 @@ function connectPan(side,signal,isStereo,fx,useDSP){
  }else merge.connect(mixBus);
  panRoutes[side]={split,left,right,merge,stereo:!!isStereo};setPanGains(side);
 }
+function sideRouteState(side){
+ const keys=sideKeys(side).map(k=>{const n=NAM[k];return [k,!!n.loaded,!!n.enabled,n.compileToken,n.node];});
+ return {input:inputModes[side]|| (side==='L'?'left':'right'),keys,
+  irLoaded:!!IR[side].loaded,irEnabled:!!IR[side].enabled,irBuffer:IR[side].buffer,
+  dsp:JSON.stringify(DSP[side])};
+}
+function sameSideRouteState(a,b){
+ if(!a||!b||a.input!==b.input||a.irLoaded!==b.irLoaded||a.irEnabled!==b.irEnabled||a.irBuffer!==b.irBuffer||a.dsp!==b.dsp||a.keys.length!==b.keys.length)return false;
+ for(let i=0;i<a.keys.length;i++)for(let j=0;j<a.keys[i].length;j++)if(a.keys[i][j]!==b.keys[i][j])return false;
+ return true;
+}
+function clearSideRoute(side){
+ const fx=sideFx[side];
+ // AudioNode.disconnect() on fx.input only removes its outgoing edges; explicitly
+ // remove the splitter's incoming tap for this side so input changes never accumulate.
+ if(inputSplitter&&fx){try{inputSplitter.disconnect(fx.input);}catch(e){};if(fx.inputSumL)try{inputSplitter.disconnect(fx.inputSumL);}catch(e){};if(fx.inputSumR)try{inputSplitter.disconnect(fx.inputSumR);}catch(e){}}
+ const pr=panRoutes[side];if(pr)Object.values(pr).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
+ disconnect(sideBusNodes[side]);sideBusNodes[side]=null;
+ disconnect(convolver[side]);
+ if(fx)Object.values(fx).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
+ sideKeys(side).forEach(k=>disconnect(NAM[k].node));
+ delete panRoutes[side];
+}
 async function routeNow(){
  const c=ctx||audioContext();if(!c)return;ctx=c;
  const src=window._namMasterNode||window._INSTVOL||null;const dst=window._MASTERCLIP||c.destination;
  if(!src){status('Waiting for instrument audio source');return;}source=src;
  try{if(c.state==='suspended')await c.resume();}catch(e){}
- // Tear down only this rig's routes, then rebuild in a deterministic order.
- disconnect(src);disconnect(inputSplitter);disconnect(mixBus);disconnect(mixDC);
- NAM_KEYS.forEach(k=>disconnect(NAM[k].node));
- SIDES.forEach(side=>{
-  disconnect(convolver[side]);
-  const pr=panRoutes[side];if(pr)Object.values(pr).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
-  if(sideFx[side])Object.values(sideFx[side]).forEach(n=>{if(n&&typeof n.disconnect==='function')disconnect(n);});
- });
- panRoutes={};
+ // No active rig: remove only the rig graph and restore the original dry route.
  if(!active()){
+  SIDES.forEach(clearSideRoute);routedSideState={};
+  disconnect(src);disconnect(inputSplitter);disconnect(mixBus);disconnect(mixDC);
+  inputSplitter=null;mixBus=null;mixDC=null;source=null;graphSrc=null;graphCtx=null;
   const comp=window._COMP_NODE;try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}paintRig();return;
  }
- // The browser context is requested at 48 kHz (see ensureAudio). Keep both source
- // channels available: Stereo = L->Left, R->Right; Left/Right duplicate that selected
- // input into both chains. No implicit L+R mono sum in the stereo rig.
- inputSplitter=c.createChannelSplitter(2);src.connect(inputSplitter);
- mixBus=c.createGain();mixBus.channelCount=2;mixBus.channelCountMode='explicit';mixBus.channelInterpretation='speakers';
- mixDC=c.createBiquadFilter();mixDC.type='highpass';mixDC.frequency.value=5;mixDC.Q.value=0.707;
- mixBus.connect(mixDC);mixDC.connect(dst);
+ // Keep the source splitter and master mixer alive while changing one side. The old
+ // implementation disconnected and rebuilt BOTH chains on every checkbox change;
+ // on mobile that briefly tore down the working chain and could starve the NAM worklets.
+ const needsGraph=!inputSplitter||!mixBus||!mixDC||graphSrc!==src||graphCtx!==c;
+ if(needsGraph){
+  SIDES.forEach(clearSideRoute);routedSideState={};
+  if(graphSrc&&graphSrc!==src)disconnect(graphSrc);
+  disconnect(src);disconnect(inputSplitter);disconnect(mixBus);disconnect(mixDC);
+  inputSplitter=c.createChannelSplitter(2);src.connect(inputSplitter);
+  graphSrc=src;graphCtx=c;
+  mixBus=c.createGain();mixBus.channelCount=2;mixBus.channelCountMode='explicit';mixBus.channelInterpretation='speakers';
+  mixDC=c.createBiquadFilter();mixDC.type='highpass';mixDC.frequency.value=5;mixDC.Q.value=0.707;
+  mixBus.connect(mixDC);mixDC.connect(dst);
+ }
  for(const side of SIDES){
+  const state=sideRouteState(side);
+  if(sameSideRouteState(state,routedSideState[side]))continue;
+  clearSideRoute(side);
   const all=sideKeys(side).filter(k=>NAM[k].loaded);
   const keys=all.filter(k=>NAM[k].enabled);
   const irActive=!!(IR[side].loaded&&IR[side].enabled&&IR[side].buffer);
-  // A loaded-but-bypassed NAM by itself must not create a second dry path.
   const sideConfigured=keys.length>0||irActive||!!DSP[side].enabled;
-  if(!sideConfigured)continue;
+  if(!sideConfigured){routedSideState[side]=state;continue;}
   const fx=ensureSideFx(side);fx.apply();
-  const sideMode=inputModes[side]|| (side==='L'?'left':'right');
+  const sideMode=state.input;
   if(sideMode==='both'){
-   // Explicitly downmix L+R to mono for this chain; keep the other chain independent.
    const sumL=c.createGain(),sumR=c.createGain();
    sumL.gain.value=0.5;sumR.gain.value=0.5;
-   // Keep references so route rebuilds disconnect these temporary summing nodes too.
    fx.inputSumL=sumL;fx.inputSumR=sumR;
    inputSplitter.connect(sumL,0,0);inputSplitter.connect(sumR,1,0);
    sumL.connect(fx.input);sumR.connect(fx.input);
-  }else{
-   inputSplitter.connect(fx.input,sideMode==='left'?0:1,0);
-  }
-  // Pre-chain: input trim -> drive -> optional compressor -> serial NAM slots.
-  // This is the meaningful input stage; it must shape the signal entering NAM,
-  // not be mislabeled output gain after the model.
+  }else inputSplitter.connect(fx.input,sideMode==='left'?0:1,0);
   fx.input.connect(fx.drive);let t=fx.drive;
   if(DSP[side].enabled&&DSP[side].compOn){t.connect(fx.comp);t=fx.comp;}
   for(const key of keys){const nd=await ensureNode(key);t.connect(nd);t=nd;}
   if(irActive){const ir=ensureIR(side);t.connect(ir);t=ir;}
-  // Reverb is a parallel send from the NAM/IR chain. Its stereo return joins before
-  // pan, then this side's pan -> tone stack -> output trim feeds the stereo mix bus.
-  const sideBus=c.createGain();t.connect(sideBus);
-  if(DSP[side].enabled){
-   t.connect(fx.verb);fx.verb.connect(fx.verbConvolver);fx.verbConvolver.connect(sideBus);
-  }
+  const sideBus=c.createGain();sideBusNodes[side]=sideBus;t.connect(sideBus);
+  if(DSP[side].enabled){t.connect(fx.verb);fx.verb.connect(fx.verbConvolver);fx.verbConvolver.connect(sideBus);}
   const stereoIR=!!(irActive&&IR[side].buffer.numberOfChannels>1);
   const stereoOutput=stereoIR||(!!DSP[side].enabled&&Number(DSP[side].reverb)>0);
   connectPan(side,sideBus,stereoOutput,fx,!!DSP[side].enabled);
+  routedSideState[side]=state;
  }
  paintRig();
 }
-function route(){routeQueue=routeQueue.catch(function(){}).then(routeNow).catch(function(err){status('Rig route failed: '+(err&&err.message||err)+' · dry fallback');const c=ctx||audioContext(),src=window._namMasterNode||window._INSTVOL||null,dst=window._MASTERCLIP||(c&&c.destination),comp=window._COMP_NODE;if(src){try{src.disconnect();}catch(e){}try{if(comp)src.connect(comp);else if(dst)src.connect(dst);}catch(e){}}throw err;});return routeQueue;}
+function route(){routeQueue=routeQueue.catch(function(){}).then(routeNow).catch(function(err){status('Rig route failed: '+(err&&err.message||err)+(SIDES.some(s=>panRoutes[s])?' · other chain preserved':' · dry fallback'));const c=ctx||audioContext(),src=window._namMasterNode||window._INSTVOL||null,dst=window._MASTERCLIP||(c&&c.destination),comp=window._COMP_NODE;/* Never kill the still-working side if only one chain's rebuild failed. */if(src&&!SIDES.some(s=>panRoutes[s])){try{src.disconnect();}catch(e){}try{if(comp)src.connect(comp);else if(dst)src.connect(dst);}catch(e){}}throw err;});return routeQueue;}
 async function setIR(side,buffer,meta){meta=meta||{};if(!IR[side])throw new Error('Unknown IR side '+side);IR[side].buffer=buffer||null;IR[side].loaded=!!buffer;IR[side].enabled=meta.enabled!==false;IR[side].name=buffer?(meta.name||('IR '+side)):'Empty';IR[side].toneId=meta.toneId==null?null:String(meta.toneId);IR[side].modelId=meta.modelId==null?null:String(meta.modelId);IR[side].modelName=meta.modelName||'';IR[side].toneTitle=meta.toneTitle||'';await route();paintRig();}
 async function clearNAM(key){NAM[key].compileToken++;NAM[key].json=null;NAM[key].loaded=false;NAM[key].enabled=false;NAM[key].tier=null;NAM[key].name='Empty';NAM[key].toneId=null;NAM[key].modelId=null;NAM[key].modelName='';NAM[key].toneTitle='';NAM[key].variants=[];NAM[key].rateWarning='';disconnect(NAM[key].node);NAM[key].node=null;await route();paintRig();}
 async function clearIR(side){IR[side]={loaded:false,enabled:true,buffer:null,name:'Empty',toneId:null,modelId:null,modelName:'',toneTitle:''};await route();paintRig();}
