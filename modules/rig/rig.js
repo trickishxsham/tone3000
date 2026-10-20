@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.905-16k-adaptive-buffer
+// version: 4.9.8.907-ir-model-url-fix
 // Legacy NAMRealtime compatibility layer + eight-slot stereo NAM rig and chain DSP
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.905';
+var MODULE_VERSION = '4.9.8.907';
 var _booted=false;
 var _uiBound=false;
 
@@ -1268,7 +1268,9 @@ window.T3K=T3K;
   const t3kSort=document.getElementById('t3kSort'), t3kFav=document.getElementById('t3kFav');
   const t3kResults=document.getElementById('t3kResults'), t3kPager=document.getElementById('t3kPager');
   let curPage=1;
-  t3kClose&&t3kClose.addEventListener('click',()=>{ modal.style.display='none'; });
+  // When launched from the stereo NAM8 rig, keep its exact destination while using the legacy image-rich store.
+  let t3kNAM8Target=null;
+  t3kClose&&t3kClose.addEventListener('click',()=>{ modal.style.display='none'; t3kNAM8Target=null; });
 
   function openT3k(slot){
     t3kTargetSlot=slot;
@@ -1287,11 +1289,10 @@ window.T3K=T3K;
       const res=await T3K.listModels(tone.id); const models=res.data||res;
       if(!models||!models.length){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">No models available for this tone in the selected architecture.</div>'; return; }
       tone.models=models;
-      // Prefer the lighter A2 Lite capture whenever this tone publishes both Lite and Full.
-      // Full remains available as a manual choice from the variant list if Lite is absent.
-      const lite=preferredA2Lite(models);
-      if(lite){ await loadToneModel(tone,lite); return; }
-      if(models.length===1){ await loadToneModel(tone,models[0]); return; }
+      // Preserve explicit model choice: show A2 Lite, A2 Full, and any other variants
+      // instead of silently auto-loading one. This also avoids cross-IIFE
+      // ReferenceError from the newer modal's private preferredA2Lite helper.
+      if(models.length===1 && !t3kNAM8Target){ await loadToneModel(tone,models[0]); return; }
       renderModelVariants(tone,models);
     }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Could not load variants: '+escapeT3k(msg)+'</div>';
@@ -1312,17 +1313,33 @@ window.T3K=T3K;
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading '+escapeT3k(model.name||'model')+'…</div>';
     if(t3kPager) t3kPager.innerHTML='';
     try{
+      if(!model||!model.model_url) throw new Error('This variant has no downloadable model URL');
       const blob=await T3K.downloadModel(model.model_url); const slot=opts.slotOverride||t3kTargetSlot||'amp';
-      const isIR=(tone.format==='ir')||(slot==='cab');
-      const label=(tone.title||'TONE3000 tone')+(model.name?' — '+model.name:'');
-      if(isIR){ await loadIrBlob(blob,label); }
-      else { applyNam(await blob.text(),slot==='cab'?'amp':slot,label); }
-      const target=isIR?'cab':(slot==='cab'?'amp':slot);
-      if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=model.id==null?null:String(model.id); S[target].modelName=model.name||''; S[target].toneTitle=tone.title||tone.name||S[target].toneTitle||'';
-        if(Array.isArray(tone.models)) S[target].variants=tone.models;
-        if(!S[target].variants||!S[target].variants.length) { try{ const vr=await T3K.listModels(tone.id); S[target].variants=(vr&&vr.data)||vr||[]; }catch(e){ S[target].variants=[model]; } }
-        refreshVariantSelect(target); }
-      if(opts.keepModal!==true) modal.style.display='none';
+      const isIR=t3kNAM8Target ? t3kNAM8Target.format==='ir' : ((tone.format==='ir')||(slot==='cab'));
+      const label=(tone.title||tone.name||'TONE3000 tone')+(model.name?' — '+model.name:'');
+      if(t3kNAM8Target && window.NAM8){
+        // The legacy store UI is reused, but loads into the selected stereo-rig slot.
+        if(isIR){
+          const ac=window.getAC&&window.getAC();
+          if(!ac) throw new Error('Audio engine is not ready');
+          const buf=await ac.decodeAudioData(await blob.arrayBuffer());
+          const side=t3kNAM8Target.target;
+          if(side==='BOTH'){ await window.NAM8.setIR('L',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,enabled:true}); await window.NAM8.setIR('R',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,enabled:true}); }
+          else await window.NAM8.setIR(side,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,enabled:true});
+        }else{
+          const json=JSON.parse(await blob.text());
+          await window.NAM8.setModel(t3kNAM8Target.target,json,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name||'',toneTitle:tone.title||tone.name||'',variants:tone.models||[model],enabled:true});
+        }
+      }else{
+        if(isIR){ await loadIrBlob(blob,label); }
+        else { applyNam(await blob.text(),slot==='cab'?'amp':slot,label); }
+        const target=isIR?'cab':(slot==='cab'?'amp':slot);
+        if(S[target]){ S[target].toneId=String(tone.id); S[target].modelId=model.id==null?null:String(model.id); S[target].modelName=model.name||''; S[target].toneTitle=tone.title||tone.name||S[target].toneTitle||'';
+          if(Array.isArray(tone.models)) S[target].variants=tone.models;
+          if(!S[target].variants||!S[target].variants.length) { try{ const vr=await T3K.listModels(tone.id); S[target].variants=(vr&&vr.data)||vr||[]; }catch(e){ S[target].variants=[model]; } }
+          refreshVariantSelect(target); }
+      }
+      if(opts.keepModal!==true){ modal.style.display='none'; t3kNAM8Target=null; }
     }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+escapeT3k(msg)+'</div>';
       console.warn('[T3K] model load failed:',err); }
@@ -1379,6 +1396,23 @@ window.T3K=T3K;
   t3kFav&&t3kFav.addEventListener('click',async ()=>{ t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#fbbf24;">loading favorites…</div>';
     try{ renderResults(await T3K.favorited(1)); }catch(err){ t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">'+err.message+'</div>'; } });
 
+  // Bridge the newer stereo rig's T3K buttons to the original image-rich store.
+  // The store keeps its filters, images, sorting, favorites and paging, but loads into NAM8.
+  window.__openLegacyT3KForNAM8=function(target,format){
+    t3kNAM8Target={target:target,format:format};
+    t3kTargetSlot=format==='ir'?'cab':'amp';
+    if(t3kFormat)t3kFormat.value=format==='ir'?'ir':'nam';
+    if(t3kGear)t3kGear.value=format==='ir'?'cab':'';
+    if(!T3K.configured()){setStat('TONE3000 is not configured');return;}
+    if(!T3K.connected()){
+      sessionStorage.setItem('t3k_new_search_return',JSON.stringify({target:target,format:format}));
+      setStat('connecting to TONE3000…');
+      T3K.connect().catch(err=>setStat('connect failed: '+(err.message||err)));
+      return;
+    }
+    modal.style.display='flex';curPage=1;runSearch();
+  };
+
   // handle OAuth return - v698: ONLY when the URL actually carries an OAuth callback. Before,
   //   this ran handleCallback() on every load; on desktop it returned truthy with no real
   //   callback, force-opening the T3K search modal on startup (the 'LOAD FAILED: UNDEFINED'
@@ -1390,7 +1424,20 @@ window.T3K=T3K;
       var hasCb=/[?&#](code|state|access_token|error)=/.test(qs) || /[?&#](code|state|access_token|error)=/.test(hs);
       if(!hasCb) return;                       // no OAuth redirect -> never auto-open on load
       var cb=await T3K.handleCallback();
-      if(cb){ panel.style.display='flex'; modal.style.display='flex'; curPage=1; runSearch(); }
+      if(cb){
+        // Restore the newer NAM/IR search if OAuth was launched from that modal.
+        // Otherwise retain the legacy store's existing callback behavior.
+        var pendingNewSearch=sessionStorage.getItem('t3k_new_search_return');
+        if(pendingNewSearch){
+          sessionStorage.removeItem('t3k_new_search_return');
+          var pendingTarget={target:'L1',format:'nam'};
+          try{ pendingTarget=Object.assign(pendingTarget,JSON.parse(pendingNewSearch)||{}); }catch(_e){}
+          if(window.__openLegacyT3KForNAM8) window.__openLegacyT3KForNAM8(pendingTarget.target,pendingTarget.format);
+          else { openT3K(pendingTarget.target,pendingTarget.format); searchT3K(); }
+        }else{
+          panel.style.display='flex'; modal.style.display='flex'; curPage=1; runSearch();
+        }
+      }
     }catch(e){ console.warn('[T3K cb]', e&&e.message); }
   })();
 
@@ -1459,8 +1506,17 @@ const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCu
 const DSP={L:Object.assign({},DSP_DEFAULT),R:Object.assign({},DSP_DEFAULT)};
 let ctx=null, source=null, inputSplitter=null, mixBus=null, mixDC=null, panRoutes={}, convolver={}, sideFx={}, fileTarget=null, t3kTarget=null;
 const INPUT_MODE_KEY='improvs2.rig.inputMode';
+const INPUT_SIDE_KEY='improvs2.rig.inputMode.';
 function readInputMode(){try{const v=window.localStorage.getItem(INPUT_MODE_KEY);return ['stereo','left','right'].includes(v)?v:'stereo';}catch(e){return 'stereo';}}
-let inputMode=readInputMode();
+function readSideInput(side){
+ try{
+  const v=window.localStorage.getItem(INPUT_SIDE_KEY+side);
+  if(['both','left','right'].includes(v))return v;
+ }catch(e){}
+ const legacy=readInputMode();
+ return legacy==='left'?'left':legacy==='right'?'right':(side==='L'?'left':'right');
+}
+const inputModes={L:readSideInput('L'),R:readSideInput('R')};
 let snapshotSaveMode=false;
 const SNAPSHOTS=[null,null,null,null,null,null,null];
 function el(id){return document.getElementById(id);}
@@ -1609,8 +1665,18 @@ async function routeNow(){
   const sideConfigured=keys.length>0||irActive||!!DSP[side].enabled;
   if(!sideConfigured)continue;
   const fx=ensureSideFx(side);fx.apply();
-  const inputIndex=inputMode==='left'?0:(inputMode==='right'?1:(side==='L'?0:1));
-  inputSplitter.connect(fx.input,inputIndex,0);
+  const sideMode=inputModes[side]|| (side==='L'?'left':'right');
+  if(sideMode==='both'){
+   // Explicitly downmix L+R to mono for this chain; keep the other chain independent.
+   const sumL=c.createGain(),sumR=c.createGain();
+   sumL.gain.value=0.5;sumR.gain.value=0.5;
+   // Keep references so route rebuilds disconnect these temporary summing nodes too.
+   fx.inputSumL=sumL;fx.inputSumR=sumR;
+   inputSplitter.connect(sumL,0,0);inputSplitter.connect(sumR,1,0);
+   sumL.connect(fx.input);sumR.connect(fx.input);
+  }else{
+   inputSplitter.connect(fx.input,sideMode==='left'?0:1,0);
+  }
   // Pre-chain: input trim -> drive -> optional compressor -> serial NAM slots.
   // This is the meaningful input stage; it must shape the signal entering NAM,
   // not be mislabeled output gain after the model.
@@ -1648,16 +1714,16 @@ async function saveSnapshot(i){if(i<0||i>6)throw new Error('Snapshot index must 
 async function recallSnapshot(i){let sn=SNAPSHOTS[i];if(!sn){const stat=el('rigSnapStat');if(stat)stat.textContent='Slot '+('ABCDEFG'[i]||i)+' is empty';return;}await restoreSnapshot(sn);const stat=el('rigSnapStat');if(stat){stat.textContent='ABCDEFG'[i]+' ✓';setTimeout(()=>{if(stat.textContent==='ABCDEFG'[i]+' ✓')stat.textContent='';},1600);}}
 async function loadNAMFile(file,key){if(!file)return;let text;if(/\.zip$/i.test(file.name)){text=await extractNAMZip(file);}else{text=await file.text();}const json=JSON.parse(text);await setNAM(key,json,{name:file.name,enabled:true});}
 async function extractNAMZip(file){const buf=await file.arrayBuffer(),dv=new DataView(buf),u8=new Uint8Array(buf);let eocd=-1;for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-65558);i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}}if(eocd<0)throw new Error('Not a ZIP file');const count=dv.getUint16(eocd+10,true);let p=dv.getUint32(eocd+16,true);for(let e=0;e<count;e++){if(dv.getUint32(p,true)!==0x02014b50)throw new Error('Invalid ZIP central directory');const method=dv.getUint16(p+10,true),size=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),el=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),off=dv.getUint32(p+42,true),name=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));if(/\.(nam|json)$/i.test(name)){const localName=dv.getUint16(off+26,true),localExtra=dv.getUint16(off+28,true),start=off+30+localName+localExtra,compressed=u8.subarray(start,start+size);if(method===0)return new TextDecoder().decode(compressed);if(method===8&&window.DecompressionStream){const stream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));return new TextDecoder().decode(await new Response(stream).arrayBuffer());}throw new Error('Unsupported ZIP compression method '+method);}p+=46+nl+el+cl;}throw new Error('ZIP contains no .nam or .json model');}
-function buildUI(){const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;letter-spacing:.5px;margin:1px 0 4px;">8× NAM STEREO RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Four serial NAM slots per channel. Each chain has its own IR and pan.</div><div style="display:flex;align-items:center;gap:7px;margin:5px 0 8px;flex-wrap:wrap;color:#cbd5e1;"><strong>INPUT MODE</strong><select id="nam8InputMode" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="stereo">Stereo (L → Left, R → Right)</option><option value="left">Left input → both chains</option><option value="right">Right input → both chains</option></select><span style="font-size:.78em;color:#94a3b8;">Saved separately from snapshots</span></div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:9px;"></div><input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
+function buildUI(){const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;letter-spacing:.5px;margin:1px 0 4px;">8× NAM STEREO RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Four serial NAM slots per channel. Each chain has its own IR and pan.</div><div style="display:flex;align-items:center;gap:7px;margin:5px 0 8px;flex-wrap:wrap;color:#cbd5e1;"><strong>INPUTS</strong><label style="display:flex;align-items:center;gap:4px;">LEFT <select id="nam8InputModeL" data-input-side="L" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label><label style="display:flex;align-items:center;gap:4px;">RIGHT <select id="nam8InputModeR" data-input-side="R" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label><span style="font-size:.78em;color:#94a3b8;">Independent inputs · saved separately from snapshots</span></div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:9px;"></div><input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
  const grid=layout.querySelector('.nam8-grid');for(const side of SIDES){const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid '+(side==='L'?'#2563eb':'#be185d')+';border-radius:7px;padding:7px;min-width:0;';section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;"><strong style="color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';font-size:1.08em;">'+(side==='L'?'LEFT CHAIN':'RIGHT CHAIN')+'</strong><label style="display:flex;align-items:center;gap:5px;color:#cbd5e1;white-space:nowrap;">PAN <input class="nam8-pan" data-side="'+side+'" type="range" min="-100" max="100" step="1" value="'+Math.round(PAN[side]*100)+'" style="width:95px;accent-color:'+(side==='L'?'#60a5fa':'#f472b6')+'"><span class="nam8-pan-val" style="min-width:35px;text-align:right;">'+Math.round(PAN[side]*100)+'</span></label></div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:5px;"></div><div class="nam8-dspbar" data-dsp-side="'+side+'" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:7px 0;padding:6px;background:#0b0f18;border-radius:5px;"><strong style="color:#c4b5fd;">CHAIN DSP</strong><label style="color:#cbd5e1;"><input class="nam8-dsp-enable" data-side="'+side+'" type="checkbox"> ENABLE</label><button type="button" class="nam8-mayer" data-side="'+side+'" style="padding:4px 7px;background:#312e81;color:#e0e7ff;border:1px solid #818cf8;border-radius:4px;">MAYER BLUES</button><span class="nam8-dsp-state" style="color:#94a3b8;font-size:.8em;">DSP bypassed</span></div><div data-nam8-ir="'+side+'" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px 4px 2px;border-top:1px dashed #64748b;margin-top:7px;"><strong style="width:42px;color:'+(side==='L'?'#5eead4':'#f0abfc')+';">IR '+side+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-ir-enabled" type="checkbox" checked>ON</label><button type="button" class="nam8-ir-file" style="padding:3px 6px;background:#12302b;color:#5eead4;border:1px solid #0d9488;border-radius:4px;">LOAD IR</button><button type="button" class="nam8-ir-t3k" style="padding:3px 6px;background:#0c2740;color:#7dd3fc;border:1px solid #38bdf8;border-radius:4px;">T3K</button><button type="button" class="nam8-ir-clear" style="display:none;padding:3px 6px;background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:4px;">CLEAR</button><span class="nam8-ir-name" style="color:#e2e8f0;flex:1;min-width:70px;overflow-wrap:anywhere;">Empty</span></div>';
  const slots=section.querySelector('.nam8-slots');for(const key of sideKeys(side)){const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:5px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';row.innerHTML='<strong style="width:47px;color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';">'+key+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-enabled" type="checkbox">ON</label><button type="button" class="nam8-file" style="padding:3px 6px;background:#1f1235;color:#c4b5fd;border:1px solid #4c1d95;border-radius:4px;">FILE</button><button type="button" class="nam8-t3k" style="padding:3px 6px;background:#0c2740;color:#7dd3fc;border:1px solid #38bdf8;border-radius:4px;">T3K</button><button type="button" class="nam8-clear" style="display:none;padding:3px 6px;background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:4px;">×</button><select class="nam8-tier" style="display:none;max-width:105px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:4px;padding:3px;font-size:.9em;"><option value="">Auto (Lite)</option></select><select class="nam8-model-variant" aria-label="NAM model variant" style="display:none;max-width:130px;background:#101827;color:#e2e8f0;border:1px solid #38bdf8;border-radius:4px;padding:3px;font-size:.9em;"><option value="">Model variant</option></select><span class="nam8-name" style="color:#e2e8f0;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;">Empty</span>';slots.appendChild(row);}
  const dspBar=section.querySelector('.nam8-dspbar');if(dspBar)dspBar.insertAdjacentHTML('afterend',dspControlsMarkup(side));
  grid.appendChild(section);}
  // Replace the old snapshot save and A-G buttons with fresh nodes so legacy click handlers cannot fire.
  if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach(old=>{const b=old.cloneNode(false);old.replaceWith(b);});}
- panel.insertBefore(layout,snapRow||panel.lastChild);const modeEl=el('nam8InputMode');if(modeEl)modeEl.value=inputMode;const namFile=el('nam8File'),irFile=el('nam8IRFile');
+ panel.insertBefore(layout,snapRow||panel.lastChild);['L','R'].forEach(side=>{const modeEl=el('nam8InputMode'+side);if(modeEl)modeEl.value=inputModes[side];});const namFile=el('nam8File'),irFile=el('nam8IRFile');
  layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;const row=t.closest('[data-nam8-slot]'),key=row&&row.getAttribute('data-nam8-slot'),irrow=t.closest('[data-nam8-ir]'),side=irrow&&irrow.getAttribute('data-nam8-ir');if(t.classList.contains('nam8-mayer')){applyMayerPreset(t.dataset.side);}else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=side;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(side,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(side).catch(err=>status(err.message));});
- layout.addEventListener('change',e=>{if(e.target.id==='nam8InputMode'){inputMode=['stereo','left','right'].includes(e.target.value)?e.target.value:'stereo';try{window.localStorage.setItem(INPUT_MODE_KEY,inputMode);}catch(err){}route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-comp-on')||e.target.classList.contains('nam8-eq-on')){const side=e.target.dataset.side,key=e.target.classList.contains('nam8-comp-on')?'compOn':'eqOn';DSP[side][key]=e.target.checked;if(e.target.checked)DSP[side].enabled=true;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-dsp-enable')){const side=e.target.dataset.side;DSP[side].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-enabled')){const row=e.target.closest('[data-nam8-slot]');if(row){NAM[row.dataset.nam8Slot].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-ir-enabled')){const row=e.target.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-tier')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=e.target.value===''?null:Number(e.target.value);if(NAM[key].json)setNAM(key,NAM[key].json,{name:NAM[key].name,tier,enabled:NAM[key].enabled,toneId:NAM[key].toneId,modelId:NAM[key].modelId,modelName:NAM[key].modelName,toneTitle:NAM[key].toneTitle,variants:NAM[key].variants}).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-model-variant')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,model=(NAM[key].variants||[]).find(m=>String(m.id)===String(e.target.value));if(model&&String(model.id)!==String(NAM[key].modelId))switchNAMVariant(key,model);}}});
+ layout.addEventListener('change',e=>{if(e.target.matches('select[data-input-side]')){const side=e.target.dataset.inputSide;inputModes[side]=['both','left','right'].includes(e.target.value)?e.target.value:(side==='L'?'left':'right');try{window.localStorage.setItem(INPUT_SIDE_KEY+side,inputModes[side]);}catch(err){}route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-comp-on')||e.target.classList.contains('nam8-eq-on')){const side=e.target.dataset.side,key=e.target.classList.contains('nam8-comp-on')?'compOn':'eqOn';DSP[side][key]=e.target.checked;if(e.target.checked)DSP[side].enabled=true;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-dsp-enable')){const side=e.target.dataset.side;DSP[side].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}else if(e.target.classList.contains('nam8-enabled')){const row=e.target.closest('[data-nam8-slot]');if(row){NAM[row.dataset.nam8Slot].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-ir-enabled')){const row=e.target.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=e.target.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-tier')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=e.target.value===''?null:Number(e.target.value);if(NAM[key].json)setNAM(key,NAM[key].json,{name:NAM[key].name,tier,enabled:NAM[key].enabled,toneId:NAM[key].toneId,modelId:NAM[key].modelId,modelName:NAM[key].modelName,toneTitle:NAM[key].toneTitle,variants:NAM[key].variants}).catch(err=>status(err.message));}}else if(e.target.classList.contains('nam8-model-variant')){const row=e.target.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,model=(NAM[key].variants||[]).find(m=>String(m.id)===String(e.target.value));if(model&&String(model.id)!==String(NAM[key].modelId))switchNAMVariant(key,model);}}});
  layout.addEventListener('input',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;PAN[side]=Number(e.target.value)/100;const n=e.target.parentNode.querySelector('.nam8-pan-val');if(n)n.textContent=(PAN[side]>=0?'+':'')+e.target.value;setPanGains(side);}else if(e.target.classList.contains('nam8-dsp-param')){const side=e.target.dataset.side,key=e.target.dataset.param,c=DSP_CONTROLS.find(x=>x.key===key);if(DSP[side]&&c){DSP[side][key]=Number(e.target.value);if(sideFx[side])sideFx[side].apply();const out=e.target.parentNode.querySelector('output');if(out)out.textContent=dspDisplayValue(c,e.target.value);}}});
  // Pan changes are applied live; on release we reconnect only if graph has not yet been created.
  layout.addEventListener('pointerup',e=>{if(e.target.classList.contains('nam8-pan')){const side=e.target.dataset.side;setPanGains(side);}});
@@ -1667,7 +1733,7 @@ function buildUI(){const panel=el('rigPanel');if(!panel||el('rig8Layout'))return
  if(snapRow)snapRow.querySelectorAll('.rigSnap').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const i=Number(b.dataset.snap);if(snapshotSaveMode){SNAPSHOTS[i]=capture();snapshotSaveMode=false;persistSnapshot(i).then(()=>{const st=el('rigSnapStat');if(st)st.textContent='Saved '+('ABCDEFG'[i]);}).catch(err=>status('Snapshot save failed: '+err.message));paintSnapshots();}else recallSnapshot(i).catch(err=>status('Snapshot recall failed: '+err.message));}));
  paintSnapshots();paintRig();
 }
-function openT3K(target,format){t3kTarget={target,format};let modal=el('nam8T3KModal');if(!modal){modal=document.createElement('div');modal.id='nam8T3KModal';modal.style.cssText='position:fixed;inset:0;z-index:10020;background:rgba(3,7,18,.94);display:none;flex-direction:column;padding:18px;gap:9px;color:#e2e8f0;font:14px system-ui,sans-serif;';modal.innerHTML='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong style="font-size:18px;color:#7dd3fc;">TONE3000 · NAM / IR</strong><span id="nam8T3KTarget" style="flex:1;color:#a5b4fc;"></span><button id="nam8T3KClose" type="button">CLOSE</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;"><input id="nam8T3KQuery" placeholder="Search tones…" style="flex:1;min-width:140px;padding:8px;background:#111827;color:#fff;border:1px solid #475569;border-radius:5px;"><select id="nam8T3KGear" style="padding:7px;background:#111827;color:#fff;"><option value="amp">Amp</option><option value="pedal">Pedal</option><option value="amp-cab">Amp + Cab</option><option value="cab">Cab / IR</option></select><button id="nam8T3KConnect" type="button">CONNECT</button><button id="nam8T3KSearch" type="button">SEARCH</button></div><div id="nam8T3KResults" style="flex:1;overflow:auto;border:1px solid #334155;border-radius:6px;"></div>';document.body.appendChild(modal);el('nam8T3KClose').onclick=()=>modal.style.display='none';el('nam8T3KSearch').onclick=()=>searchT3K();el('nam8T3KQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchT3K();});el('nam8T3KConnect').onclick=()=>{if(window.T3K&&window.T3K.connect)window.T3K.connect().catch(err=>{el('nam8T3KResults').textContent=err.message;});else el('nam8T3KResults').textContent='TONE3000 module unavailable';};}
+function openT3K(target,format){if(window.__openLegacyT3KForNAM8){window.__openLegacyT3KForNAM8(target,format);return;}t3kTarget={target,format};let modal=el('nam8T3KModal');if(!modal){modal=document.createElement('div');modal.id='nam8T3KModal';modal.style.cssText='position:fixed;inset:0;z-index:10020;background:rgba(3,7,18,.94);display:none;flex-direction:column;padding:18px;gap:9px;color:#e2e8f0;font:14px system-ui,sans-serif;';modal.innerHTML='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong style="font-size:18px;color:#7dd3fc;">TONE3000 · NAM / IR</strong><span id="nam8T3KTarget" style="flex:1;color:#a5b4fc;"></span><button id="nam8T3KClose" type="button">CLOSE</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;"><input id="nam8T3KQuery" placeholder="Search tones…" style="flex:1;min-width:140px;padding:8px;background:#111827;color:#fff;border:1px solid #475569;border-radius:5px;"><select id="nam8T3KGear" style="padding:7px;background:#111827;color:#fff;"><option value="amp">Amp</option><option value="pedal">Pedal</option><option value="amp-cab">Amp + Cab</option><option value="cab">Cab / IR</option></select><button id="nam8T3KConnect" type="button">CONNECT</button><button id="nam8T3KSearch" type="button">SEARCH</button></div><div id="nam8T3KResults" style="flex:1;overflow:auto;border:1px solid #334155;border-radius:6px;"></div>';document.body.appendChild(modal);el('nam8T3KClose').onclick=()=>modal.style.display='none';el('nam8T3KSearch').onclick=()=>searchT3K();el('nam8T3KQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchT3K();});el('nam8T3KConnect').onclick=()=>{if(window.T3K&&window.T3K.connect){sessionStorage.setItem('t3k_new_search_return',JSON.stringify(t3kTarget));window.T3K.connect().catch(err=>{sessionStorage.removeItem('t3k_new_search_return');el('nam8T3KResults').textContent=err.message;});}else el('nam8T3KResults').textContent='TONE3000 module unavailable';};}
  modal.style.display='flex';el('nam8T3KTarget').textContent='Target: '+(format==='ir'?'IR '+target:'NAM '+target);const gear=el('nam8T3KGear');if(format==='ir')gear.value='cab';else if(gear.value==='cab')gear.value='amp';el('nam8T3KResults').textContent=(window.T3K&&window.T3K.connected&&window.T3K.connected())?'Search for a model, then choose a variant.':'Connect to TONE3000, then search.';}
 async function searchT3K(){const box=el('nam8T3KResults');if(!box)return;try{if(!window.T3K||!T3K.connected())throw new Error('Connect to TONE3000 first');box.textContent='Searching…';const q=el('nam8T3KQuery').value.trim(),gear=el('nam8T3KGear').value,fmt=t3kTarget.format==='ir'?'ir':'nam';const res=await T3K.search({query:q,gears:gear,format:fmt,sort:'trending',page:1,page_size:30});const list=Array.isArray(res)?res:(res.data||res.tones||res.results||[]);box.innerHTML='';if(!list.length){box.textContent='No results found.';return;}list.forEach(t=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(t.title||t.name||'Untitled')+' · '+(t.gear||t.format||gear)+' · '+((t.user&&t.user.username)||'');b.onclick=()=>showT3KModels(t);box.appendChild(b);});}catch(e){box.textContent='Search failed: '+(e.message||e);}}
 function preferredA2Lite(models){
@@ -1681,7 +1747,27 @@ function explicitTierForVariant(json,model){
   const vals=json.config.submodels.map(x=>Number(x&&x.max_value)).filter(Number.isFinite);
   return vals.length?Math.max(...vals):null;
 }
-async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{if(t3kTarget.format==='ir'||String(tone.format).toLowerCase()==='ir'){const row=document.createElement('button');row.type='button';row.style.cssText='display:block;width:100%;padding:12px;background:#102a25;color:#5eead4;border:0;';row.textContent='Download and load this IR: '+(tone.title||tone.name||tone.id);row.onclick=()=>loadT3KTone(tone,{id:tone.id,model_url:tone.model_url,name:tone.title||tone.name},true);box.replaceChildren(row);return;}const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent='No downloadable model variants.';return;}const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite is available — loading the lighter model by default…';await loadT3KTone(tone,lite,false,models);return;}models.forEach(m=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||'NAM model')+' · ID '+m.id;b.onclick=()=>loadT3KTone(tone,m,false,models);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+e.message;}}
+async function showT3KModels(tone){
+ const box=el('nam8T3KResults');box.textContent='Loading model variants…';
+ try{
+  const isIR=t3kTarget.format==='ir'||String(tone.format||'').toLowerCase()==='ir';
+  // TONE3000 tone search results do not provide a reliable downloadable model_url.
+  // Fetch the actual Model records and use each record's model_url for IRs as well as NAM.
+  const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);
+  box.innerHTML='';
+  if(!models.length){box.textContent=isIR?'No downloadable IR models were returned for this tone.':'No downloadable model variants.';return;}
+  if(!isIR){
+   const lite=preferredA2Lite(models);
+   if(lite){box.textContent='A2 Lite is available — loading the lighter model by default…';await loadT3KTone(tone,lite,false,models);return;}
+  }
+  models.forEach((m,i)=>{
+   const b=document.createElement('button');b.type='button';
+   b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:'+(isIR?'#5eead4':'#e2e8f0')+';border:0;border-bottom:1px solid #263347;';
+   b.textContent=(m.name||(isIR?'IR model':'NAM model'))+' · ID '+(m.id==null?(i+1):m.id);
+   b.onclick=()=>loadT3KTone(tone,m,isIR,models);box.appendChild(b);
+  });
+ }catch(e){box.textContent='Variants failed: '+(e.message||e);}
+}
 async function loadT3KTone(tone,model,isIR,allModels){const box=el('nam8T3KResults');try{box.textContent='Downloading…';const blob=await T3K.downloadModel(model.model_url);const label=(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR||t3kTarget.format==='ir'){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());const side=t3kTarget.target;if(side==='BOTH'){await setIR('L',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});await setIR('R',buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else await setIR(side,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else{const json=JSON.parse(await blob.text());await setNAM(t3kTarget.target,json,{name:label,tier:explicitTierForVariant(json,model),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:allModels||[model],enabled:true});}el('nam8T3KModal').style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);paintRig();}}
 async function switchNAMVariant(key,model){
  const st=NAM[key];if(!st||!model||!st.toneId||!model.model_url)return;
