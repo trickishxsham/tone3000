@@ -1,7 +1,15 @@
+<!--
+IMPROVS2 BUILD 908 — MODULE PATCH REGISTER
+App shell source: Build 906 HTML baseline.
+Patched module included in Build 908 register:
+  - modules/rig/rig.js — 4.9.8.908-serial-nam-8-ir-4
+No other module is declared Build 908 by this register unless separately patched.
+NOTE: This is a version/register update to the supplied app shell; it does not merge any unavailable intervening Build 907 app-shell changes.
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.906 — 16 kHz NAM SRC and adaptive blocks -->
+<!-- Build 4.9.8.908 — rig module register updated; see file-start module patch comments -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -283,7 +291,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.906';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.908';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -10717,8 +10725,8 @@ function _getKeyStyle(){
   }
 
   async function startKeyDetect(){
-    // Build 906 hotfix: explicitly declare decatonic route-tracking state.
-    var _decaSeen=Object.create(null), _decaSeenCount=0, _decaSeenKey='';
+    // Fix strict-mode ReferenceError: these state variables are used by the scale-walk interval.
+    let _decaSeen=Object.create(null), _decaSeenCount=0, _decaSeenKey='';
     const btn=document.getElementById('btnKeyDetect'), out=document.getElementById('keyResult');
     if(btn){ btn.textContent='⏹ STOP'; btn.style.background='#dc2626'; }   // listen state on the in-block button
     keyDetectActive=true; pitchHistory=[]; pitchTimestamps=[];
@@ -10731,7 +10739,6 @@ function _getKeyStyle(){
     _exileEv={ m2:0, b5:0, n:0, committed:false, kind:null, at:0, deca:null, pair:null, decaSc:0 };
     _pentaRoot=null; _pentaMaj=true; _pentaLocked=false;
     _heptaLocked=false; _styleLocked=false; _barsSinceResolve=0; _barObs=[]; _walkBars=0; _walkPhase='home'; _walkAway=0; _walkBackLeft=0; _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey='';
-    _decaSeen=Object.create(null); _decaSeenCount=0; _decaSeenKey='';
     _listenPhase='tempo'; _listenPhaseAt=Date.now(); _barsAccumStart=0;
     chromaHist=new Array(12).fill(0); chromaAt=0;
     ensureAudio();                                              // creates _AC / _MASTER if needed
