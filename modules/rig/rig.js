@@ -5,7 +5,7 @@
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.919';
+var MODULE_VERSION = '4.9.8.920';
 var _booted=false;
 var _uiBound=false;
 
@@ -128,8 +128,11 @@ const NAMRealtime = (function(){
   // Chain: INSTVOL -> [pedal] -> [ampIn gain -> amp] -> [cab] -> dest. Each stage optional.
   let _pedalOn=false, _ampOn=false, _irOn=false, _ctx=null, srcNode=null, dstNode=null;
   async function route(pedalOn, ampOn, irOn){
-    // v861-lite20b: commit desired on-state FIRST so OFF/ON UI never sticks if graph throws.
+    // Build 920: the serial NAM8 router is the sole owner of the instrument source once installed.
+    // Keep legacy state for compatibility, but NEVER disconnect/reconnect the shared source here;
+    // doing so races NAM8.routeNow() and can leave the instrument silent.
     _pedalOn=!!pedalOn; _ampOn=!!ampOn; _irOn=!!irOn; active=_pedalOn||_ampOn||_irOn;
+    if(window.__IMPROVS2_NAM8_INSTALLED) return;
     try{ if(typeof window.ensureAudio==='function') window.ensureAudio(); }catch(e){}
     _ctx=_ctx||(window.getAC&&window.getAC())||window._AC||null;
     const ac2=_ctx;
@@ -1328,7 +1331,7 @@ window.T3K=T3K;
           else await window.NAM8.setIR(side,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,enabled:true});
         }else{
           const json=JSON.parse(await blob.text());
-          await window.NAM8.setModel(t3kNAM8Target.target,json,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name||'',toneTitle:tone.title||tone.name||'',thumbnailUrl:(tone.images&&tone.images[0])||tone.thumbnail_url||tone.image_url||'',variants:tone.models||[model],enabled:true});
+          await window.NAM8.setModel(t3kNAM8Target.target,json,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name||'',toneTitle:tone.title||tone.name||'',thumbnailUrl:toneThumbnail(tone),variants:tone.models||[model],enabled:true});
         }
       }else{
         if(isIR){ await loadIrBlob(blob,label); }
@@ -1487,12 +1490,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 918 — one serial chain with 8 NAM + 4 IR; persist TONE3000 thumbnails on snapshots. */
+/* IMPROVS2 Build 920 — one serial chain with 8 NAM + 4 IR; persist TONE3000 thumbnails on snapshots. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.919';
+const VERSION='4.9.8.920';
 const SIDES=['OUT'];
 const NAM_KEYS=['L1','L2','L3','L4','R1','R2','R3','R4'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -1693,5 +1696,5 @@ async function loadT3KModel(slot,tone,model){if(IR_KEYS.includes(slot)||['cab','
 function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:async(k,on)=>{k=keyAlias(k);if(!NAM[k])throw new Error('Unknown NAM slot '+k);NAM[k].enabled=!!on;await route();paintRig();},setInputMode:(side,mode)=>{side='OUT';if(!['both','left','right'].includes(mode))throw new Error('Invalid input mode');inputModes.OUT=mode;inputModes.L=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.OUT',mode);window.localStorage.setItem(INPUT_MODE_KEY+'.L',mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
-console.log('[modules] dual-chain stereo NAM/IR rig '+VERSION);
+console.log('[modules] serial NAM/IR rig '+VERSION);
 })();
