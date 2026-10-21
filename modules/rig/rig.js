@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.908-serial-nam-8-ir-4
+// version: 4.9.8.912.b001-unified-left-serial-nam-8-ir-4
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.908';
+var MODULE_VERSION = '4.9.8.912.b001';
 var _booted=false;
 var _uiBound=false;
 
@@ -1487,16 +1487,16 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 912 — independent stereo NAM/IR chains: 8 NAM slots + 4 serial IR slots. */
+/* IMPROVS2 Build 912.b001 — unified single serial NAM/IR chain, based on the known-working L route. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.912';
-const SIDES=['L','R'];
-const NAM_KEYS=['L1','L2','L3','L4','R1','R2','R3','R4'];
+const VERSION='4.9.8.912.b001';
+const SIDES=['L'];
+const NAM_KEYS=['L1','L2','L3','L4','L5','L6','L7','L8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
-const IR_SIDE_KEYS={L:['IR1','IR2'],R:['IR3','IR4']};
+const IR_SIDE_KEYS={L:['IR1','IR2','IR3','IR4']};
 const LABELS={}; NAM_KEYS.forEach(k=>LABELS[k]='NAM '+k);
 const SLOT_DSP_DEFAULT={inputDb:0,drive:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
 const IR_FX_DEFAULT={inputDb:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
@@ -1505,7 +1505,7 @@ const EMPTY_IR=()=>({loaded:false,enabled:true,buffer:null,name:'Empty',toneId:n
 const IR={}; IR_KEYS.forEach(k=>IR[k]=EMPTY_IR());
 const INPUT_MODE_KEY='improvs2.rig.inputMode';
 function readSideInput(side){try{const v=window.localStorage.getItem(INPUT_MODE_KEY+'.'+side);if(['both','left','right'].includes(v))return v;}catch(e){}return side==='L'?'left':'right';}
-const inputModes={L:readSideInput('L'),R:readSideInput('R')};
+const inputModes={L:(()=>{try{const v=window.localStorage.getItem(INPUT_MODE_KEY+'.L');if(['both','left','right'].includes(v))return v;}catch(e){}return 'left';})()};
 const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000,reverb:0,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0};
 const DSP=Object.assign({},DSP_DEFAULT);
 let ctx=null,source=null,graphSrc=null,graphCtx=null,inputSplitter=null,chainInputs={},chainOutputs={},masterNodes={},slotFx={},irNodes={},irFx={},outputMerger=null,outputGain=null,graphNodes=new Set(),routeQueue=Promise.resolve(),fileTarget=null,t3kTarget=null,snapshotSaveMode=false;
@@ -1514,8 +1514,8 @@ function el(id){return document.getElementById(id);}
 function status(s){const n=el('rigStat');if(n)n.textContent=s||'';const n2=el('nam8Status');if(n2)n2.textContent=s||'';}
 function audioContext(){try{if(typeof window.ensureAudio==='function')window.ensureAudio();}catch(e){}return (window.getAC&&window.getAC())||window._AC||null;}
 function active(){return NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
-function sideKeys(side){return NAM_KEYS.filter(k=>k[0]===side);}
-function irSide(key){return Number(key.slice(2))<=2?'L':'R';}
+function sideKeys(side){return side==='L'?NAM_KEYS.slice():[];}
+function irSide(key){return 'L';}
 function snapshotButton(i){return document.querySelector('#rigSnapRow .rigSnap[data-snap="'+i+'"]');}
 const DSP_CONTROLS=[
  {key:'inputDb',label:'Master input gain',min:-20,max:20,step:0.5,unit:' dB'},
@@ -1557,7 +1557,7 @@ async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error
 async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete'});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='error')status(key+' NAM error: '+(d.msg||'unknown'));else if(d.type==='buffer')status(key+' NAM buffer increased to '+d.blockSize+' samples');else if(d.type==='deadline-risk'||d.type==='overrun')status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');};nd.port.postMessage({type:'bypass',value:true});NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
 async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=Number(spec.sampleRate),engineRate=Number(ctx&&ctx.sampleRate);st.rateWarning=(modelRate>0&&engineRate>0&&Math.abs(modelRate-engineRate)>1)?('resampling '+engineRate+' → '+modelRate+' Hz; adaptive blocks'):('adaptive blocks at '+(modelRate||engineRate)+' Hz');const emitted=window.NAMRealtime.emitChain(spec),module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate:modelRate||engineRate};nd.port.postMessage(msg,transferList(msg));return true;}
-function keyAlias(key){if(NAM[key])return key;const m={pedal:'L1',amp:'L2',nam1:'L1',nam2:'L2',L5:'R1',L6:'R2',L7:'R3',L8:'R4'};return m[key]||key;}
+function keyAlias(key){if(NAM[key])return key;const m={pedal:'L1',amp:'L2',nam1:'L1',nam2:'L2',R1:'L5',R2:'L6',R3:'L7',R4:'L8'};return m[key]||key;}
 function irAlias(key){if(IR[key])return key;const m={L:'IR1',R:'IR3','IR-L':'IR1','IR-R':'IR3',cab:'IR1',BOTH:'ALL'};return m[key]||key;}
 async function setNAM(key,json,meta){key=keyAlias(key);meta=meta||{};if(!NAM[key])throw new Error('Unknown NAM slot '+key);if(!json||typeof json!=='object')throw new Error('NAM file is not a JSON model');const st=NAM[key],tier=meta.tier==null?null:meta.tier;status('Preparing '+key+'…');const sent=await compileAndSend(key,json,tier);if(!sent)return false;st.json=json;st.loaded=true;st.enabled=meta.enabled!==false;st.tier=tier;st.name=meta.name||LABELS[key];st.toneId=meta.toneId==null?null:String(meta.toneId);st.modelId=meta.modelId==null?null:String(meta.modelId);st.modelName=meta.modelName||'';st.toneTitle=meta.toneTitle||'';st.variants=meta.variants||[];await route();paintRig();status(key+' loaded'+(st.rateWarning?' · '+st.rateWarning:''));return true;}
 function disconnect(node){try{if(node)node.disconnect();}catch(e){}}
@@ -1611,16 +1611,16 @@ async function routeNow(){
    }
    chainOutputs[side]=t;
    // Preserve channel identity: left chain feeds output channel 0, right chain feeds channel 1.
-   t.connect(outputMerger,0,side==='L'?0:1);
+   t.connect(outputMerger,0,0);t.connect(outputMerger,0,1);
   }
   let finalNode=outputMerger;
   if(DSP.enabled){const m=ensureMasterFx();applyMasterFx();finalNode=outputMerger;finalNode.connect(m.input);m.input.connect(m.drive);let t=m.drive;if(DSP.compOn){t.connect(m.comp);t=m.comp;}if(DSP.eqOn){t.connect(m.low);m.low.connect(m.bass);m.bass.connect(m.mid);m.mid.connect(m.treble);t=m.treble;}t.connect(m.high);m.high.connect(m.output);const dry=track(c.createGain());dry.gain.value=1;m.output.connect(dry);m.output.connect(m.verbSend);m.verbSend.connect(m.verb);m.verb.connect(dry);finalNode=dry;}
   finalNode.connect(dst);
-  status('Stereo dual-chain rig active · '+sideKeys('L').filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/4 L NAM · '+sideKeys('R').filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/4 R NAM · '+IR_SIDE_KEYS.L.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/2 L IR · '+IR_SIDE_KEYS.R.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/2 R IR');
+  status('UNIFIED SERIAL CHAIN ACTIVE · '+NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/8 NAM · '+IR_KEYS.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/4 IR');
  }catch(err){clearGraph();try{if(window._COMP_NODE)src.connect(window._COMP_NODE);else src.connect(dst);}catch(e){}status('Stereo rig routing failed; dry audio restored: '+(err&&err.message||err));throw err;}
  paintRig();
 }
-function route(){routeQueue=routeQueue.catch(()=>{}).then(routeNow).catch(err=>{status('Stereo rig routing failed: '+(err&&err.message||err));throw err;});return routeQueue;}
+function route(){routeQueue=routeQueue.catch(()=>{}).then(routeNow).catch(err=>{status('Serial rig routing failed: '+(err&&err.message||err));throw err;});return routeQueue;}
 async function setIR(key,buffer,meta){key=irAlias(key);meta=meta||{};if(key==='ALL'||key==='BOTH'){for(const k of IR_KEYS){IR[k].buffer=normalizeIRBuffer(buffer);IR[k].loaded=!!buffer;IR[k].enabled=meta.enabled!==false;if(!IR[k].fx)IR[k].fx=Object.assign({},IR_FX_DEFAULT);IR[k].name=buffer?(meta.name||k):'Empty';IR[k].toneId=meta.toneId==null?null:String(meta.toneId);IR[k].modelId=meta.modelId==null?null:String(meta.modelId);IR[k].modelName=meta.modelName||'';IR[k].toneTitle=meta.toneTitle||'';}await route();paintRig();return;}if(!IR[key])throw new Error('Unknown IR slot '+key);IR[key].buffer=normalizeIRBuffer(buffer);IR[key].loaded=!!buffer;IR[key].enabled=meta.enabled!==false;if(!IR[key].fx)IR[key].fx=Object.assign({},IR_FX_DEFAULT);IR[key].name=buffer?(meta.name||key):'Empty';IR[key].toneId=meta.toneId==null?null:String(meta.toneId);IR[key].modelId=meta.modelId==null?null:String(meta.modelId);IR[key].modelName=meta.modelName||'';IR[key].toneTitle=meta.toneTitle||'';await route();paintRig();}
 async function clearNAM(key){key=keyAlias(key);if(!NAM[key])throw new Error('Unknown NAM slot '+key);const st=NAM[key];st.compileToken++;st.json=null;st.loaded=false;st.enabled=false;st.tier=null;st.name='Empty';st.toneId=null;st.modelId=null;st.modelName='';st.toneTitle='';st.variants=[];st.rateWarning='';await route();paintRig();}
 async function clearIR(key){if(!key||key==='ALL'){for(const k of IR_KEYS)IR[k]=EMPTY_IR();}else{key=irAlias(key);if(!IR[key])throw new Error('Unknown IR slot '+key);IR[key]=EMPTY_IR();}await route();paintRig();}
@@ -1632,11 +1632,11 @@ function migrateSnapshot(old){
  const n={schemaVersion:4,slots:{},ir:{},inputModes:modes,dsp:Object.assign({},DSP_DEFAULT,old.dsp&&old.dsp.enabled!==undefined?old.dsp:(old.dsp&&old.dsp.L)||{})};
  NAM_KEYS.forEach(k=>n.slots[k]={json:null,loaded:false,enabled:false,tier:null,name:'Empty',fx:Object.assign({},SLOT_DSP_DEFAULT)});IR_KEYS.forEach(k=>n.ir[k]={loaded:false,enabled:true,serialized:null,name:'Empty',fx:Object.assign({},IR_FX_DEFAULT)});
  const oldSlots=old.slots||{};
- if(Number(old.schemaVersion)>=4){for(const k of NAM_KEYS){const src=oldSlots[k];if(src)n.slots[k]=Object.assign({},n.slots[k],src,{fx:Object.assign({},SLOT_DSP_DEFAULT,src.fx||{})});}}
+ if(Number(old.schemaVersion)>=4){for(const k of NAM_KEYS){const idx=Number(k.slice(1));const src=oldSlots[k]||(idx>=5?oldSlots['R'+(idx-4)]:null);if(src)n.slots[k]=Object.assign({},n.slots[k],src,{fx:Object.assign({},SLOT_DSP_DEFAULT,src.fx||{})});}}
  else {
   // Existing serial-rig snapshots stored eight slots as L1-L8.
   for(let i=1;i<=4;i++){const src=oldSlots['L'+i]||{};if(src.json||src.loaded)n.slots['L'+i]=Object.assign({},n.slots['L'+i],src,{fx:Object.assign({},SLOT_DSP_DEFAULT,src.fx||{})});}
-  for(let i=1;i<=4;i++){const src=oldSlots['R'+i]||oldSlots['L'+(i+4)]||{};if(src.json||src.loaded)n.slots['R'+i]=Object.assign({},n.slots['R'+i],src,{fx:Object.assign({},SLOT_DSP_DEFAULT,src.fx||{})});}
+  for(let i=1;i<=4;i++){const src=oldSlots['R'+i]||oldSlots['L'+(i+4)]||{};if(src.json||src.loaded)n.slots['L'+(i+4)]=Object.assign({},n.slots['L'+(i+4)],src,{fx:Object.assign({},SLOT_DSP_DEFAULT,src.fx||{})});}
  }
  for(let i=0;i<4;i++){const k=IR_KEYS[i],src=(old.ir&&old.ir[k])||(i===0&&old.ir&&old.ir.L)||(i===2&&old.ir&&old.ir.R)||{};n.ir[k]=Object.assign({},n.ir[k],src,{serialized:src.serialized||null,buffer:src.buffer||null,fx:Object.assign({},IR_FX_DEFAULT,src.fx||{})});}
  // Older pedal/amp/cab snapshots remain recallable.
@@ -1669,13 +1669,13 @@ function buildUI(){
  }
  for(const side of SIDES){
   const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid '+(side==='L'?'#2563eb':'#be185d')+';border-radius:7px;padding:7px;min-width:0;';
-  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';font-size:1.08em;">'+(side==='L'?'LEFT OUTPUT CHAIN':'RIGHT OUTPUT CHAIN')+'</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputMode'+side+'" data-input-side="'+side+'" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:6px;"></div><div style="margin-top:8px;border-top:1px dashed #64748b;padding-top:7px;"><strong style="color:#5eead4;display:block;margin-bottom:5px;">IR SLOTS · '+(side==='L'?'IR1–IR2':'IR3–IR4')+'</strong><div class="nam8-irs" style="display:flex;flex-direction:column;gap:6px;"></div></div>';
+  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#93c5fd;font-size:1.08em;">OUTPUT CHAIN</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputModeL" data-input-side="L" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div style="color:#94a3b8;font-size:.82em;margin:2px 0 7px;">SERIAL SIGNAL PATH · UP TO 8 NAM SLOTS AND 4 IR SLOTS</div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:6px;"></div><div style="margin-top:8px;border-top:1px dashed #64748b;padding-top:7px;"><strong style="color:#5eead4;display:block;margin-bottom:5px;">IR SLOTS · IR1–IR4</strong><div class="nam8-irs" style="display:flex;flex-direction:column;gap:6px;"></div></div>';
   const slots=section.querySelector('.nam8-slots');sideKeys(side).forEach(key=>slots.appendChild(slotRow(key,side)));
   const irs=section.querySelector('.nam8-irs');IR_SIDE_KEYS[side].forEach(key=>irs.appendChild(irRow(key,side)));
   grid.appendChild(section);
  }
  layout.querySelectorAll('button').forEach(b=>{b.style.cssText+='padding:4px 7px;border-radius:4px;border:1px solid #475569;background:#172033;color:#e2e8f0;';if(b.classList.contains('nam8-file')){b.style.background='#1f1235';b.style.color='#c4b5fd';}if(b.classList.contains('nam8-t3k')||b.classList.contains('nam8-ir-t3k')){b.style.background='#0c2740';b.style.color='#7dd3fc';}if(b.classList.contains('nam8-ir-file')){b.style.background='#12302b';b.style.color='#5eead4';}});
- if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach(old=>old.replaceWith(old.cloneNode(false)));}panel.insertBefore(layout,snapRow||panel.lastChild);
+ if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach((old,i)=>{const b=old.cloneNode(false);b.textContent='ABCDEFG'[Number(old.dataset.snap??i)]||'ABCDEFG'[i];old.replaceWith(b);});}panel.insertBefore(layout,snapRow||panel.lastChild);
  const namFile=el('nam8File'),irFile=el('nam8IRFile');
  layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;const row=t.closest('[data-nam8-slot]'),key=row&&row.dataset.nam8Slot,irrow=t.closest('[data-nam8-ir]'),irk=irrow&&irrow.dataset.nam8Ir;if(t.classList.contains('rig-master-mayer'))applyMayerPreset();else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=irk;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(irk,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(irk).catch(err=>status(err.message));});
  layout.addEventListener('change',e=>{const t=e.target;if(t.matches('select[data-input-side]')){const side=t.dataset.inputSide;inputModes[side]=['both','left','right'].includes(t.value)?t.value:(side==='L'?'left':'right');try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,inputModes[side]);}catch(err){}route().catch(err=>status(err.message));}else if(t.classList.contains('nam8-enabled')){const row=t.closest('[data-nam8-slot]');if(row){NAM[row.dataset.nam8Slot].enabled=t.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-ir-enabled')){const row=t.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=t.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-slot-eq')){const k=t.dataset.slotKey;NAM[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-ir-eq')){const k=t.dataset.irKey;IR[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-tier')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=t.value===''?null:Number(t.value),st=NAM[key];if(st.json)setNAM(key,st.json,{name:st.name,tier,enabled:st.enabled,toneId:st.toneId,modelId:st.modelId,modelName:st.modelName,toneTitle:st.toneTitle,variants:st.variants}).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-model-variant')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,m=(NAM[key].variants||[]).find(x=>String(x.id)===String(t.value));if(m&&String(m.id)!==String(NAM[key].modelId))switchNAMVariant(key,m);}}else if(t.classList.contains('rig-master-enable')){DSP.enabled=t.checked;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-comp')){DSP.compOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-eq')){DSP.eqOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}});
@@ -1692,7 +1692,7 @@ async function showT3KModels(tone){const box=el('nam8T3KResults');box.textConten
 async function loadT3KTone(tone,model,isIR,allModels){const box=el('nam8T3KResults');try{box.textContent='Downloading…';const blob=await T3K.downloadModel(model.model_url),label=(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR||t3kTarget.format==='ir'){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(t3kTarget.target,buf,{name:label,toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else{const json=JSON.parse(await blob.text());await setNAM(t3kTarget.target,json,{name:label,tier:explicitTierForVariant(json,model),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:allModels||[model],enabled:true});}const modal=el('nam8T3KModal');if(modal)modal.style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);paintRig();}}
 async function switchNAMVariant(key,model){const st=NAM[key];if(!st||!model||!st.toneId||!model.model_url)return;try{status('Loading '+(model.name||'variant')+' into '+key+'…');const blob=await T3K.downloadModel(model.model_url),json=JSON.parse(await blob.text());await setNAM(key,json,{name:(st.toneTitle||st.toneId)+(model.name?' — '+model.name:''),tier:explicitTierForVariant(json,model),toneId:st.toneId,modelId:model.id,modelName:model.name||'',toneTitle:st.toneTitle,variants:st.variants,enabled:st.enabled});}catch(e){status(key+' variant switch failed: '+(e.message||e));paintRig();}}
 async function loadT3KModel(slot,tone,model){if(IR_KEYS.includes(slot)||['cab','IR','IR-L','IR-R'].includes(slot)){t3kTarget={target:IR_KEYS.includes(slot)?slot:(slot==='IR-R'?'IR3':slot==='IR-L'?'IR1':'IR1'),format:'ir'};}else{t3kTarget={target:keyAlias(slot==='pedal'?'L1':slot==='amp'?'L2':slot),format:'nam'};}if(t3kTarget.format==='ir'){const blob=await T3K.downloadModel(model.model_url),c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(t3kTarget.target,buf,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title});}else{const blob=await T3K.downloadModel(model.model_url);await setNAM(t3kTarget.target,JSON.parse(await blob.text()),{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants:[model]});}}
-function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:async(k,on)=>{k=keyAlias(k);if(!NAM[k])throw new Error('Unknown NAM slot '+k);NAM[k].enabled=!!on;await route();paintRig();},setInputMode:(side,mode)=>{side=String(side||'').toUpperCase();if(!SIDES.includes(side)||!['both','left','right'].includes(mode))throw new Error('Invalid side/input mode');inputModes[side]=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
+function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:async(k,on)=>{k=keyAlias(k);if(!NAM[k])throw new Error('Unknown NAM slot '+k);NAM[k].enabled=!!on;await route();paintRig();},setInputMode:(side,mode)=>{side=String(side||'L').toUpperCase();if(side==='R')side='L';if(side!=='L'||!['both','left','right'].includes(mode))throw new Error('Invalid input mode');inputModes.L=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.L',mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
 console.log('[modules] dual-chain stereo NAM/IR rig '+VERSION);
