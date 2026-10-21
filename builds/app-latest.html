@@ -1,14 +1,14 @@
 <!--
-IMPROVS2 BUILD 919 — SERIAL RIG ROUTING + SNAPSHOT LETTERS/THUMBNAILS
+IMPROVS2 BUILD 920 — SERIAL RIG ROUTING + SNAPSHOT LETTERS/THUMBNAILS
 App shell carried forward from the supplied Build 917 package.
-Changed files: app-919.html, app-latest.html, modules/rig/rig.js.
+Changed files: app-920.html, app-latest.html, modules/rig/rig.js.
 One serial chain carries all 8 NAM slots and all 4 IR slots; no separate right output chain.
 The rig module URL is build-versioned to prevent a stale cached rig.js from recreating the old stereo UI.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.919 — preserve serial rig; fix snapshot labels and TONE3000 thumbnail flow -->
+<!-- Build 4.9.8.920 — preserve serial rig; fix snapshot labels and TONE3000 thumbnail flow -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -91,7 +91,7 @@ window.loadModule = function(name){
     var s = document.createElement('script');
     var modulePath = 'modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js';
     // rig.js changed materially in this build; do not let the old stereo rig survive in browser/CDN cache.
-    if(name==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.919');
+    if(name==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.920');
     s.src = window.__rootRelative(modulePath);
     s.async = true;
     var done = false;
@@ -127,7 +127,7 @@ window.preloadModules = function(names){
     var l = document.createElement('link');
     l.rel = 'preload'; l.as = 'script';
     var modulePath = 'modules/' + n + '/' + n + '.js';
-    if(n==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.919');
+    if(n==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.920');
     l.href = window.__rootRelative(modulePath);
     document.head.appendChild(l);
   });
@@ -295,7 +295,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.919';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.920';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
