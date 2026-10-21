@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.908-serial-nam-8-ir-4
+// version: 4.9.8.918-serial-nam-8-ir-4-thumbnail-snapshots
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.913';
+var MODULE_VERSION = '4.9.8.918';
 var _booted=false;
 var _uiBound=false;
 
@@ -1487,18 +1487,17 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 917 — retain TONE3000 snapshot thumbnails; remove right rig from active UI/routing. */
+/* IMPROVS2 Build 918 — one serial chain with 8 NAM + 4 IR; persist TONE3000 thumbnails on snapshots. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.917';
+const VERSION='4.9.8.918';
 const SIDES=['OUT'];
 const NAM_KEYS=['L1','L2','L3','L4','R1','R2','R3','R4'];
-const ACTIVE_NAM_KEYS=['L1','L2','L3','L4'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
 const IR_SIDE_KEYS={OUT:['IR1','IR2','IR3','IR4']};
-const LABELS={}; NAM_KEYS.forEach(k=>LABELS[k]='NAM '+k);
+const DISPLAY_SLOT_LABELS={}; const LABELS={}; NAM_KEYS.forEach((k,i)=>{DISPLAY_SLOT_LABELS[k]='L'+(i+1);LABELS[k]='NAM '+DISPLAY_SLOT_LABELS[k];});
 const SLOT_DSP_DEFAULT={inputDb:0,drive:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
 const IR_FX_DEFAULT={inputDb:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
 const NAM={}; NAM_KEYS.forEach(k=>NAM[k]={key:k,loaded:false,json:null,tier:null,enabled:true,name:'Empty',toneId:null,modelId:null,modelName:'',toneTitle:'',thumbnailUrl:'',variants:[],node:null,compileToken:0,rateWarning:'',fx:Object.assign({},SLOT_DSP_DEFAULT)});
@@ -1514,7 +1513,7 @@ const SNAPSHOTS=[null,null,null,null,null,null,null];
 function el(id){return document.getElementById(id);}
 function status(s){const n=el('rigStat');if(n)n.textContent=s||'';const n2=el('nam8Status');if(n2)n2.textContent=s||'';}
 function audioContext(){try{if(typeof window.ensureAudio==='function')window.ensureAudio();}catch(e){}return (window.getAC&&window.getAC())||window._AC||null;}
-function active(){return ACTIVE_NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
+function active(){return NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
 function sideKeys(side){return side==='OUT'?NAM_KEYS:NAM_KEYS.filter(k=>k[0]===side);}
 function irSide(key){return 'OUT';}
 function snapshotButton(i){return document.querySelector('#rigSnapRow .rigSnap[data-snap="'+i+'"]');}
@@ -1594,7 +1593,7 @@ async function routeNow(){
   if(mode==='both'){const l=track(c.createGain()),r=track(c.createGain());l.gain.value=0.5;r.gain.value=0.5;inputSplitter.connect(l,0,0);inputSplitter.connect(r,1,0);l.connect(input);r.connect(input);}
   else inputSplitter.connect(input,mode==='left'?0:1,0);
   let t=input;
-  for(const key of ACTIVE_NAM_KEYS){
+  for(const key of NAM_KEYS){
    const st=NAM[key];if(!st.loaded||!st.enabled||!st.node)continue;
    const fx=ensureSlotFx(key);fx.apply();
    t.connect(fx.dry);t.connect(fx.pre);fx.pre.connect(fx.drive);fx.drive.connect(st.node);let wet=st.node;
@@ -1650,11 +1649,11 @@ async function extractNAMZip(file){const buf=await file.arrayBuffer(),dv=new Dat
 function applyMayerPreset(){Object.assign(DSP,{enabled:true,compOn:true,eqOn:true,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5.6,trebleFreq:3000,treble:4.7,highCut:12000,reverb:8,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0});route().then(paintRig).catch(e=>status('Preset route failed: '+e.message));paintRig();}
 function buildUI(){
  const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());
- const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;margin:1px 0 4px;">LEFT RIG · 4× NAM · 4× IR</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Single active left rig. The right rig is removed; left-rig audio routing remains unchanged.</div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px;"></div>'+masterDSPMarkup()+'<input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
+ const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;margin:1px 0 4px;">8× NAM · 4× IR SERIAL RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">One output chain: choose L, R, or L+R input, then process serially through up to 8 NAM slots and 4 IR slots.</div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px;"></div>'+masterDSPMarkup()+'<input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
  const grid=layout.querySelector('.nam8-grid');
  function slotRow(key,side){
   const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';
-  row.innerHTML='<strong style="width:32px;color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';">'+key+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-enabled" type="checkbox"> ON</label><button type="button" class="nam8-file">FILE</button><button type="button" class="nam8-t3k">T3K</button><button type="button" class="nam8-clear" style="display:none;color:#f87171;">×</button><select class="nam8-tier" style="display:none;max-width:115px;background:#101827;color:#e2e8f0;"><option value="">Auto (Lite)</option></select><select class="nam8-model-variant" style="display:none;max-width:150px;background:#101827;color:#e2e8f0;"><option value="">Model variant</option></select><span class="nam8-name" style="color:#e2e8f0;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;">Empty</span><details style="flex:1 1 100%;margin-top:3px;color:#cbd5e1;"><summary style="cursor:pointer;color:#a5b4fc;">SLOT PARAMETERS · '+key+'</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:6px;padding:5px 0;"><label>Input dB <input data-slot-key="'+key+'" data-slot-param="inputDb" type="range" min="-18" max="18" step="0.5" value="0"></label><label>Drive <input data-slot-key="'+key+'" data-slot-param="drive" type="range" min="0" max="10" step="0.1" value="0"></label><label>Output dB <input data-slot-key="'+key+'" data-slot-param="outputDb" type="range" min="-18" max="18" step="0.5" value="0"></label><label>Mix % <input data-slot-key="'+key+'" data-slot-param="mix" type="range" min="0" max="100" step="1" value="100"></label><label>Clip <input data-slot-key="'+key+'" data-slot-param="clip" type="range" min="0" max="10" step="0.1" value="0"></label><label><input class="nam8-slot-eq" data-slot-key="'+key+'" type="checkbox"> EQ ON</label><label>Low cut <input data-slot-key="'+key+'" data-slot-param="lowCut" type="range" min="20" max="500" step="1" value="70"></label><label>Bass Hz <input data-slot-key="'+key+'" data-slot-param="bassFreq" type="range" min="40" max="500" step="1" value="120"></label><label>Bass <input data-slot-key="'+key+'" data-slot-param="bass" type="range" min="0" max="10" step="0.1" value="5"></label><label>Mid Hz <input data-slot-key="'+key+'" data-slot-param="midFreq" type="range" min="100" max="8000" step="10" value="750"></label><label>Mid Q <input data-slot-key="'+key+'" data-slot-param="midQ" type="range" min="0.3" max="5" step="0.1" value="0.8"></label><label>Mids <input data-slot-key="'+key+'" data-slot-param="middle" type="range" min="0" max="10" step="0.1" value="5"></label><label>Treble Hz <input data-slot-key="'+key+'" data-slot-param="trebleFreq" type="range" min="1000" max="12000" step="10" value="3000"></label><label>Treble <input data-slot-key="'+key+'" data-slot-param="treble" type="range" min="0" max="10" step="0.1" value="5"></label><label>High cut <input data-slot-key="'+key+'" data-slot-param="highCut" type="range" min="1000" max="20000" step="100" value="12000"></label></div></details>';
+  row.innerHTML='<strong style="width:32px;color:'+(side==='L'?'#93c5fd':'#f9a8d4')+';">'+(DISPLAY_SLOT_LABELS[key]||key)+'</strong><label style="display:flex;align-items:center;gap:3px;color:#cbd5e1;"><input class="nam8-enabled" type="checkbox"> ON</label><button type="button" class="nam8-file">FILE</button><button type="button" class="nam8-t3k">T3K</button><button type="button" class="nam8-clear" style="display:none;color:#f87171;">×</button><select class="nam8-tier" style="display:none;max-width:115px;background:#101827;color:#e2e8f0;"><option value="">Auto (Lite)</option></select><select class="nam8-model-variant" style="display:none;max-width:150px;background:#101827;color:#e2e8f0;"><option value="">Model variant</option></select><span class="nam8-name" style="color:#e2e8f0;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;">Empty</span><details style="flex:1 1 100%;margin-top:3px;color:#cbd5e1;"><summary style="cursor:pointer;color:#a5b4fc;">SLOT PARAMETERS · '+(DISPLAY_SLOT_LABELS[key]||key)+'</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:6px;padding:5px 0;"><label>Input dB <input data-slot-key="'+key+'" data-slot-param="inputDb" type="range" min="-18" max="18" step="0.5" value="0"></label><label>Drive <input data-slot-key="'+key+'" data-slot-param="drive" type="range" min="0" max="10" step="0.1" value="0"></label><label>Output dB <input data-slot-key="'+key+'" data-slot-param="outputDb" type="range" min="-18" max="18" step="0.5" value="0"></label><label>Mix % <input data-slot-key="'+key+'" data-slot-param="mix" type="range" min="0" max="100" step="1" value="100"></label><label>Clip <input data-slot-key="'+key+'" data-slot-param="clip" type="range" min="0" max="10" step="0.1" value="0"></label><label><input class="nam8-slot-eq" data-slot-key="'+key+'" type="checkbox"> EQ ON</label><label>Low cut <input data-slot-key="'+key+'" data-slot-param="lowCut" type="range" min="20" max="500" step="1" value="70"></label><label>Bass Hz <input data-slot-key="'+key+'" data-slot-param="bassFreq" type="range" min="40" max="500" step="1" value="120"></label><label>Bass <input data-slot-key="'+key+'" data-slot-param="bass" type="range" min="0" max="10" step="0.1" value="5"></label><label>Mid Hz <input data-slot-key="'+key+'" data-slot-param="midFreq" type="range" min="100" max="8000" step="10" value="750"></label><label>Mid Q <input data-slot-key="'+key+'" data-slot-param="midQ" type="range" min="0.3" max="5" step="0.1" value="0.8"></label><label>Mids <input data-slot-key="'+key+'" data-slot-param="middle" type="range" min="0" max="10" step="0.1" value="5"></label><label>Treble Hz <input data-slot-key="'+key+'" data-slot-param="trebleFreq" type="range" min="1000" max="12000" step="10" value="3000"></label><label>Treble <input data-slot-key="'+key+'" data-slot-param="treble" type="range" min="0" max="10" step="0.1" value="5"></label><label>High cut <input data-slot-key="'+key+'" data-slot-param="highCut" type="range" min="1000" max="20000" step="100" value="12000"></label></div></details>';
   return row;
  }
  function irRow(key,side){
@@ -1666,7 +1665,7 @@ function buildUI(){
   const side='OUT';
   const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid #d4a72c;border-radius:7px;padding:7px;min-width:0;';
   section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#fbbf24;font-size:1.08em;">OUTPUT CHAIN</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputModeOUT" data-input-side="OUT" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="left">L only</option><option value="right">R only</option><option value="both">L+R (mono sum)</option></select></label></div><div style="color:#9ca3af;font-size:.85em;margin-bottom:7px;">Serial signal path · up to 8 NAM slots and 4 IR slots</div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:6px;"></div><button type="button" class="nam8-add-slot" style="display:block;width:100%;font-size:28px;font-weight:bold;margin-top:7px;border:2px dashed #64748b;background:#151c2a;color:#fbbf24;border-radius:8px;padding:1px 10px;">+</button><div style="margin-top:8px;border-top:1px dashed #64748b;padding-top:7px;"><strong style="color:#5eead4;display:block;margin-bottom:5px;">IR SLOTS</strong><div class="nam8-irs" style="display:flex;flex-direction:column;gap:6px;"></div><button type="button" class="nam8-add-ir" style="display:block;width:100%;font-size:28px;font-weight:bold;margin-top:7px;border:2px dashed #64748b;background:#151c2a;color:#5eead4;border-radius:8px;padding:1px 10px;">+</button></div>';
-  const slots=section.querySelector('.nam8-slots');ACTIVE_NAM_KEYS.forEach((key,i)=>{const row=slotRow(key,'L');if(i>0)row.style.display='none';slots.appendChild(row);});
+  const slots=section.querySelector('.nam8-slots');NAM_KEYS.forEach((key,i)=>{const row=slotRow(key,'L');if(i>0)row.style.display='none';slots.appendChild(row);});
   const irs=section.querySelector('.nam8-irs');IR_KEYS.forEach((key,i)=>{const row=irRow(key,'L');if(i>0)row.style.display='none';irs.appendChild(row);});
   const addSlot=section.querySelector('.nam8-add-slot');addSlot.addEventListener('click',()=>{const hidden=[...slots.children].find(n=>n.style.display==='none');if(hidden){hidden.style.display='flex';if(![...slots.children].some(n=>n.style.display==='none'))addSlot.style.display='none';}});
   const addIR=section.querySelector('.nam8-add-ir');addIR.addEventListener('click',()=>{const hidden=[...irs.children].find(n=>n.style.display==='none');if(hidden){hidden.style.display='flex';if(![...irs.children].some(n=>n.style.display==='none'))addIR.style.display='none';}});
