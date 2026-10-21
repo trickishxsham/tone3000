@@ -1487,16 +1487,16 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 912.b001 — original Build 912 L chain retained; separate R chain removed. */
+/* IMPROVS2 Build 913 — independent stereo NAM/IR chains: 8 NAM slots + 4 serial IR slots. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.912';
-const SIDES=['L'];
-const NAM_KEYS=['L1','L2','L3','L4'];
-const IR_KEYS=['IR1','IR2'];
-const IR_SIDE_KEYS={L:['IR1','IR2']};
+const VERSION='4.9.8.913';
+const SIDES=['L','R'];
+const NAM_KEYS=['L1','L2','L3','L4','R1','R2','R3','R4'];
+const IR_KEYS=['IR1','IR2','IR3','IR4'];
+const IR_SIDE_KEYS={L:['IR1','IR2'],R:['IR3','IR4']};
 const LABELS={}; NAM_KEYS.forEach(k=>LABELS[k]='NAM '+k);
 const SLOT_DSP_DEFAULT={inputDb:0,drive:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
 const IR_FX_DEFAULT={inputDb:0,outputDb:0,mix:100,clip:0,eqOn:false,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
@@ -1505,7 +1505,7 @@ const EMPTY_IR=()=>({loaded:false,enabled:true,buffer:null,name:'Empty',toneId:n
 const IR={}; IR_KEYS.forEach(k=>IR[k]=EMPTY_IR());
 const INPUT_MODE_KEY='improvs2.rig.inputMode';
 function readSideInput(side){try{const v=window.localStorage.getItem(INPUT_MODE_KEY+'.'+side);if(['both','left','right'].includes(v))return v;}catch(e){}return side==='L'?'left':'right';}
-const inputModes={L:readSideInput('L')};
+const inputModes={L:readSideInput('L'),R:readSideInput('R')};
 const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000,reverb:0,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0};
 const DSP=Object.assign({},DSP_DEFAULT);
 let ctx=null,source=null,graphSrc=null,graphCtx=null,inputSplitter=null,chainInputs={},chainOutputs={},masterNodes={},slotFx={},irNodes={},irFx={},outputMerger=null,outputGain=null,graphNodes=new Set(),routeQueue=Promise.resolve(),fileTarget=null,t3kTarget=null,snapshotSaveMode=false;
@@ -1557,7 +1557,7 @@ async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error
 async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete'});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='error')status(key+' NAM error: '+(d.msg||'unknown'));else if(d.type==='buffer')status(key+' NAM buffer increased to '+d.blockSize+' samples');else if(d.type==='deadline-risk'||d.type==='overrun')status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');};nd.port.postMessage({type:'bypass',value:true});NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
 async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=Number(spec.sampleRate),engineRate=Number(ctx&&ctx.sampleRate);st.rateWarning=(modelRate>0&&engineRate>0&&Math.abs(modelRate-engineRate)>1)?('resampling '+engineRate+' → '+modelRate+' Hz; adaptive blocks'):('adaptive blocks at '+(modelRate||engineRate)+' Hz');const emitted=window.NAMRealtime.emitChain(spec),module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate:modelRate||engineRate};nd.port.postMessage(msg,transferList(msg));return true;}
-function keyAlias(key){if(NAM[key])return key;const m={pedal:'L1',amp:'L2',nam1:'L1',nam2:'L2'};return m[key]||key;}
+function keyAlias(key){if(NAM[key])return key;const m={pedal:'L1',amp:'L2',nam1:'L1',nam2:'L2',L5:'R1',L6:'R2',L7:'R3',L8:'R4'};return m[key]||key;}
 function irAlias(key){if(IR[key])return key;const m={L:'IR1',R:'IR3','IR-L':'IR1','IR-R':'IR3',cab:'IR1',BOTH:'ALL'};return m[key]||key;}
 async function setNAM(key,json,meta){key=keyAlias(key);meta=meta||{};if(!NAM[key])throw new Error('Unknown NAM slot '+key);if(!json||typeof json!=='object')throw new Error('NAM file is not a JSON model');const st=NAM[key],tier=meta.tier==null?null:meta.tier;status('Preparing '+key+'…');const sent=await compileAndSend(key,json,tier);if(!sent)return false;st.json=json;st.loaded=true;st.enabled=meta.enabled!==false;st.tier=tier;st.name=meta.name||LABELS[key];st.toneId=meta.toneId==null?null:String(meta.toneId);st.modelId=meta.modelId==null?null:String(meta.modelId);st.modelName=meta.modelName||'';st.toneTitle=meta.toneTitle||'';st.variants=meta.variants||[];await route();paintRig();status(key+' loaded'+(st.rateWarning?' · '+st.rateWarning:''));return true;}
 function disconnect(node){try{if(node)node.disconnect();}catch(e){}}
@@ -1587,7 +1587,7 @@ async function routeNow(){
  clearGraph();graphSrc=src;graphCtx=c;
  if(!active()){const comp=window._COMP_NODE;try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}paintRig();return;}
  try{
-  inputSplitter=track(c.createChannelSplitter(2));src.connect(inputSplitter);
+  const upmix=track(c.createGain());upmix.channelCount=2;upmix.channelCountMode='explicit';upmix.channelInterpretation='speakers';src.connect(upmix);inputSplitter=track(c.createChannelSplitter(2));upmix.connect(inputSplitter); // mono bus -> true L+R so splitter ch1 (right chain) isn't silent
   outputMerger=track(c.createChannelMerger(2));
   for(const side of SIDES){
    const input=track(c.createGain());chainInputs[side]=input;
@@ -1616,11 +1616,11 @@ async function routeNow(){
   let finalNode=outputMerger;
   if(DSP.enabled){const m=ensureMasterFx();applyMasterFx();finalNode=outputMerger;finalNode.connect(m.input);m.input.connect(m.drive);let t=m.drive;if(DSP.compOn){t.connect(m.comp);t=m.comp;}if(DSP.eqOn){t.connect(m.low);m.low.connect(m.bass);m.bass.connect(m.mid);m.mid.connect(m.treble);t=m.treble;}t.connect(m.high);m.high.connect(m.output);const dry=track(c.createGain());dry.gain.value=1;m.output.connect(dry);m.output.connect(m.verbSend);m.verbSend.connect(m.verb);m.verb.connect(dry);finalNode=dry;}
   finalNode.connect(dst);
-  status('LEFT RIG ACTIVE · '+sideKeys('L').filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/4 NAM · '+IR_SIDE_KEYS.L.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/2 IR');
- }catch(err){clearGraph();try{if(window._COMP_NODE)src.connect(window._COMP_NODE);else src.connect(dst);}catch(e){}status('Left rig routing failed; dry audio restored: '+(err&&err.message||err));throw err;}
+  status('Stereo dual-chain rig active · '+sideKeys('L').filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/4 L NAM · '+sideKeys('R').filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/4 R NAM · '+IR_SIDE_KEYS.L.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/2 L IR · '+IR_SIDE_KEYS.R.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/2 R IR');
+ }catch(err){clearGraph();try{if(window._COMP_NODE)src.connect(window._COMP_NODE);else src.connect(dst);}catch(e){}status('Stereo rig routing failed; dry audio restored: '+(err&&err.message||err));throw err;}
  paintRig();
 }
-function route(){routeQueue=routeQueue.catch(()=>{}).then(routeNow).catch(err=>{status('Left rig routing failed: '+(err&&err.message||err));throw err;});return routeQueue;}
+function route(){routeQueue=routeQueue.catch(()=>{}).then(routeNow).catch(err=>{status('Stereo rig routing failed: '+(err&&err.message||err));throw err;});return routeQueue;}
 async function setIR(key,buffer,meta){key=irAlias(key);meta=meta||{};if(key==='ALL'||key==='BOTH'){for(const k of IR_KEYS){IR[k].buffer=normalizeIRBuffer(buffer);IR[k].loaded=!!buffer;IR[k].enabled=meta.enabled!==false;if(!IR[k].fx)IR[k].fx=Object.assign({},IR_FX_DEFAULT);IR[k].name=buffer?(meta.name||k):'Empty';IR[k].toneId=meta.toneId==null?null:String(meta.toneId);IR[k].modelId=meta.modelId==null?null:String(meta.modelId);IR[k].modelName=meta.modelName||'';IR[k].toneTitle=meta.toneTitle||'';}await route();paintRig();return;}if(!IR[key])throw new Error('Unknown IR slot '+key);IR[key].buffer=normalizeIRBuffer(buffer);IR[key].loaded=!!buffer;IR[key].enabled=meta.enabled!==false;if(!IR[key].fx)IR[key].fx=Object.assign({},IR_FX_DEFAULT);IR[key].name=buffer?(meta.name||key):'Empty';IR[key].toneId=meta.toneId==null?null:String(meta.toneId);IR[key].modelId=meta.modelId==null?null:String(meta.modelId);IR[key].modelName=meta.modelName||'';IR[key].toneTitle=meta.toneTitle||'';await route();paintRig();}
 async function clearNAM(key){key=keyAlias(key);if(!NAM[key])throw new Error('Unknown NAM slot '+key);const st=NAM[key];st.compileToken++;st.json=null;st.loaded=false;st.enabled=false;st.tier=null;st.name='Empty';st.toneId=null;st.modelId=null;st.modelName='';st.toneTitle='';st.variants=[];st.rateWarning='';await route();paintRig();}
 async function clearIR(key){if(!key||key==='ALL'){for(const k of IR_KEYS)IR[k]=EMPTY_IR();}else{key=irAlias(key);if(!IR[key])throw new Error('Unknown IR slot '+key);IR[key]=EMPTY_IR();}await route();paintRig();}
@@ -1655,7 +1655,7 @@ async function extractNAMZip(file){const buf=await file.arrayBuffer(),dv=new Dat
 function applyMayerPreset(){Object.assign(DSP,{enabled:true,compOn:true,eqOn:true,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5.6,trebleFreq:3000,treble:4.7,highCut:12000,reverb:8,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0});route().then(paintRig).catch(e=>status('Preset route failed: '+e.message));paintRig();}
 function buildUI(){
  const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());
- const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;margin:1px 0 4px;">LEFT RIG · 4× NAM · 2× IR</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Single left rig retained from Build 912. Separate right-side NAM/IR chain removed; left audio routing is unchanged.</div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px;"></div>'+masterDSPMarkup()+'<input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
+ const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;margin:1px 0 4px;">8× NAM · 4× IR TRUE STEREO RIG</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">Separate left and right paths: L1–L4 → IR1–IR2 to left output; R1–R4 → IR3–IR4 to right output. Each chain has its own input selector.</div><div class="nam8-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px;"></div>'+masterDSPMarkup()+'<input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
  const grid=layout.querySelector('.nam8-grid');
  function slotRow(key,side){
   const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';
@@ -1695,5 +1695,5 @@ async function loadT3KModel(slot,tone,model){if(IR_KEYS.includes(slot)||['cab','
 function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:async(k,on)=>{k=keyAlias(k);if(!NAM[k])throw new Error('Unknown NAM slot '+k);NAM[k].enabled=!!on;await route();paintRig();},setInputMode:(side,mode)=>{side=String(side||'').toUpperCase();if(!SIDES.includes(side)||!['both','left','right'].includes(mode))throw new Error('Invalid side/input mode');inputModes[side]=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
-console.log('[modules] single LEFT NAM/IR rig '+VERSION);
+console.log('[modules] dual-chain stereo NAM/IR rig '+VERSION);
 })();
