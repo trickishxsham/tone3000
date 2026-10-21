@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.926-nam-slot-worklet-diagnostics
+// version: 4.9.8.927-925-base-nam-diagnostics
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.926';
+var MODULE_VERSION = '4.9.8.927';
 var _booted=false;
 var _uiBound=false;
 
@@ -403,8 +403,8 @@ const NAMRealtime = (function(){
   //   boundary with a 128-sample dry->wet crossfade. NEVER compiles. ──
   const PROCESSOR_SRC = `
 class NAMProcessor extends AudioWorkletProcessor {
-  constructor(options){
-    super(); this._slotKey=options&&options.processorOptions&&options.processorOptions.slotKey||null; this.cur=null; this.next=null; this.bypass=true; this._pinged=false;
+  constructor(){
+    super(); this.cur=null; this.next=null; this.bypass=true; this._pinged=false;
     this._slow=0; this._overruns=0; this._fade=0; this._warnedMax=false;
     this._srcQ=null; this._wetQ=[]; this._dryQ=[]; this._qRead=0; this._rateKey=''; this._streamReady=false;
     this.port.onmessage=(e)=>{
@@ -551,7 +551,7 @@ class NAMProcessor extends AudioWorkletProcessor {
      this._wIn=Math.max(this._wIn||0,ip);this._wOut=Math.max(this._wOut||0,op);
      if(this._bad&&!this._badPosted){this._badPosted=true;this.port.postMessage({type:'error',msg:'model output is NaN/Inf - muted (host '+sampleRate+' Hz / model '+m.modelRate+' Hz)'});}
      if((this._wN=(this._wN|0)+1)>=Math.ceil(sampleRate/L)){
-       if(this._slotKey)this.port.postMessage({type:'slot-meter',slot:this._slotKey,inputPeak:this._wIn,outputPeak:this._wOut,modelRate:m.modelRate,hostRate:sampleRate,blockSize:m.blockSize,streamReady:this._streamReady});
+       this.port.postMessage({type:'slot-meter',inputPeak:this._wIn,outputPeak:this._wOut,modelRate:m.modelRate,hostRate:sampleRate,blockSize:m.blockSize,streamReady:this._streamReady});
        if(this._wIn>0.002&&this._wOut<1e-7&&this._streamReady&&!this._silentPosted){this._silentPosted=true;this.port.postMessage({type:'error',msg:'model output silent while input present (host '+sampleRate+' Hz / model '+m.modelRate+' Hz)'});}
        this._wN=0;this._wIn=0;this._wOut=0;}}
     if(this._qRead>4096){this._wetQ=this._wetQ.slice(this._qRead);this._dryQ=this._dryQ.slice(this._qRead);this._qRead=0;}
@@ -1541,12 +1541,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 926 — same single serial chain; per-slot NAM worklet diagnostics added. */
+/* IMPROVS2 Build 927 — Build 925 audio path + per-slot NAM diagnostics. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.926';
+const VERSION='4.9.8.927';
 const SIDES=['R'];
 const NAM_KEYS=['R1','R2','R3','R4','R5','R6','R7','R8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -1625,7 +1625,7 @@ function paintRig(){
  const me=document.querySelector('.rig-master-enable');if(me)me.checked=!!DSP.enabled;const mc=document.querySelector('.rig-master-comp');if(mc)mc.checked=!!DSP.compOn;const mq=document.querySelector('.rig-master-eq');if(mq)mq.checked=!!DSP.eqOn;document.querySelectorAll('.rig-master-param').forEach(input=>{const c=DSP_CONTROLS.find(x=>x.key===input.dataset.param);if(c){input.value=String(DSP[c.key]);const out=document.querySelector('output[data-master-param="'+c.key+'"]');if(out)out.textContent=fmt(DSP[c.key],c.step,c.unit);}});
 }
 async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error('Audio engine is not ready');ctx=c;if(typeof window._namLoadModule==='function')await window._namLoadModule(c);else throw new Error('NAM audio worklet loader is unavailable');return c;}
-async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const st=NAM[key];const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete',processorOptions:{slotKey:key}});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='ready'){st.workletStatus='READY';st.workletError='';st.workletMeter={inputPeak:null,outputPeak:null,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:false};paintRig();}else if(d.type==='processing'){st.workletStatus='PROCESSING';paintRig();}else if(d.type==='slot-meter'){st.workletMeter={inputPeak:Number(d.inputPeak)||0,outputPeak:Number(d.outputPeak)||0,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:!!d.streamReady};st.workletStatus=d.streamReady?'RUNNING':'BUFFERING';paintRig();}else if(d.type==='error'){st.workletStatus='WORKLET ERROR';st.workletError=d.msg||'unknown';status(key+' NAM error: '+st.workletError);paintRig();}else if(d.type==='buffer'){status(key+' NAM buffer increased to '+d.blockSize+' samples');if(st.workletMeter)st.workletMeter.blockSize=d.blockSize;paintRig();}else if(d.type==='deadline-risk'||d.type==='overrun'){st.workletStatus='REALTIME WARNING';status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');paintRig();}};nd.onprocessorerror=()=>{st.workletStatus='PROCESSOR CRASH';st.workletError='AudioWorklet processorerror event';status(key+' NAM processor crashed');paintRig();};nd.port.postMessage({type:'bypass',value:true});st.workletStatus='NODE CREATED';NAM[key].node=nd;return nd;}
+async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const st=NAM[key];const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete'});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='ready'){st.workletStatus='READY';st.workletError='';st.workletMeter={inputPeak:null,outputPeak:null,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:false};paintRig();}else if(d.type==='processing'){st.workletStatus='PROCESSING';paintRig();}else if(d.type==='slot-meter'){st.workletMeter={inputPeak:Number(d.inputPeak)||0,outputPeak:Number(d.outputPeak)||0,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:!!d.streamReady};st.workletStatus=d.streamReady?'RUNNING':'BUFFERING';paintRig();}else if(d.type==='error'){st.workletStatus='WORKLET ERROR';st.workletError=d.msg||'unknown';status(key+' NAM error: '+st.workletError);paintRig();}else if(d.type==='buffer'){status(key+' NAM buffer increased to '+d.blockSize+' samples');if(st.workletMeter)st.workletMeter.blockSize=d.blockSize;paintRig();}else if(d.type==='deadline-risk'||d.type==='overrun'){st.workletStatus='REALTIME WARNING';status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');paintRig();}};nd.onprocessorerror=()=>{st.workletStatus='PROCESSOR CRASH';st.workletError='AudioWorklet processorerror event';status(key+' NAM processor crashed');paintRig();};nd.port.postMessage({type:'bypass',value:true});st.workletStatus='NODE CREATED';NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
 async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);st.workletStatus='COMPILING';st.workletError='';st.workletMeter=null;paintRig();if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=Number(spec.sampleRate)*(halfRate?0.5:1),engineRate=Number(ctx&&ctx.sampleRate);st.rateWarning=(modelRate>0&&engineRate>0&&Math.abs(modelRate-engineRate)>1)?('resampling '+engineRate+' → '+modelRate+' Hz; adaptive blocks'):('adaptive blocks at '+(modelRate||engineRate)+' Hz');const emitted=window.NAMRealtime.emitChain(spec),module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate:modelRate||(halfRate?engineRate/2:engineRate),blockSize:halfRate?240:480};nd.port.postMessage(msg,transferList(msg));return true;}
 function setNamMode(){return route().then(paintRig).catch(err=>status(err.message));}
