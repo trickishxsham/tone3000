@@ -2,7 +2,7 @@
 IMPROVS2 BUILD 912 — MODULE PATCH REGISTER
 App shell source: Build 906 HTML baseline.
 Patched module included in Build 912 register:
-  - modules/rig/rig.js — 4.9.8.912-dual-chain-stereo-nam-4ir
+  - modules/rig/rig.js — 4.9.8.912.b001-unified-serial-nam-8-ir-4
 No other module is declared Build 912 by this register unless separately patched.
 NOTE: This is a version/register update to the supplied app shell; it does not merge any unavailable intervening Build 907 app-shell changes.
 -->
@@ -90,7 +90,7 @@ window.loadModule = function(name){
     if(window.__MODULES[name] && !window.__MODULES[name].isStub) return resolve(window.__MODULES[name]);
     if(window.__MODULES[name] && window.__MODULES[name].isStub===false) return resolve(window.__MODULES[name]);
     var s = document.createElement('script');
-    s.src = window.__rootRelative('modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js');
+    s.src = window.__rootRelative('modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js') + '?v=' + encodeURIComponent(window.BUILD || '4.9.8.912.b001');
     s.async = true;
     var done = false;
     function finish(ok, err){
@@ -291,7 +291,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.912';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.912.b001';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
