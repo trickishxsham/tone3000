@@ -1,15 +1,14 @@
 <!--
-IMPROVS2 BUILD 916 — MODULE PATCH REGISTER
-App shell source: Build 906 HTML baseline.
-Patched module included in Build 917 register:
-  - modules/rig/rig.js — 4.9.8.917-left-rig-thumbnails
-Stereo NAM output restored from 913; TONE3000 thumbnail metadata persisted in snapshots.
-NOTE: This is a version/register update to the supplied app shell; it does not merge any unavailable intervening Build 907 app-shell changes.
+IMPROVS2 BUILD 918 — SINGLE SERIAL RIG + TONE3000 SNAPSHOT THUMBNAILS
+App shell carried forward from the supplied Build 917 package.
+Changed files: app-918.html, app-latest.html, modules/rig/rig.js.
+One serial chain carries all 8 NAM slots and all 4 IR slots; no separate right output chain.
+The rig module URL is build-versioned to prevent a stale cached rig.js from recreating the old stereo UI.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.917 — left rig only; TONE3000 snapshot thumbnails retained -->
+<!-- Build 4.9.8.918 — one serial 8-NAM / 4-IR chain; TONE3000 snapshot thumbnails -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -90,7 +89,10 @@ window.loadModule = function(name){
     if(window.__MODULES[name] && !window.__MODULES[name].isStub) return resolve(window.__MODULES[name]);
     if(window.__MODULES[name] && window.__MODULES[name].isStub===false) return resolve(window.__MODULES[name]);
     var s = document.createElement('script');
-    s.src = window.__rootRelative('modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js');
+    var modulePath = 'modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js';
+    // rig.js changed materially in this build; do not let the old stereo rig survive in browser/CDN cache.
+    if(name==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.918');
+    s.src = window.__rootRelative(modulePath);
     s.async = true;
     var done = false;
     function finish(ok, err){
@@ -124,7 +126,9 @@ window.preloadModules = function(names){
     if(window.__MODULES[n]) return;
     var l = document.createElement('link');
     l.rel = 'preload'; l.as = 'script';
-    l.href = window.__rootRelative('modules/' + n + '/' + n + '.js');
+    var modulePath = 'modules/' + n + '/' + n + '.js';
+    if(n==='rig') modulePath += '?v=' + encodeURIComponent(window.BUILD || '4.9.8.918');
+    l.href = window.__rootRelative(modulePath);
     document.head.appendChild(l);
   });
 };
@@ -291,7 +295,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.917';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.918';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
