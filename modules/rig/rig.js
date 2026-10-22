@@ -1627,12 +1627,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 934 — unified R4-proven resampling renderer for every NAM slot. */
+/* IMPROVS2 Build 936 — unified R4-proven resampling renderer for every NAM slot. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.935';
+const VERSION='4.9.8.936';
 const SIDES=['R'];
 const NAM_KEYS=['R1','R2','R3','R4','R5','R6','R7','R8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -1640,7 +1640,17 @@ const ORDER_STORAGE_KEY='improvs2.rig.chainOrder.v1';
 function readChainOrder(kind,defaults){try{const v=JSON.parse(localStorage.getItem(ORDER_STORAGE_KEY+'.'+kind)||'null');if(Array.isArray(v)&&v.length===defaults.length&&defaults.every(k=>v.includes(k)))return v;}catch(e){}return defaults.slice();}
 let NAM_ORDER=readChainOrder('nam',NAM_KEYS), IR_ORDER=readChainOrder('ir',IR_KEYS);
 function saveChainOrder(kind,order){try{localStorage.setItem(ORDER_STORAGE_KEY+'.'+kind,JSON.stringify(order));}catch(e){}}
-function moveChainItem(kind,key,delta){const order=kind==='nam'?NAM_ORDER:IR_ORDER,idx=order.indexOf(key),next=idx+delta;if(idx<0||next<0||next>=order.length)return;[order[idx],order[next]]=[order[next],order[idx]];saveChainOrder(kind,order);const parent=kind==='nam'?document.querySelector('.nam8-slots'):document.querySelector('.nam8-irs');if(parent){const rows=order.map(k=>parent.querySelector(kind==='nam'?'[data-nam8-slot=+k+]':'[data-nam8-ir=+k+]')).filter(Boolean);rows.forEach(row=>parent.appendChild(row));}route().then(paintRig).catch(e=>status('Chain reorder failed: '+(e.message||e)));}
+function moveChainItem(kind,key,delta){
+ const order=kind==='nam'?NAM_ORDER:IR_ORDER,idx=order.indexOf(key),next=idx+delta;
+ if(idx<0||next<0||next>=order.length)return;
+ [order[idx],order[next]]=[order[next],order[idx]];saveChainOrder(kind,order);
+ const parent=document.querySelector(kind==='nam'?'.nam8-slots':'.nam8-irs');
+ if(parent){
+  // Reinsert each complete card in the same order used by routeNow().
+  for(const k of order){const selector=kind==='nam'?'[data-nam8-slot="'+k+'"]':'[data-nam8-ir="'+k+'"]';const row=parent.querySelector(selector);if(row)parent.appendChild(row);}
+ }
+ route().then(()=>{paintRig();updateNAMSlotVisibility();}).catch(e=>status('Chain reorder failed: '+(e.message||e)));
+} 
 const IR_SIDE_KEYS={R:IR_KEYS};
 const LABELS={}; NAM_KEYS.forEach(k=>LABELS[k]='NAM '+k);
 const SLOT_DSP_DEFAULT={inputDb:0,drive:0,outputDb:0,mix:100,clip:0,eqOn:true,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000};
@@ -1663,8 +1673,11 @@ function el(id){return document.getElementById(id);}
 function status(s){const n=el('rigStat');if(n)n.textContent=s||'';const n2=el('nam8Status');if(n2)n2.textContent=s||'';}
 function audioContext(){try{if(typeof window.ensureAudio==='function')window.ensureAudio();}catch(e){}return (window.getAC&&window.getAC())||window._AC||null;}
 function active(){return NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
-// Build 934 stress test: allow all eight NAM slots to run concurrently.
+// Build 936 stress test: allow all eight NAM slots to run concurrently.
 const MAX_ACTIVE_NAMS=NAM_KEYS.length;
+let extraEmptyNAMSlots=1;
+function updateNAMSlotVisibility(){const parent=document.querySelector('.nam8-slots'),add=document.querySelector('.nam8-add-slot');if(!parent)return;let shownEmpty=0,hiddenEmpty=0;for(const key of NAM_ORDER){const row=parent.querySelector('[data-nam8-slot="'+key+'"]'),st=NAM[key];if(!row)continue;const visible=!!st.loaded||shownEmpty<extraEmptyNAMSlots;if(!st.loaded){if(visible)shownEmpty++;else hiddenEmpty++;}row.style.display=visible?'flex':'none';const up=row.querySelector('.nam8-move-up'),down=row.querySelector('.nam8-move-down'),i=NAM_ORDER.indexOf(key);if(up)up.disabled=i<=0;if(down)down.disabled=i>=NAM_ORDER.length-1;}if(add){add.style.display=hiddenEmpty>0?'inline-flex':'none';add.textContent='＋';add.setAttribute('aria-label','Add NAM slot');add.title=hiddenEmpty>0?'Show the next NAM slot':'All NAM slots are visible';}}
+
 function activeNAMKeys(except){return NAM_KEYS.filter(k=>k!==except&&NAM[k].loaded&&NAM[k].enabled);}
 function enforceNAMBudget(){
  const on=NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled);
@@ -1733,8 +1746,10 @@ function paintRig(){
  SIDES.forEach(side=>{const inp=el('nam8InputMode'+side);if(inp)inp.value=inputModes[side];});const hrb=el('nam8HalfRate');if(hrb)hrb.checked=false;const mdb=el('nam8Mode');if(mdb)mdb.value='dual';
  const b=el('btnRig');if(b)b.classList.toggle('active',active());
  const me=document.querySelector('.rig-master-enable');if(me)me.checked=!!DSP.enabled;const mc=document.querySelector('.rig-master-comp');if(mc)mc.checked=!!DSP.compOn;const mq=document.querySelector('.rig-master-eq');if(mq)mq.checked=!!DSP.eqOn;document.querySelectorAll('.rig-master-param').forEach(input=>{const c=DSP_CONTROLS.find(x=>x.key===input.dataset.param);if(c){input.value=String(DSP[c.key]);const out=document.querySelector('output[data-master-param="'+c.key+'"]');if(out)out.textContent=fmt(DSP[c.key],c.step,c.unit);}});
+ updateNAMSlotVisibility();
 }
-async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error('Audio engine is not ready');ctx=c;if(typeof window._namLoadModule==='function')await window._namLoadModule(c);else throw new Error('NAM audio worklet loader is unavailable');return c;}
+async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error('Audio engine is not ready');ctx=c;if(typeof window._namLoadModule==='function')await window._namLoadModule(c);else throw new Error('NAM audio worklet loader is unavailable');return c;
+}
 async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const st=NAM[key];const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete',processorOptions:{slotKey:key}});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='ready'){st.workletStatus='READY';st.workletError='';st.workletMeter={inputPeak:null,outputPeak:null,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:false};paintRig();}else if(d.type==='processing'){st.workletStatus='PROCESSING';paintRig();}else if(d.type==='slot-meter'){st.workletMeter={inputPeak:Number(d.inputPeak)||0,outputPeak:Number(d.outputPeak)||0,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:!!d.streamReady};st.workletStatus=d.streamReady?'RUNNING':'BUFFERING';paintRig();}else if(d.type==='error'){st.workletStatus='WORKLET ERROR';st.workletError=d.msg||'unknown';status(key+' NAM error: '+st.workletError);paintRig();}else if(d.type==='runtime-exception'){st.workletStatus='RUNTIME EXCEPTION';st.workletError=(d.stage||'process')+': '+(d.msg||'unknown').split('\n')[0];st.compiled=false;status(key+' NAM runtime exception: '+st.workletError);paintRig();}else if(d.type==='buffer'){status(key+' NAM buffer increased to '+d.blockSize+' samples');if(st.workletMeter)st.workletMeter.blockSize=d.blockSize;paintRig();}else if(d.type==='deadline-risk'||d.type==='overrun'){st.workletStatus='REALTIME WARNING';status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');paintRig();}};nd.onprocessorerror=()=>{st.workletStatus='PROCESSOR CRASH';st.workletError='AudioWorklet processorerror event';st.compiled=false;status(key+' NAM processor crashed');paintRig();};nd.port.postMessage({type:'bypass',value:true});st.workletStatus='NODE CREATED';NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
 async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);st.workletStatus='COMPILING';st.workletError='';st.workletMeter=null;paintRig();if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=24000,blockSize=64;st.rateWarning='unified 24000 Hz resampled inference · 64-sample chunks';const emitted=window.NAMRealtime.emitChain(spec),module=await WebAssembly.compile(emitted.bytes);if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate,blockSize};nd.port.postMessage(msg,transferList(msg));st.compiled=true;return true;}
@@ -1788,7 +1803,7 @@ function clearGraph(){meterTok++;meters={};if(source)disconnect(source);for(cons
 async function routeNow(){
  const budgetDisabled=enforceNAMBudget();
  const c=ctx||audioContext();if(!c)return;ctx=c;
- if(budgetDisabled.length)status('Two-NAM CPU limit applied; kept R4 first and disabled '+budgetDisabled.join(', '));
+ if(budgetDisabled.length)status('NAM CPU limit applied; disabled '+budgetDisabled.join(', '));
  const src=window._namMasterNode||window._INSTVOL||null,dst=window._MASTERCLIP||(c&&c.destination);
  if(!src){status('Waiting for instrument audio source');return;}
  source=src;try{if(c.state==='suspended')await c.resume();}catch(e){}
@@ -1905,12 +1920,13 @@ function buildUI(){
  {
   const side='R';
   const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid #be185d;border-radius:7px;padding:7px;min-width:0;';
-  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#f9a8d4;font-size:1.08em;">RIGHT OUTPUT CHAIN · R1–R8</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputModeR" data-input-side="R" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:6px;"></div><div style="margin-top:8px;border-top:1px dashed #64748b;padding-top:7px;"><strong style="color:#5eead4;display:block;margin-bottom:5px;">IR SLOTS · IR1–IR4 (SERIES)</strong><div class="nam8-irs" style="display:flex;flex-direction:column;gap:6px;"></div></div>';
-  const slots=section.querySelector('.nam8-slots');sideKeys(side).forEach(key=>slots.appendChild(slotRow(key,side)));
+  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#f9a8d4;font-size:1.08em;">RIGHT OUTPUT CHAIN · R1–R8</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputModeR" data-input-side="R" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div class="nam8-slots" style="display:flex;flex-direction:column;gap:6px;"></div><button type="button" class="nam8-add-slot" style="display:none;align-items:center;justify-content:center;margin:7px auto 2px;width:58px;height:48px;border-radius:24px;font-size:30px;font-weight:900;background:#fbbf24;color:#111827;border:2px solid #fde68a;box-shadow:0 0 12px #f59e0b88;" aria-label="Add NAM slot" title="Show the next NAM slot">＋</button><div style="margin-top:8px;border-top:1px dashed #64748b;padding-top:7px;"><strong style="color:#5eead4;display:block;margin-bottom:5px;">IR SLOTS · IR1–IR4 (SERIES)</strong><div class="nam8-irs" style="display:flex;flex-direction:column;gap:6px;"></div></div>';
+  const slots=section.querySelector('.nam8-slots');NAM_ORDER.forEach(key=>slots.appendChild(slotRow(key,side)));
+  section.querySelector('.nam8-add-slot').addEventListener('click',()=>{extraEmptyNAMSlots=Math.min(NAM_KEYS.length,extraEmptyNAMSlots+1);updateNAMSlotVisibility();const next=Array.from(slots.querySelectorAll('[data-nam8-slot]')).find(row=>row.style.display!=='none'&&!NAM[row.dataset.nam8Slot].loaded);if(next)next.scrollIntoView({behavior:'smooth',block:'nearest'});});
   const irs=section.querySelector('.nam8-irs');IR_ORDER.forEach(key=>irs.appendChild(irRow(key,side)));
   grid.appendChild(section);
  }
- layout.querySelectorAll('button').forEach(b=>{b.style.cssText+='padding:4px 7px;border-radius:4px;border:1px solid #475569;background:#172033;color:#e2e8f0;';if(b.classList.contains('nam8-file')){b.style.background='#1f1235';b.style.color='#c4b5fd';}if(b.classList.contains('nam8-t3k')||b.classList.contains('nam8-ir-t3k')){b.style.background='#0c2740';b.style.color='#7dd3fc';}if(b.classList.contains('nam8-ir-file')){b.style.background='#12302b';b.style.color='#5eead4';}});
+ layout.querySelectorAll('button').forEach(b=>{if(b.classList.contains('nam8-add-slot'))return;b.style.cssText+='padding:4px 7px;border-radius:4px;border:1px solid #475569;background:#172033;color:#e2e8f0;';if(b.classList.contains('nam8-file')){b.style.background='#1f1235';b.style.color='#c4b5fd';}if(b.classList.contains('nam8-t3k')||b.classList.contains('nam8-ir-t3k')){b.style.background='#0c2740';b.style.color='#7dd3fc';}if(b.classList.contains('nam8-ir-file')){b.style.background='#12302b';b.style.color='#5eead4';}});
  if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach(old=>old.replaceWith(old.cloneNode(false)));}panel.insertBefore(layout,snapRow||panel.lastChild);
  const namFile=el('nam8File'),irFile=el('nam8IRFile');
  layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;const row=t.closest('[data-nam8-slot]'),key=row&&row.dataset.nam8Slot,irrow=t.closest('[data-nam8-ir]'),irk=irrow&&irrow.dataset.nam8Ir;if(t.classList.contains('rig-master-mayer'))applyMayerPreset();else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=irk;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(irk,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(irk).catch(err=>status(err.message));});
