@@ -1,5 +1,5 @@
 // modules/rig/rig.js
-// version: 4.9.8.933-unified-resampler
+// version: 4.9.8.934-unified-resampler
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
@@ -1627,12 +1627,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 933 — unified R4-proven resampling renderer for every NAM slot. */
+/* IMPROVS2 Build 934 — unified R4-proven resampling renderer for every NAM slot. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.933';
+const VERSION='4.9.8.934';
 const SIDES=['R'];
 const NAM_KEYS=['R1','R2','R3','R4','R5','R6','R7','R8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -1658,8 +1658,8 @@ function el(id){return document.getElementById(id);}
 function status(s){const n=el('rigStat');if(n)n.textContent=s||'';const n2=el('nam8Status');if(n2)n2.textContent=s||'';}
 function audioContext(){try{if(typeof window.ensureAudio==='function')window.ensureAudio();}catch(e){}return (window.getAC&&window.getAC())||window._AC||null;}
 function active(){return NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
-// Mobile CPU budget: at most two loaded NAMs may be live in the signal chain.
-const MAX_ACTIVE_NAMS=2;
+// Build 934 stress test: allow all eight NAM slots to run concurrently.
+const MAX_ACTIVE_NAMS=NAM_KEYS.length;
 function activeNAMKeys(except){return NAM_KEYS.filter(k=>k!==except&&NAM[k].loaded&&NAM[k].enabled);}
 function enforceNAMBudget(){
  const on=NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled);
@@ -1747,16 +1747,16 @@ async function setNAM(key,json,meta){
  st.json=json;st.loaded=true;st.enabled=willCompile;st.tier=tier;st.name=meta.name||LABELS[key];st.toneId=meta.toneId==null?null:String(meta.toneId);st.modelId=meta.modelId==null?null:String(meta.modelId);st.modelName=meta.modelName||'';st.toneTitle=meta.toneTitle||'';st.thumbnail=meta.thumbnail||'';st.variants=Array.isArray(meta.variants)?meta.variants:[];
  if(!willCompile){st.workletStatus='LOADED / IDLE';st.workletError='';}
  await route();if(!willCompile)disposeNAMNode(key);paintRig();
- status(key+' loaded'+(willCompile&&st.rateWarning?' · '+st.rateWarning:(!willCompile?' · stored inactive; two-NAM CPU limit':'') ));return true;
+ status(key+' loaded'+(willCompile&&st.rateWarning?' · '+st.rateWarning:(!willCompile?' · stored inactive; compile failed or not requested':'') ));return true;
 }
 async function setNAMEnabled(key,on){
  key=keyAlias(key);const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);
  if(!on){st.enabled=false;await route();disposeNAMNode(key);paintRig();return true;}
  if(!st.loaded||!st.json){st.enabled=false;status(key+' is empty — load a NAM first');paintRig();return false;}
- if(activeNAMKeys(key).length>=MAX_ACTIVE_NAMS){st.enabled=false;status('Two-NAM CPU limit: turn another NAM OFF before enabling '+key);paintRig();return false;}
+ if(activeNAMKeys(key).length>=MAX_ACTIVE_NAMS){st.enabled=false;status('Unable to enable '+key+'; check model compile status and device capacity');paintRig();return false;}
  if(st.node&&!st.compiled)disposeNAMNode(key);
  if(!st.node||!st.compiled){const sent=await compileAndSend(key,st.json,st.tier);if(!sent){st.enabled=false;paintRig();return false;}st.compiled=true;}
- st.enabled=true;await route();paintRig();status(key+' enabled · '+activeNAMKeys().length+' NAMs within CPU limit');return true;
+ st.enabled=true;await route();paintRig();status(key+' enabled · '+activeNAMKeys().length+' NAMs active');return true;
 }
 function disconnect(node){try{if(node)node.disconnect();}catch(e){}}
 function track(node){if(node)graphNodes.add(node);return node;}
@@ -1873,8 +1873,8 @@ async function hydrateMissingThumbnails(){
  paintRig();
 }
 async function restoreSnapshot(raw){const snap=migrateSnapshot(raw);if(!snap)throw new Error('Empty snapshot');await ensureWorklet();for(const side of SIDES){inputModes[side]=['both','left','right'].includes(snap.inputModes[side])?snap.inputModes[side]:(side==='L'?'left':'right');try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,inputModes[side]);}catch(e){}}Object.assign(DSP,DSP_DEFAULT,snap.dsp||{});const jobs=[];for(const key of NAM_KEYS){const s=snap.slots[key]||{},st=NAM[key];Object.assign(st,{json:s.json||null,loaded:!!(s.loaded&&s.json),enabled:s.enabled!==false,tier:s.tier==null?null:s.tier,name:s.name||'Empty',toneId:s.toneId||null,modelId:s.modelId||null,modelName:s.modelName||'',toneTitle:s.toneTitle||'',variants:s.variants||[],thumbnail:s.thumbnail||'',fx:Object.assign({},SLOT_DSP_DEFAULT,s.fx||{})});st.compileToken++;st.compiled=false;}
- // Old snapshots may contain eight enabled models. Preserve R4 first, then cap to two.
- const snapshotOn=NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled),snapshotOrder=snapshotOn.includes('R4')?['R4',...snapshotOn.filter(k=>k!=='R4')]:snapshotOn,keepOn=new Set(snapshotOrder.slice(0,MAX_ACTIVE_NAMS));for(const key of snapshotOn)if(!keepOn.has(key))NAM[key].enabled=false;
+ // Restore every enabled model in the snapshot; this build deliberately has no two-NAM cap.
+ // No active-NAM cap: preserve all enabled snapshot slots.
  for(const key of NAM_KEYS){const st=NAM[key];if(st.loaded&&st.enabled)jobs.push({key,json:st.json,tier:st.tier});}for(const key of IR_KEYS){const ir=snap.ir[key]||{};let buf=ir.buffer||null;if(!buf&&ir.serialized)buf=deserializeIR(ir.serialized);IR[key]=Object.assign(EMPTY_IR(),{loaded:!!(ir.loaded&&buf),enabled:ir.enabled!==false,buffer:normalizeIRBuffer(buf),name:ir.name||'Empty',thumbnail:ir.thumbnail||'',toneId:ir.toneId||null,modelId:ir.modelId||null,modelName:ir.modelName||'',toneTitle:ir.toneTitle||'',fx:Object.assign({},IR_FX_DEFAULT,ir.fx||{})});}for(const job of jobs)await compileAndSend(job.key,job.json,job.tier);await route();for(const key of NAM_KEYS)if(!NAM[key].loaded||!NAM[key].enabled)disposeNAMNode(key);paintRig();hydrateMissingThumbnails().catch(e=>console.warn('[T3K] thumbnail hydration failed',e));}
 async function persistSnapshot(i){const d=snapshotForDisk(SNAPSHOTS[i]),tasks=[];try{if(window.SampleStore){if(d&&window.SampleStore.saveSnap)tasks.push(Promise.resolve(window.SampleStore.saveSnap(i,d)));else if(!d&&window.SampleStore.delSnap)tasks.push(Promise.resolve(window.SampleStore.delSnap(i)));}}catch(e){}try{if(window.RigSnapStore){if(d&&window.RigSnapStore.save)tasks.push(Promise.resolve(window.RigSnapStore.save(i,d)));else if(!d&&window.RigSnapStore.drop)tasks.push(Promise.resolve(window.RigSnapStore.drop(i)));}}catch(e){}await Promise.all(tasks);}
 async function loadSnapshots(){for(let i=0;i<7;i++){let d=null;try{if(window.SampleStore&&window.SampleStore.loadSnap)d=await window.SampleStore.loadSnap(i);}catch(e){}try{if(!d&&window.RigSnapStore&&window.RigSnapStore.load)d=await window.RigSnapStore.load(i);}catch(e){}if(d)SNAPSHOTS[i]=migrateSnapshot(d);}paintSnapshots();}
