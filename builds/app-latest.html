@@ -2,14 +2,14 @@
 IMPROVS2 BUILD 936 — VISUAL CHAIN REORDER + EXPANDABLE NAM SLOTS
 App shell source: Build 932 HTML base; all NAM slots use the same resampling renderer.
 Patched module included in Build 931 register:
-  - modules/rig/rig.js — 4.9.8.940-chain-reorder
+  - modules/rig/rig.js — 4.9.8.936-chain-reorder
 No other module is changed in Build 931; all unrelated modules remain untouched.
 NOTE: The app shell is carried forward from Build 931; the rig module changes non-R4 NAM render behavior only.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.940 — mixed NAM/IR serial chain; expandable NAM slots; measured NAM render-load monitor -->
+<!-- Build 4.9.8.936 — visual NAM/IR row reordering matches serial audio routing; expandable NAM slots -->
 <script>
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
@@ -291,7 +291,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.940';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.942';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -11499,6 +11499,7 @@ function _getKeyStyle(){
     return '<span style="color:'+col+';font-weight:900;" title="detected '+s._det+' · confidence '+(conf||0)+'% · '+(cents!=null?cents:0)+' cents off · labelled '+want+'">'+lbl+'</span>';
   }
   window.renderRows=renderRows;   // pack-load/restore live outside this IIFE — expose so they can refresh the editor
+  window.__voice2guitarGetMap=function(){ return _SAMP_MAP; };
 
   // visible read-back: set the status line and flash it so saves/loads/deletes can't pass unnoticed
   function sampSay(msg, ok){
@@ -12224,7 +12225,7 @@ window.__ensureSampler = function(){
 (function wireSampler(){
   var btn = document.getElementById('sampToggle') || document.querySelector('[data-open-sampler]');
   // also common: sample pack panel open buttons
-  function load(){ return window.__ensureSampler(); }
+  function load(){ return window.__ensureSampler().then(function(mod){ window.loadModule('voice2guitar').catch(function(e){ console.warn('[voice2guitar] module unavailable',e); }); return mod; }); }
   ['sampToggle','packToggle'].forEach(function(id){
     var el=document.getElementById(id);
     if(el && !el.__sampWired){
@@ -12382,7 +12383,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(!_SAMP_MAP||!_SAMP_MAP.length){ sampSay('❌ nothing to export — cut a map first',false); return; }
     const clean=_SAMP_MAP.map(s=>({rootMidi:s.rootMidi,start:s.start,end:s.end,loop:!!s.loop}));
     const payload={format:'improvs2-sample-map',version:1,count:clean.length,
-      aRef:(document.getElementById('sampTuning')?+document.getElementById('sampTuning').value:440),map:clean};
+      aRef:(document.getElementById('sampTuning')?+document.getElementById('sampTuning').value:440),map:clean,
+      voice2guitar:(window.voice2guitarExportData?window.voice2guitarExportData():null)};
     const fname='sample_'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'_'+clean.length+'notes.map';
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
     sampDownload(blob,fname);
@@ -12400,6 +12402,7 @@ document.addEventListener('DOMContentLoaded',()=>{
                    .filter(s=>!isNaN(s.rootMidi)&&!isNaN(s.start)&&!isNaN(s.end))
                    .sort((a,b)=>a.rootMidi-b.rootMidi);
       if(data.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=data.aRef;
+      if(data.voice2guitar && window.voice2guitarImportData) window.voice2guitarImportData(data.voice2guitar);
       if(window.renderRows) window.renderRows();
       try{ localStorage.setItem('improvs2_sampmap', JSON.stringify(_SAMP_MAP)); }catch(_){}
       if(typeof persistWorking==='function') persistWorking();
@@ -12499,7 +12502,8 @@ document.addEventListener('DOMContentLoaded',()=>{
         }
         if(!notes.length){ sampSay('❌ nothing rendered',false); return; }
         const payload={format:'improvs2-presliced-pack', version:1, id:id, name:name, aRef:aRef,
-          pickAttack:Math.round(lead*1000), lead:+lead.toFixed(4), count:notes.length, notes:notes};
+          pickAttack:Math.round(lead*1000), lead:+lead.toFixed(4), count:notes.length, notes:notes,
+          voice2guitar:(window.voice2guitarExportData?window.voice2guitarExportData():null)};
         const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
         sampDownload(blob, id+'.json');
         sampSay('🎯 '+id.slice(0,16)+'.json — '+notes.length+' clips ('+(mp3n?mp3n+' mp3':'')+(mp3n&&wavn?', ':'')+(wavn?wavn+' wav':'')+')',true);
@@ -12531,6 +12535,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     out.sort((a,b)=>a.rootMidi-b.rootMidi);
     _SAMP_BUF=null; _SAMP_BYTES=null; _SAMP_PRESLICED=true; _SAMP_PACKID=null; _SAMP_MAP=out;
     if(data.aRef && document.getElementById('sampTuning')) document.getElementById('sampTuning').value=data.aRef;
+    if(data.voice2guitar && window.voice2guitarImportData) window.voice2guitarImportData(data.voice2guitar);
     if(window.renderRows) window.renderRows();
     return out.length;
   }
@@ -13187,6 +13192,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     window.ensureAudio = ensureAudio;
     window.getAC = function(){ return _AC; };
     window.makeVoice = makeVoice;
+    window.__voice2guitarPlay = function(midi, vel){ var previous=instrument; instrument='samp'; try{return makeVoice(midi,vel==null?0.88:vel,1,{src:'voice2guitar'});} finally {instrument=previous;} };
     window.nextScaleForChord = nextScaleForChord;
   }catch(e){}
 
