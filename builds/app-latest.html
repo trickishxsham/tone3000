@@ -1,5 +1,5 @@
 <!--
-IMPROVS2 BUILD 936 — VISUAL CHAIN REORDER + EXPANDABLE NAM SLOTS
+IMPROVS2 BUILD 948 — VOICE2GUITAR NOTE-POOL AND FRETBOARD INTEGRATION
 App shell source: Build 932 HTML base; all NAM slots use the same resampling renderer.
 Patched module included in Build 931 register:
   - modules/rig/rig.js — 4.9.8.936-chain-reorder
@@ -291,7 +291,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.945';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.949';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -10671,6 +10671,32 @@ function _getKeyStyle(){
     return out;
   }
   let _barChoice=null, _barUntil=0, _lastFollowKey='';
+  // Voice2Guitar reads the key listener's current 10-note decatonic pool; when a verified legal
+  // decatonic pair is committed, its union is 11 notes. This API is read-only and never applies scales.
+  window.__voice2guitarGetUsableNotes=function(){
+    try{
+      const selected=document.getElementById('selKeyStyle');
+      let st=(selected&&selected.value&&selected.value!=='auto')?selected.value:((_exileEv&&_exileEv.committed&&_exileEv.deca)||_autoStyle||'cydia-Aero major');
+      let root=null;
+      // Prefer the currently committed bar choice over the long-lived home/root estimate.
+      if(_barChoice&&Number.isFinite(+_barChoice.root))root=(+_barChoice.root|0);
+      if(root==null&&_barChoice&&_barChoice.key){
+        let k=String(_barChoice.key).replace(/♯/g,'#').replace(/♭/g,'b');
+        const enh={'Db':'C#','Eb':'D#','Gb':'F#','Ab':'G#','Bb':'A#','Cb':'B','Fb':'E','E#':'F','B#':'C'};k=enh[k]||k;
+        const ix=NOTES.indexOf(k);if(ix>=0)root=ix;
+      }
+      if(root==null&&Number.isFinite(_homeRoot))root=(_homeRoot|0);
+      if(root==null&&window.ACTIVE_SCALE&&Number.isFinite(+window.ACTIVE_SCALE.root))root=(+window.ACTIVE_SCALE.root|0);
+      if(root==null){try{const inst=INST[activePrefix];if(inst){const sc=inst.getScale();const nm=String(sc.key||'C').replace(/[#b]/g,'');const ix=NOTES.indexOf(nm);root=ix>=0?ix:0;}}catch(_){root=0;}}
+      if(root==null)root=0;root=((root%12)+12)%12;
+      const base=_POOLS[st]||_POOLS['cydia-Aero major'];let rel=base.rel.slice(),exiles=base.exile.slice(),pair=null;
+      if(_exileEv&&_exileEv.committed&&_exileEv.deca===st&&_exileEv.pair&&_POOLS[_exileEv.pair]){
+        const union=Array.from(new Set(rel.concat(_POOLS[_exileEv.pair].rel)));
+        if(union.length===11){pair=_exileEv.pair;rel=union;const all=new Set(rel);exiles=Array.from({length:12},(_,i)=>i).filter(i=>!all.has(i));}
+      }
+      return {root,style:st,pair,pitchClasses:rel.map(d=>(root+d)%12),exiles:exiles.map(d=>(root+d)%12),count:rel.length,barScale:_barChoice?{key:_barChoice.key,mode:_barChoice.mode,tag:_barChoice.tag||_barChoice.uniName||null}:null};
+    }catch(e){return null;}
+  };
   // lite137: decide scale during the bar; APPLY only on metronome beat 1 (never mid-bar flash)
   let _pendingListenScale=null, _listenAppliedBar=-1, _listenDecideBar=-1;
 
@@ -13192,7 +13218,14 @@ document.addEventListener('DOMContentLoaded',()=>{
     window.ensureAudio = ensureAudio;
     window.getAC = function(){ return _AC; };
     window.makeVoice = makeVoice;
-    window.__voice2guitarPlay = function(midi, vel){ var previous=instrument; instrument='samp'; try{return makeVoice(midi,vel==null?0.88:vel,1,{src:'voice2guitar'});} finally {instrument=previous;} };
+    window.__voice2guitarPlay = function(midi, vel){
+      var previous=instrument, cell=null, meta={src:'fret'};
+      try{ cell=window.findReplayCell?window.findReplayCell(midi,{src:'fret'}):null; }catch(e){}
+      if(cell){ try{meta=window.cellPlayMeta?window.cellPlayMeta(cell,'fret'):{src:'fret'};}catch(e){}
+        try{cell.classList.add('struck');if(cell._v2gFlashTimer)clearTimeout(cell._v2gFlashTimer);cell._v2gFlashTimer=setTimeout(function(){try{cell.classList.remove('struck');}catch(e){}},180);}catch(e){}
+      }
+      instrument='samp'; try{return makeVoice(midi,vel==null?0.88:vel,1,meta);} finally {instrument=previous;}
+    };
     window.nextScaleForChord = nextScaleForChord;
   }catch(e){}
 
