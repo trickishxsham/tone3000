@@ -1,15 +1,64 @@
 <!--
-IMPROVS2 BUILD 952 — MICROPHONE TRACK / LIVE SIGNAL VERIFICATION
-App shell carried forward from Build 951; no unrelated app-shell behaviour changed.
-Patched module included in Build 952:
-  - modules/voice2guitar/voice2guitar.js — 4.9.8.952-mic-input-health-noise-floor-gate
+IMPROVS2 BUILD 954 — SHARED MIC CAPTURE + THROTTLED VOICE2GUITAR ANALYSIS
+App shell carried forward from Build 953.
+Patched components in Build 954:
+  - inline key-listener capture — shared microphone-stream lease pool
+  - modules/voice2guitar/voice2guitar.js — 4.9.8.954-shared-mic-pool-throttled-analysis
 The global A-reference tuner integration and saved calibration frequencies remain intact. NAM/IR modules are unchanged.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.936 — visual NAM/IR row reordering matches serial audio routing; expandable NAM slots -->
+<!-- Build 4.9.8.954 — key-listener and Voice2Guitar share microphone stream leases; NAM/IR routing unchanged -->
 <script>
+// Build 954: shared microphone stream leases. Key Listener and Voice2Guitar must not
+// independently open/stop the same device stream while the other feature is using it.
+window.__IMPROVS_MIC_POOL = window.__IMPROVS_MIC_POOL || (() => {
+  const entries = new Set(); let nextLeaseId = 1;
+  const tracks = e => e && e.stream && e.stream.getAudioTracks ? e.stream.getAudioTracks() : [];
+  const isLive = e => tracks(e).some(t => t && t.readyState === 'live');
+  const actualDevice = e => { try { return tracks(e)[0]?.getSettings?.().deviceId || e.deviceId || ''; } catch (_) { return e.deviceId || ''; } };
+  function findEntry(deviceId) {
+    for (const e of entries) {
+      if (!isLive(e)) { try { tracks(e).forEach(t => t.stop()); } catch (_) {} entries.delete(e); continue; }
+      const actual = actualDevice(e);
+      if (deviceId ? (e.requestedDeviceId === deviceId || e.deviceId === deviceId || actual === deviceId) : e.requestedDeviceId === '') return e;
+    }
+    return null;
+  }
+  return {
+    async acquire(owner, deviceId) {
+      const wanted = String(deviceId || '');
+      let entry = findEntry(wanted);
+      if (!entry) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Microphone access unavailable; use HTTPS or the installed app.');
+        const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+        if (wanted) audio.deviceId = { exact: wanted };
+        const stream = await navigator.mediaDevices.getUserMedia({ audio });
+        const audioTracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+        if (!audioTracks.length || !audioTracks.some(t => t && t.readyState === 'live')) {
+          try { stream && stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+          throw new Error('The selected input did not provide a live audio track.');
+        }
+        entry = { stream, deviceId: wanted || (audioTracks[0].getSettings?.().deviceId || ''), requestedDeviceId: wanted, leases: new Set() };
+        entries.add(entry);
+      }
+      const lease = { id: nextLeaseId++, owner: String(owner || 'unknown'), entry, stream: entry.stream, released: false };
+      entry.leases.add(lease); return lease;
+    },
+    release(lease) {
+      if (!lease || lease.released) return;
+      lease.released = true; const entry = lease.entry;
+      if (!entry) return; entry.leases.delete(lease);
+      if (!entry.leases.size) {
+        try { entry.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        entries.delete(entry);
+      }
+    },
+    getActive(deviceId) { const e = findEntry(String(deviceId || '')); return e ? e.stream : null; },
+    get diagnostics() { return Array.from(entries).map(e => ({ deviceId: actualDevice(e), owners: Array.from(e.leases, l => l.owner), live: isLive(e) })); }
+  };
+})();
 // v886: modular snapshot manager; random A–G NAM starter rigs, overwriteable snapshots, portable export. Build app-886.
 // v885: export RIG snapshots A–G as portable JSON, preserving complete saved snapshot payloads including NAM names/parameters. Build app-885.
 // v883: octotonic switch replaces (activeOcto.clear then add) — was stacking notes up to 12 when switching octo→octo. Build app-883.
@@ -290,7 +339,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.952';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.954';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8834,7 +8883,7 @@ updateKeySigDisplay();
   // ═══════════════════════════════════════════════════════════
   // KEY DETECTOR: persistent analyser + autocorrelation + Krumhansl
   // ═══════════════════════════════════════════════════════════
-  let keyDetectActive=false, keyMicStream=null;
+  let keyDetectActive=false, keyMicStream=null, keyMicLease=null;
   let pitchHistory=[], pitchTimestamps=[];
   let chromaHist=new Array(12).fill(0), chromaAt=0;
   let energyHistory=[];   // {t,e} for tempo detection
@@ -10772,12 +10821,11 @@ function _getKeyStyle(){
     const src=srcEl?srcEl.value:'internal';
     async function _getListenerMicStream(){
       const sel=document.getElementById('keyMicDevice');
-      const deviceId=sel&&sel.value;
-      const audio={echoCancellation:false,noiseSuppression:false,autoGainControl:false};
-      if(deviceId) audio.deviceId={exact:deviceId};
-      const stream=await navigator.mediaDevices.getUserMedia({audio:audio});
+      const deviceId=sel&&sel.value||'';
+      if(keyMicLease){ try{window.__IMPROVS_MIC_POOL.release(keyMicLease);}catch(e){} keyMicLease=null; }
+      keyMicLease=await window.__IMPROVS_MIC_POOL.acquire('key-listener',deviceId);
       try{ if(typeof _refreshListenerMicDevices==='function') await _refreshListenerMicDevices(); }catch(e){}
-      return stream;
+      return keyMicLease.stream;
     }
 
     if(src==='file') out.textContent='pick an audio file...';
@@ -11433,7 +11481,8 @@ function _getKeyStyle(){
     try{ window.__bktrkSuggestion=null; }catch(e){}
     keyDetectActive=false;
     keyTimers.forEach(clearInterval); keyTimers=[];
-    if(keyMicStream){ keyMicStream.getTracks().forEach(t=>t.stop()); keyMicStream=null; }
+    if(keyMicLease){ try{window.__IMPROVS_MIC_POOL.release(keyMicLease);}catch(e){} keyMicLease=null; keyMicStream=null; }
+    else if(keyMicStream){ keyMicStream.getTracks().forEach(t=>t.stop()); keyMicStream=null; }
     if(keyCapStream){ keyCapStream.getTracks().forEach(t=>t.stop()); keyCapStream=null; }
     keyAnCap=null;
     try{ if(keyFileSrc){ keyFileSrc.stop(); } }catch(e){}
