@@ -1,5 +1,5 @@
 <!--
-IMPROVS2 BUILD 962 — PERSISTENT DIRECT-MIC VOICE2GUITAR LISTENING
+IMPROVS2 BUILD 963 — ACOUSTIC SELF-TRIGGER SUPPRESSION
 App shell carried forward from Build 955.
 Patched components in Build 958:
   - modules/voice2guitar/voice2guitar.js — continuous note auto-match at >=90% pitch confidence, stable for five frames, with no timeout
@@ -8,7 +8,7 @@ The shared microphone lease pool is retained. The global A-reference tuner integ
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Build 4.9.8.962 — persistent direct-mic Voice2Guitar listening; shared mic pool and NAM/IR routing unchanged -->
+<!-- Build 4.9.8.963 — microphone echo cancellation enabled to suppress app playback self-triggering; NAM/IR routing unchanged -->
 <script>
 // Build 958 retains Build 955 shared microphone stream leases. Key Listener and Voice2Guitar must not
 // independently open/stop the same device stream while the other feature is using it.
@@ -31,7 +31,7 @@ window.__IMPROVS_MIC_POOL = window.__IMPROVS_MIC_POOL || (() => {
       let entry = findEntry(wanted);
       if (!entry) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Microphone access unavailable; use HTTPS or the installed app.');
-        const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+        const audio = { echoCancellation: true, noiseSuppression: false, autoGainControl: false };
         if (wanted) audio.deviceId = { exact: wanted };
         const stream = await navigator.mediaDevices.getUserMedia({ audio });
         const audioTracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
@@ -338,7 +338,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.962';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.963';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
@@ -8766,7 +8766,7 @@ async function startLiveCapture(){
     }
     try{
       capSysStream=await navigator.mediaDevices.getUserMedia({
-        audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}
+        audio:{echoCancellation: true, noiseSuppression:false, autoGainControl:false}
       });
       extSource=_AC.createMediaStreamSource(capSysStream);
       capMode='mic';
@@ -8889,7 +8889,7 @@ updateKeySigDisplay();
   let lastKeyReads=[], lastBpmReads=[], keyLocked=false, lockedKey='', lockedBpm=0;
   let keyAnInt=null, keyAnMic=null, keyAnCap=null, keyCapStream=null, keyTimers=[];
   let keyFileSrc=null, keyFileBuf=null, keyAnFile=null;
-  // Compatibility bridge retained for older modules; Build 962 Voice2Guitar uses the direct leased microphone analyser.
+  // Compatibility bridge retained for older modules; Build 963 Voice2Guitar uses the direct leased microphone analyser with echo cancellation.
   window.__IMPROVS_LISTENER_AUDIO_BRIDGE = {
     getAnalyzers: function(){
       return {active:!!keyDetectActive, internal:keyAnInt, microphone:keyAnMic, file:keyAnFile,
@@ -10938,7 +10938,7 @@ function _getKeyStyle(){
           // Prefer tab audio. Mobile often has no system-audio share — then use Mic instead.
           keyCapStream=await navigator.mediaDevices.getDisplayMedia({
             video:true,
-            audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+            audio:{ echoCancellation: true, noiseSuppression:false, autoGainControl:false }
           });
           if(!keyCapStream.getAudioTracks().length){
             out.textContent='no audio in share — on phone use Mic + speakers; on desktop share a TAB + tick audio';
