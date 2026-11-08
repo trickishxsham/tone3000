@@ -1,7 +1,7 @@
 // IMPROVS2 Genius API proxy — Vercel Node.js Function
 // Required Vercel environment variable: GENIUS_ACCESS_TOKEN
 // Only the three read-only Genius endpoints used by Rhymelight are exposed.
-const ALLOWED = new Set(['search', 'referents']);
+const ALLOWED = new Set(['search', 'song', 'referents']);
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -48,6 +48,7 @@ module.exports = async function geniusProxy(req, res) {
 
   const q = req.query || {};
   const action = String(q.action || '');
+  if (!ALLOWED.has(action)) return send(res, 400, { error: { code: 'UNSUPPORTED_ACTION', message: 'Supported actions are search, song and referents.' } });
   let endpoint;
   const params = new URLSearchParams();
 
