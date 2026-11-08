@@ -2,8 +2,8 @@
   "module": "rhymelight",
   "version": "4.9.8.971",
   "mode": "local-analysis-genius-proxy",
-  "title": "Rhymelight — Rap Complexity & Genius API Proxy",
-  "description": "Local phonetic and complexity analysis with optional official Genius API search and annotations via the IMPROVS2 Vercel proxy.",
+  "title": "Rhymelight — Rap Complexity & Genius Song Lyrics",
+  "description": "Local phonetic and complexity analysis with official Genius song-lyrics search and in-app lyrics preview via the IMPROVS2 Vercel proxy. Only song results are shown; community lists and annotations are excluded.",
   "maxTracks": 6,
   "benchmarks": [
     {
@@ -312,6 +312,8 @@
     "apiBase": "https://api.genius.com",
     "preview": "official-genius-song-embed-js-in-isolated-iframe",
     "lovableApi": false,
-    "fullLyricsReturnedByApi": false
+    "fullLyricsReturnedByApi": false,
+    "resultsFilter": "song-only",
+    "annotations": false
   }
 }

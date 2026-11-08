@@ -531,10 +531,10 @@
 
   function parseGeniusSearch(payload) {
     var hits = payload && payload.response && Array.isArray(payload.response.hits) ? payload.response.hits : [];
-    return hits.map(function (hit) { return hit && hit.result; }).filter(function (song) {
+    return hits.filter(function (hit) { return hit && hit.type === 'song'; }).map(function (hit) { return hit.result; }).filter(function (song) {
       return song && Number.isFinite(Number(song.id)) && typeof song.url === 'string' && /^https:\/\/genius\.com\//i.test(song.url);
     }).map(function (song) {
-      return { id: Number(song.id), title: song.full_title || song.title || 'Genius song', artist: song.primary_artist && song.primary_artist.name || '', url: song.url, annotationCount: Number(song.annotation_count) || 0 };
+      return { id: Number(song.id), title: song.full_title || song.title || 'Genius song', artist: song.primary_artist && song.primary_artist.name || '', url: song.url };
     });
   }
 
@@ -605,7 +605,7 @@
     if (!host) return;
     if (!songs.length) { host.innerHTML = '<div class=\"rl-muted\">No Genius song matches were returned.</div>'; return; }
     host.innerHTML = '<div class=\"rl-genius-api-title\">GENIUS API SEARCH RESULTS</div>' + songs.slice(0, 8).map(function (song) {
-      return '<button type=\"button\" class=\"rl-genius-song-result\" data-rl-genius-song-id=\"' + song.id + '\" data-rl-genius-song-url=\"' + escapeHTML(song.url) + '\" data-rl-genius-song-title=\"' + escapeHTML(song.title) + '\"><strong>' + escapeHTML(song.title) + '</strong><span>' + escapeHTML(song.artist) + ' · ' + song.annotationCount + ' annotations</span></button>';
+      return '<button type=\"button\" class=\"rl-genius-song-result\" data-rl-genius-song-id=\"' + song.id + '\" data-rl-genius-song-url=\"' + escapeHTML(song.url) + '\" data-rl-genius-song-title=\"' + escapeHTML(song.title) + '\"><strong>' + escapeHTML(song.title) + '</strong><span>' + escapeHTML(song.artist) + ' · SONG LYRICS</span></button>';
     }).join('');
   }
 
@@ -643,23 +643,18 @@
   async function selectGeniusSong(songId, songUrl, title) {
     var results = state.panel && state.panel.querySelector('[data-rl-genius-api-results]');
     var frame = state.panel && state.panel.querySelector('[data-rl-genius-frame]');
-    if (results) results.innerHTML = '<div class=\"rl-muted\">Loading Genius lyrics embed and annotations for ' + escapeHTML(title || 'song') + '…</div>';
-    var detailRequest = geniusApiRequest(state.root, 'songs/' + Math.floor(Number(songId)), { text_format: 'plain' });
-    var referentRequest = geniusApiRequest(state.root, 'referents', { song_id: songId, per_page: 50, text_format: 'plain' });
-    var detailResult = await detailRequest.then(parseGeniusSongDetails).catch(function () { return null; });
+    if (results) results.innerHTML = '<div class="rl-muted">Loading song lyrics for ' + escapeHTML(title || 'song') + '…</div>';
+    var detailResult = await geniusApiRequest(state.root, 'songs/' + Math.floor(Number(songId)), { text_format: 'plain' }).then(parseGeniusSongDetails).catch(function () { return null; });
+    var embedSong = detailResult || { id: Number(songId), title: title || 'Genius song', url: songUrl };
+    if (!validGeniusPageUrl(embedSong.url)) {
+      if (results) results.innerHTML = '<div class="rl-genius-error">Genius did not return a valid song lyrics page.</div>';
+      return;
+    }
     if (frame) {
-      var embedSong = detailResult || { id: Number(songId), title: title || 'Genius song', url: songUrl };
-      if (validGeniusPageUrl(embedSong.url)) {
-        frame.removeAttribute('src');
-        frame.srcdoc = geniusEmbedDocument(embedSong);
-      }
+      frame.removeAttribute('src');
+      frame.srcdoc = geniusEmbedDocument(embedSong);
     }
-    try {
-      var payload = await referentRequest;
-      renderGeniusAnnotations(parseGeniusReferents(payload));
-    } catch (err) {
-      if (results) results.innerHTML = '<div class=\"rl-genius-error\">' + escapeHTML(err.message || 'Could not load Genius annotations.') + '</div>';
-    }
+    if (results) results.innerHTML = '<div class="rl-muted">Showing the official Genius song lyrics embed. Community lists and annotation results are excluded.</div>';
   }
 
   function buildColorCounts(analyses, colors) {
@@ -900,10 +895,10 @@
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>CHOOSE YOUR TRACKS</strong><span class="rl-muted">2–6 SONGS</span></div>' +
       '<div data-rl-track-editors></div>' +
       '<div class="rl-row rl-actions"><button type="button" class="rl-quiet" data-rl-add>＋ ADD SONG</button><button type="button" class="rl-primary" data-rl-compare>COMPARE RHYMES</button></div>' +
-      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP LYRICS & ANNOTATIONS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">The official API supplies annotated lyric fragments and explanations. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; no lyrics are scraped or copied into Rhymelight.</div></section>' +
+      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP SONG LYRICS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">Only Genius song results are shown. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; community lists and annotation panels are excluded, and no lyrics are scraped or copied into Rhymelight.</div></section>' +
       '<div class="rl-status" data-rl-status hidden></div></div>' +
       '<div data-rl-results></div>' +
-      '<div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API for song matching and annotations through the IMPROVS2 server-side proxy. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div>'; 
+      '<div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API through the IMPROVS2 server-side proxy to find song matches and preview lyrics only. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div>'; 
   }
 
   var CSS = [
@@ -1008,7 +1003,7 @@
     var host = state.panel.querySelector('[data-rl-track-editors]');
     if (!host) return;
     host.innerHTML = state.tracks.map(function (track, index) {
-      return '<section class="rl-track-editor" data-rl-track="' + index + '"><div class="rl-track-top"><select data-rl-preset aria-label="Benchmark track ' + (index + 1) + '">' + optionsMarkup(track.preset) + '</select><button type="button" class="rl-quiet" data-rl-genius-search data-rl-genius-query="' + escapeHTML(track.name + ' lyrics annotations') + '" title="Preview this song and its annotations from Genius inside Rhymelight">GENIUS ▣</button><button type="button" class="rl-quiet" data-rl-remove="' + index + '"' + (state.tracks.length <= 2 ? ' disabled' : '') + '>REMOVE</button></div>' +
+      return '<section class="rl-track-editor" data-rl-track="' + index + '"><div class="rl-track-top"><select data-rl-preset aria-label="Benchmark track ' + (index + 1) + '">' + optionsMarkup(track.preset) + '</select><button type="button" class="rl-quiet" data-rl-genius-search data-rl-genius-query="' + escapeHTML(track.name + ' lyrics') + '" title="Find and preview this song&#39;s lyrics from Genius inside Rhymelight">GENIUS ▣</button><button type="button" class="rl-quiet" data-rl-remove="' + index + '"' + (state.tracks.length <= 2 ? ' disabled' : '') + '>REMOVE</button></div>' +
         '<input class="rl-track-name" type="text" data-rl-name maxlength="90" aria-label="Track name" value="' + escapeHTML(track.name) + '" placeholder="Artist — song title">' +
         '<textarea data-rl-lyrics maxlength="50000" aria-label="Song passage" placeholder="Paste the passage you want to compare — one bar per line…">' + escapeHTML(track.lyrics) + '</textarea>' +
         '<div class="rl-meta-grid">' +
@@ -1100,8 +1095,8 @@
         var lineStyle = lineColor === undefined ? '' : 'style="background:' + getPalette()[lineColor] + '18;border-left:3px solid ' + getPalette()[lineColor] + ';padding-left:5px"';
         var count = line.words.reduce(function (n, w) { return n + w.syllables.length; }, 0);
         var rawLyricLine = line.words.map(function (word) { return word.text; }).join(' ');
-        var geniusQuery = track.name + ' ' + rawLyricLine + ' annotation meaning';
-        return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Preview Genius explanations for this lyric line inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
+        var geniusQuery = track.name + ' lyrics';
+        return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Find song lyrics on Genius inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
       }).join('') + '</div></section>';
     });
     html += '<div class="rl-note">Grade weights: rhyme density 30%, multisyllabic patterns 30%, internal rhymes 25%, stress-pattern variation 15%. Each component is normalised against a fixed reference threshold and capped at 100. Dictionary coverage is shown separately as confidence context. This is an analysis heuristic, not a definitive measure of lyric quality, wordplay, delivery or influence.</div>';
