@@ -1,6 +1,6 @@
 /*
  * RHYMELIGHT — IMPROVS2 rap-song comparison module with official Genius API integration
- * Build: 4.9.8.970
+ * Build: 4.9.8.971
  * Source export: modules/rhymelight/rhymelight.json
  * Pronunciations: bundled CMU Pronouncing Dictionary (see CMUDICT-LICENSE.txt)
  * No AI or Lovable API. Optional Genius developer API uses the user's own Genius client access token.
@@ -16,7 +16,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '4.9.8.970';
+  var VERSION = '4.9.8.971';
   var MAX_TRACKS = 6;
   var PALETTE = ['#F0F2D0', '#5188DE', '#FF873F', '#70D9BD', '#D65DB7', '#98E66D', '#191919', '#FFD400', '#72D0E8', '#F04443', '#00C978', '#A875C5'];
   var SECONDARY_PALETTE = ['#F6C85F', '#6EC5FF', '#F78DA7', '#8DE0A8', '#B69CFF', '#FF9F68', '#55D6C2', '#F0A6CA', '#A6C8FF', '#D7D86E', '#E89BFF', '#9DD9D2'];
@@ -157,7 +157,7 @@
       var response = await root.fetch(url, { cache: 'no-cache', credentials: 'same-origin' });
       if (!response.ok) throw new Error('Local rhymelight.json configuration could not be loaded (' + response.status + ').');
       var config = await response.json();
-      if (!config || config.module !== 'rhymelight' || config.mode !== 'local-analysis-genius-api' || !Array.isArray(config.benchmarks) || !Array.isArray(config.palette) || !Array.isArray(config.secondaryPalette) || config.paletteOrder !== 'ascending-fourths' || !Array.isArray(config.paletteNotes) || !config.processing || config.processing.ai !== false || config.processing.lovable !== false || config.processing.api !== true || config.processing.apiProvider !== 'Genius only' || config.processing.speechRecognition !== false || config.processing.audioUpload !== false || config.processing.remoteServices !== false || !config.genius || config.genius.apiBase !== 'https://api.genius.com' || config.genius.auth !== 'client_access_token' || !config.pronunciation || config.pronunciation.file !== 'rhymelight-pronunciations.json') throw new Error('rhymelight.json is not a valid Rhymelight/Genius API configuration.');
+      if (!config || config.module !== 'rhymelight' || config.mode !== 'local-analysis-genius-proxy' || !Array.isArray(config.benchmarks) || !Array.isArray(config.palette) || !Array.isArray(config.secondaryPalette) || config.paletteOrder !== 'ascending-fourths' || !Array.isArray(config.paletteNotes) || !config.processing || config.processing.ai !== false || config.processing.lovable !== false || config.processing.api !== true || config.processing.apiProvider !== 'Genius only' || config.processing.speechRecognition !== false || config.processing.audioUpload !== false || config.processing.remoteServices !== false || !config.genius || config.genius.proxyPath !== '/api/genius' || config.genius.auth !== 'server_environment_variable' || !config.pronunciation || config.pronunciation.file !== 'rhymelight-pronunciations.json') throw new Error('rhymelight.json is not a valid Rhymelight/Genius API configuration.');
       if (!Array.isArray(config.starterLibrary) || !config.starterLibrary.some(function (song) { return song.id === 'benchmark-rap-god' && /Rap God/.test(song.lyrics || ''); })) throw new Error('The local starter lyric library is missing the supplied Rap God entry.');
       state.config = config;
       state.seedLibrary = config.starterLibrary.slice();
@@ -578,30 +578,24 @@
     }).filter(function (referent) { return referent.fragment && referent.annotations.length; });
   }
 
-  async function geniusApiRequest(root, endpoint, params, tokenOverride) {
-    var token = String(tokenOverride === undefined ? state.geniusToken || '' : tokenOverride || '').trim();
-    if (!token) throw new Error('Add your Genius Client Access Token in the Genius settings above, then save it on this device.');
-    var url = geniusApiUrl(endpoint, params);
-    var headers = { Authorization: 'Bearer ' + token, Accept: 'application/json' };
-    var cap = root && root.Capacitor;
-    var nativeHttp = root && (root.CapacitorHttp || (cap && cap.Plugins && cap.Plugins.CapacitorHttp));
-    if (nativeHttp && typeof nativeHttp.get === 'function') {
-      var nativeResponse = await nativeHttp.get({ url: url, headers: headers, responseType: 'json' });
-      var nativeStatus = Number(nativeResponse && nativeResponse.status) || 0;
-      if (nativeStatus && (nativeStatus < 200 || nativeStatus >= 300)) throw new Error('Genius API returned HTTP ' + nativeStatus + '. Check the token and Genius API access.');
-      var nativeData = nativeResponse && nativeResponse.data;
-      if (typeof nativeData === 'string') { try { nativeData = JSON.parse(nativeData); } catch (err) { throw new Error('Genius returned an unreadable response.'); } }
-      return nativeData;
-    }
-    if (!root || typeof root.fetch !== 'function') throw new Error('This app has no HTTP request provider available for Genius API access.');
+  async function geniusApiRequest(root, endpoint, params) {
+    var action, query = Object.assign({}, params || {});
+    if (endpoint === 'search') action = 'search';
+    else if (endpoint === 'referents') action = 'referents';
+    else if (/^songs\/\d+$/.test(String(endpoint || ''))) { action = 'song'; query.songId = String(endpoint).split('/')[1]; }
+    else throw new Error('Unsupported Genius API request.');
+    var url = '/api/genius?action=' + encodeURIComponent(action);
+    Object.keys(query).forEach(function (key) {
+      if (query[key] !== undefined && query[key] !== null && query[key] !== '') url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(String(query[key]));
+    });
+    if (!root || typeof root.fetch !== 'function') throw new Error('This app has no network request provider available for the Genius proxy.');
     var response;
-    try { response = await root.fetch(url, { method: 'GET', headers: headers, cache: 'no-store' }); }
-    catch (err) { throw new Error('Could not reach the Genius API from this browser context. On the Capacitor build, enable the CapacitorHttp native plugin; browser CORS may block direct API requests.'); }
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error('Genius rejected the token or API request (HTTP ' + response.status + '). Check your Client Access Token.');
-      throw new Error('Genius API returned HTTP ' + response.status + '.');
-    }
-    return response.json();
+    try { response = await root.fetch(url, { method: 'GET', credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store' }); }
+    catch (err) { throw new Error('Could not reach the IMPROVS2 Genius proxy. Check that the latest Vercel deployment is active.'); }
+    var payload;
+    try { payload = await response.json(); } catch (err) { throw new Error('The IMPROVS2 Genius proxy returned an unreadable response.'); }
+    if (!response.ok) throw new Error(payload && payload.error && payload.error.message || 'Genius proxy returned HTTP ' + response.status + '.');
+    return payload;
   }
 
   function validGeniusPageUrl(url) { return /^https:\/\/genius\.com\//i.test(String(url || '')); }
@@ -906,10 +900,10 @@
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>CHOOSE YOUR TRACKS</strong><span class="rl-muted">2–6 SONGS</span></div>' +
       '<div data-rl-track-editors></div>' +
       '<div class="rl-row rl-actions"><button type="button" class="rl-quiet" data-rl-add>＋ ADD SONG</button><button type="button" class="rl-primary" data-rl-compare>COMPARE RHYMES</button></div>' +
-      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP LYRICS & ANNOTATIONS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><label>GENIUS CLIENT ACCESS TOKEN<input type="password" data-rl-genius-token autocomplete="off" placeholder="Paste your Genius client access token"></label><div class="rl-row"><button type="button" class="rl-quiet" data-rl-genius-token-save>USE / SAVE TOKEN</button><button type="button" class="rl-quiet" data-rl-genius-token-clear>CLEAR TOKEN</button><span class="rl-muted" data-rl-genius-token-state></span></div><div class="rl-muted">Create a Client Access Token at genius.com/api-clients. It is stored only on this device. Rhymelight calls api.genius.com directly, not Lovable.</div></div><div data-rl-genius-api-results></div><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">The official API supplies annotated lyric fragments and explanations. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; no lyrics are scraped or copied into Rhymelight.</div></section>' +
+      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP LYRICS & ANNOTATIONS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">The official API supplies annotated lyric fragments and explanations. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; no lyrics are scraped or copied into Rhymelight.</div></section>' +
       '<div class="rl-status" data-rl-status hidden></div></div>' +
       '<div data-rl-results></div>' +
-      '<div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API for song matching and annotations, with your own Genius Client Access Token. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div>'; 
+      '<div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API for song matching and annotations through the IMPROVS2 server-side proxy. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div>'; 
   }
 
   var CSS = [
@@ -1303,40 +1297,7 @@
     track.technicalWitScore = optionalNumber(editor.querySelector('[data-rl-technical-wit]') && editor.querySelector('[data-rl-technical-wit]').value, 0, 10);
   }
 
-  var GENIUS_TOKEN_STORAGE_KEY = 'improvs2.rhymelight.genius.client_token.v1';
-
-  function loadGeniusToken(root) {
-    try { state.geniusToken = root.localStorage ? String(root.localStorage.getItem(GENIUS_TOKEN_STORAGE_KEY) || '') : ''; }
-    catch (err) { state.geniusToken = ''; }
-    var label = state.panel && state.panel.querySelector('[data-rl-genius-token-state]');
-    if (label) label.textContent = state.geniusToken ? 'TOKEN SAVED ON THIS DEVICE' : 'TOKEN NOT SET';
-  }
-
-  function saveGeniusToken() {
-    var input = state.panel && state.panel.querySelector('[data-rl-genius-token]');
-    var token = input ? String(input.value || '').trim() : '';
-    if (!token) { updateStatus('Paste your Genius Client Access Token first.', 'warn'); return; }
-    state.geniusToken = token;
-    try {
-      if (!state.root.localStorage) throw new Error('Local storage unavailable');
-      state.root.localStorage.setItem(GENIUS_TOKEN_STORAGE_KEY, token);
-      if (input) input.value = '';
-      var label = state.panel.querySelector('[data-rl-genius-token-state]');
-      if (label) label.textContent = 'TOKEN SAVED ON THIS DEVICE';
-      updateStatus('Genius Client Access Token saved on this device.');
-    } catch (err) { updateStatus('Token is active for this session but could not be saved on this device.', 'warn'); }
-  }
-
-  function clearGeniusToken() {
-    state.geniusToken = '';
-    try { if (state.root && state.root.localStorage) state.root.localStorage.removeItem(GENIUS_TOKEN_STORAGE_KEY); } catch (err) {}
-    var input = state.panel && state.panel.querySelector('[data-rl-genius-token]');
-    var label = state.panel && state.panel.querySelector('[data-rl-genius-token-state]');
-    if (input) input.value = '';
-    if (label) label.textContent = 'TOKEN NOT SET';
-    updateStatus('Genius token removed from this device.');
-  }
-
+  
   function onPanelInput(event) {
     var editor = event.target.closest && event.target.closest('[data-rl-track]');
     if (editor) syncTrackFromEditor(editor);
@@ -1381,9 +1342,7 @@
   function onPanelClick(event) {
     var geniusClose = event.target.closest('[data-rl-genius-close]');
     if (geniusClose) { var geniusPanel = state.panel.querySelector('[data-rl-genius-panel]'); var geniusFrame = state.panel.querySelector('[data-rl-genius-frame]'); if (geniusFrame) geniusFrame.src = 'about:blank'; if (geniusPanel) geniusPanel.hidden = true; return; }
-    if (event.target.closest('[data-rl-genius-token-save]')) { saveGeniusToken(); return; }
-    if (event.target.closest('[data-rl-genius-token-clear]')) { clearGeniusToken(); return; }
-    var geniusOpenUrl = event.target.closest('[data-rl-genius-open-url]');
+        var geniusOpenUrl = event.target.closest('[data-rl-genius-open-url]');
     if (geniusOpenUrl) { var openUrl = geniusOpenUrl.getAttribute('data-rl-genius-open-url'); var openFrame = state.panel.querySelector('[data-rl-genius-frame]'); if (openFrame && validGeniusPageUrl(openUrl)) openFrame.src = openUrl; return; }
     var geniusSongButton = event.target.closest('[data-rl-genius-song-id]');
     if (geniusSongButton) { selectGeniusSong(Number(geniusSongButton.getAttribute('data-rl-genius-song-id')), geniusSongButton.getAttribute('data-rl-genius-song-url'), geniusSongButton.getAttribute('data-rl-genius-song-title')); return; }
@@ -1486,7 +1445,6 @@
     try { var rawLibrary = root.localStorage && root.localStorage.getItem(LIBRARY_STORAGE_KEY); if (rawLibrary) { var parsedLibrary = JSON.parse(rawLibrary); if (Array.isArray(parsedLibrary)) state.library = parsedLibrary; } } catch (err) { state.library = []; }
     state.tracks = initialTracks();
     state.panel.innerHTML = panelMarkup();
-    loadGeniusToken(root);
     state.panel.addEventListener('click', onPanelClick);
     state.panel.addEventListener('input', onPanelInput);
     state.panel.addEventListener('change', onPanelChange);

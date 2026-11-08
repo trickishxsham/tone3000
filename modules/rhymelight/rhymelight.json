@@ -1,9 +1,9 @@
 {
   "module": "rhymelight",
-  "version": "4.9.8.970",
-  "mode": "local-analysis-genius-api",
-  "title": "Rhymelight — Rap Complexity & Official Genius API",
-  "description": "Local phonetic and complexity analysis with optional official Genius API search, annotations, and in-app song preview.",
+  "version": "4.9.8.971",
+  "mode": "local-analysis-genius-proxy",
+  "title": "Rhymelight — Rap Complexity & Genius API Proxy",
+  "description": "Local phonetic and complexity analysis with optional official Genius API search and annotations via the IMPROVS2 Vercel proxy.",
   "maxTracks": 6,
   "benchmarks": [
     {
@@ -187,7 +187,7 @@
     "lovable": false,
     "api": true,
     "apiProvider": "Genius only",
-    "apiKey": true,
+    "apiKey": false,
     "speechRecognition": false,
     "audioUpload": false,
     "remoteServices": false
@@ -304,25 +304,14 @@
     "tempoWarning": "BPM alone is not a rap-speed measurement. Syllables per second requires passage duration; syllables per beat also requires BPM."
   },
   "genius": {
+    "proxyPath": "/api/genius",
+    "auth": "server_environment_variable",
+    "environmentVariable": "GENIUS_ACCESS_TOKEN",
+    "upstream": "https://api.genius.com",
     "api": true,
     "apiBase": "https://api.genius.com",
-    "auth": "client_access_token",
-    "searchEndpoint": "/search",
-    "referentsEndpoint": "/referents",
-    "annotationTextFormat": "plain",
     "preview": "official-genius-song-embed-js-in-isolated-iframe",
-    "tokenStorage": "device-local-explicit-user-save",
-    "userInitiated": true,
-    "scraping": false,
     "lovableApi": false,
-    "externalProxy": false,
-    "fullLyricsReturnedByApi": false,
-    "songEndpoint": "/songs/{id}",
-    "fullLyricsPreview": "Genius embed.js served by Genius inside a sandboxed iframe",
-    "apiTransport": [
-      "CapacitorHttp native bridge when enabled",
-      "direct HTTPS fetch fallback when browser CORS permits"
-    ],
-    "previewBehavior": "official-genius-embed-srcdoc-preserved-after-api-search"
+    "fullLyricsReturnedByApi": false
   }
 }
