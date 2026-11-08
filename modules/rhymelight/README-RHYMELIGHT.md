@@ -1,53 +1,68 @@
-# IMPROVS2 Build 964 — RHYMELIGHT (offline song comparison)
+# IMPROVS2 Build 967 — RHYMELIGHT
 
-## What this build does
+## Included
 
-RHYMELIGHT is now a native IMPROVS2 feature module for comparing the rhyme architecture of up to six rap-song passages. It is a local analysis and visualisation tool — not an AI lyric assistant.
+RHYMELIGHT is a lazy-loaded, on-device lyric analysis module for comparing up to six passages. The patch retains the existing Build 966 rhyme map, song library, JPEG/PDF exports, benchmark catalogue and Circle-of-Fourths colour system, and expands its grading and line navigation.
 
-- Select benchmark labels for Eminem — *Rap God*, Nas — *N.Y. State of Mind*, The Notorious B.I.G. — *Notorious Thugs*, Black Thought — *Hot 97 10-Minute Freestyle*, Rakim — *Follow the Leader*, and 2Pac — *Me Against the World*.
-- Paste a passage for each track (minimum two populated tracks; up to six).
-- Matching phonetic rhyme sounds share the same colour across every selected passage.
-- Switch between syllable, word, and line views. Primary stress is underlined; line endings receive an A/B/C rhyme scheme.
-- Compare each song's own rhyme density, internal rhymes and multi-syllable rhyme patterns; cross-song shared sounds are reported separately. Pronunciation-dictionary coverage is included so unknown words do not silently skew the comparison.
+- Offline CMU pronunciation-dictionary analysis, syllable splits and primary stress.
+- Same phonetic rhyme family keeps the same IMPROVS2 palette colour across compared tracks, in the ascending-fourths order: C, F, Bb, Eb, Ab, Db, Gb, B, E, A, D, G. The palette colours and black/white text-contrast rules are retained.
+- Syllable, word and line-end views; shared sounds; selectable colour chips; syllable/word/line/unique-word/track counts.
+- Eight weighted grade dimensions: multisyllabic rhyming 20%, internal rhyme density 15%, rhyme density 10%, flow/rhythmic complexity 15%, wordplay/double meanings 15%, metaphor/imagery 10%, technical vocabulary/wit 10%, sustained complexity 5%.
+- Optional BPM and exact passage-duration fields. With both inputs, Rhymelight calculates syllables per second and syllables per beat. BPM alone is not misrepresented as delivery speed. With no timed duration, the flow component is labelled as a text-only rhythm proxy.
+- Wordplay, imagery and technical-wit ratings are manual 0–10 assessments. Missing ratings are excluded from the active weighted denominator, and the grade is labelled **PROVISIONAL** until all three are supplied. The offline phonetic engine does not pretend to understand semantic double meanings or metaphors.
+- Sustained complexity measures how many four-line blocks contain a recurring phonetic rhyme family.
+- Click any analysed lyric line to open a Genius search for that track and line. The lookup is an external, user-initiated hand-off; Genius annotation text is not scraped, fetched, cached or republished in Rhymelight.
+- Personal lyrics, tempo details and manual ratings can be saved to the local device library. Rap God remains preloaded from the text supplied by the user.
+- Per-track JPEG and multi-page PDF exports include the analysis and colour legend.
 
-## No AI or API
+## Benchmark catalogue and lyric rights
 
-There is no AI model call, API route, API key, audio transcription, microphone capture, speech-recognition service, or remote analytics in this module. Text analysis runs in the browser using the bundled pronunciation data. Its only resource reads are same-origin static files inside `modules/rhymelight/`.
+The picker retains all 17 requested reference titles:
 
-`modules/rhymelight/rhymelight.json` is the clean module configuration. It is derived from the supplied Rhymelight project export's browser-safe rhyme-sheet concepts and six benchmark labels. The original 88-file Lovable export is deliberately not bundled, because it contains AI gateway and server-function code that this implementation does not use.
+- Nas — N.Y. State of Mind; The Message
+- Mobb Deep — Shook Ones, Pt. II; Survival of the Fittest
+- Eric B. & Rakim — Know the Ledge
+- Rakim — Follow the Leader
+- Eminem — Rap God; The Way I Am; Godzilla
+- Drake feat. Kanye West, Lil Wayne & Eminem — Forever
+- The Notorious B.I.G. — Notorious Thugs; Kick in the Door
+- 2Pac — Me Against the World; Hail Mary; Trapped
+- Black Thought — Hot 97 10-Minute Freestyle
+- DJ Krush feat. Black Thought — Zen Approach
 
-## Important source-data limitation
+These are labelled as elite reference titles, not assigned fixed/fabricated scores. The grade is calculated from the actual passage entered. Only the user-supplied Rap God text is bundled; the other titles are metadata only. Paste lyrics or excerpts you have permission to use.
 
-The supplied project export listed the six benchmark song titles and contained a generic hand-authored demonstration stanza, but it did not include analysed passages or rhyme maps for those six songs. This build therefore does not fabricate track statistics or include copyrighted lyrics. Select a benchmark label and paste the passage you want to study from your own source.
+## Offline, privacy and Genius behaviour
 
-## Phonetic engine and limitations
+There are no AI calls, backend routes, API keys, Genius API calls, microphone capture, speech recognition, audio uploads or analytics. The analysis engine uses same-origin static JSON and the bundled CMU pronunciation dictionary. Personal content remains in browser/device local storage.
 
-`rhymelight-pronunciations.json` bundles the primary pronunciations from CMU Pronouncing Dictionary 1.1.3 (ARPABET). Repeated vowel-plus-coda sound groups from different word forms are coloured consistently across all tracks; merely repeating the exact same word is not counted as a rhyme. The module also looks for repeated two-to-four-syllable line-ending sequences and repeated multisyllabic word endings, while filtering common function-word-only patterns.
+Clicking a lyric line opens `https://genius.com/search?q=...` in a new browser tab. Genius requires its own website connection to show its community explanations. Rhymelight does not use the authenticated Genius developer API; the developer API's referent/annotation endpoints require authentication, so this build does not make unauthorised direct API calls. See the [Genius API documentation](https://docs.genius.com/) and [LyricsGenius API/lyrics notes](https://lyricsgenius.readthedocs.io/en/master/how_it_works.html).
 
-Rhyme density and internal-rhyme metrics are calculated within each individual passage. A sound appearing once in Song A and once in Song B is shown as a shared comparison sound, but it does not inflate either song's own rhyme-density score. The multi-pattern figure counts distinct repeated multi-syllable sound patterns per 16 lines, rather than counting every repetition of one pattern.
+The local CMU dictionary is primarily US English. Accents, delivery-based rhymes, pronunciation variants and slant rhymes may be missed. Unknown words remain visible and are syllable-estimated from spelling, but do not receive invented phonetic matches. Dictionary coverage is shown as confidence context.
 
-The bundled dictionary is primarily US English. Unknown words remain visible, receive an estimated syllable split from spelling, and are not assigned invented phonetic matches. Accent, delivery, pronunciation variants, homophones outside the primary dictionary entry, and slant rhymes may therefore be missed. The coverage figure makes dictionary limitations visible.
+## Patch installation
 
-See `modules/rhymelight/CMUDICT-LICENSE.txt` for the dictionary licence.
+This is a changed-files-only patch over Build 966. Keep the existing `modules/rhymelight/rhymelight-pronunciations.json` and `modules/rhymelight/CMUDICT-LICENSE.txt` from Build 966; they are unchanged and therefore not duplicated in the ZIP.
 
-## Install
+Replace/add these files at the IMPROVS2 project root:
 
-Copy these paths into the root of the existing IMPROVS2 deployment/repository:
-
-- `app-964.html`
+- `app-967.html`
 - `app-latest.html`
 - `modules/rhymelight/rhymelight.js`
 - `modules/rhymelight/rhymelight.json`
-- `modules/rhymelight/rhymelight-pronunciations.json`
-- `modules/rhymelight/CMUDICT-LICENSE.txt`
+- `README-RHYMELIGHT.md`
+- `tests/rhymelight.test.cjs`
+- `tests/rhymelight-offline.test.cjs`
 
-Keep `app-964.html` and `app-latest.html` byte-identical. The existing IMPROVS2 lazy module loader loads `modules/rhymelight/rhymelight.js`; that module reads its local JSON configuration and local pronunciation dictionary.
-
-If the earlier AI-based Rhymelight patch was installed, remove its Rhymelight-only `api/rhymelight.js` route. This replacement does not use it. Do not remove a shared environment variable if another unrelated service in your deployment still uses it; this module neither reads nor requires `LOVABLE_API_KEY`.
+Keep `app-967.html` and `app-latest.html` byte-identical. Do not remove the existing pronunciation dictionary or its licence. No changes to NAM/IR, Voice2Guitar, microphone routing, DSP or audio worklets are part of this patch.
 
 ## Verification
 
-- Node unit tests cover cross-track rhyme grouping, syllable segmentation and stress, density/internal/multis metrics, missing dictionary words, clean offline configuration, and absence of AI/API/speech-capture code.
-- `node --check` is used for the module and app inline scripts.
-- HTML pair identity, source/config JSON validity, dictionary validity, and ZIP contents are checked before delivery.
-- A real browser UI pass could not be completed in this container because the headless Chromium process did not start reliably; no browser-render test is claimed.
+- `node --test tests/*.cjs` — 33 tests passed.
+- Module JavaScript passes `node --check`.
+- Both app HTML copies pass inline-script syntax checking.
+- Manifest, module and app version metadata match Build 967.
+- `app-967.html` and `app-latest.html` are byte-for-byte identical.
+- ZIP integrity and contents are checked before delivery.
+
+No live deployment is performed by this patch. Genius search links require the user's browser to be online when clicked.
