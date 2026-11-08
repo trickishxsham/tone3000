@@ -1,9 +1,9 @@
 {
   "module": "rhymelight",
-  "version": "4.9.8.967",
-  "mode": "offline-local",
-  "title": "Rhymelight — Offline Rap Complexity & Genius Reference",
-  "description": "Offline phonetic comparison with Circle-of-Fourths rhyme colours, delivery-aware flow metrics and transparent human-rated artistry dimensions.",
+  "version": "4.9.8.970",
+  "mode": "local-analysis-genius-api",
+  "title": "Rhymelight — Rap Complexity & Official Genius API",
+  "description": "Local phonetic and complexity analysis with optional official Genius API search, annotations, and in-app song preview.",
   "maxTracks": 6,
   "benchmarks": [
     {
@@ -184,13 +184,15 @@
   "processing": {
     "execution": "on-device",
     "ai": false,
-    "api": false,
-    "apiKey": false,
+    "lovable": false,
+    "api": true,
+    "apiProvider": "Genius only",
+    "apiKey": true,
     "speechRecognition": false,
     "audioUpload": false,
     "remoteServices": false
   },
-  "lyricsPolicy": "Only the user-supplied Rap God passage is bundled. Other benchmark records are metadata only and marked elite reference titles, not pre-scored songs. Paste/import lyrics you have permission to use. Clicking a line opens an external Genius search; no Genius API calls or lyric scraping are performed.",
+  "lyricsPolicy": "Only user-supplied lyrics are bundled. The official Genius API is called directly for song search, song metadata, annotated lyric fragments and attached annotations, using the user-provided Genius Client Access Token. Complete song lyrics are rendered by Genius’s own embed.js inside an isolated in-app iframe; Rhymelight does not scrape or reproduce full lyrics. No Lovable API, third-party lyrics API, or server proxy is used.",
   "paletteOrder": "ascending-fourths",
   "paletteNotes": [
     "C",
@@ -266,13 +268,13 @@
         "id": "wordplay",
         "label": "Wordplay and double meanings",
         "weight": 15,
-        "method": "User-rated 0–10; semantic interpretation is not inferred offline"
+        "method": "User-rated 0–10; semantic interpretation is not automatically inferred"
       },
       {
         "id": "imagery",
         "label": "Metaphor and imagery",
         "weight": 10,
-        "method": "User-rated 0–10; semantic interpretation is not inferred offline"
+        "method": "User-rated 0–10; semantic interpretation is not automatically inferred"
       },
       {
         "id": "technicalWit",
@@ -302,11 +304,25 @@
     "tempoWarning": "BPM alone is not a rap-speed measurement. Syllables per second requires passage duration; syllables per beat also requires BPM."
   },
   "genius": {
-    "mode": "external-search-only",
-    "searchUrl": "https://genius.com/search?q=",
-    "apiCalls": false,
-    "apiTokenRequiredByRhymelight": false,
-    "annotationTextStored": false,
-    "description": "Clicking a lyric line opens a Genius search for that track and line. Annotation text remains on Genius; Rhymelight does not scrape, cache, or republish it."
+    "api": true,
+    "apiBase": "https://api.genius.com",
+    "auth": "client_access_token",
+    "searchEndpoint": "/search",
+    "referentsEndpoint": "/referents",
+    "annotationTextFormat": "plain",
+    "preview": "official-genius-song-embed-js-in-isolated-iframe",
+    "tokenStorage": "device-local-explicit-user-save",
+    "userInitiated": true,
+    "scraping": false,
+    "lovableApi": false,
+    "externalProxy": false,
+    "fullLyricsReturnedByApi": false,
+    "songEndpoint": "/songs/{id}",
+    "fullLyricsPreview": "Genius embed.js served by Genius inside a sandboxed iframe",
+    "apiTransport": [
+      "CapacitorHttp native bridge when enabled",
+      "direct HTTPS fetch fallback when browser CORS permits"
+    ],
+    "previewBehavior": "official-genius-embed-srcdoc-preserved-after-api-search"
   }
 }
