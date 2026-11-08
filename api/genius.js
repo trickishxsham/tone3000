@@ -17,18 +17,30 @@ module.exports = async function geniusProxy(req, res) {
     return send(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Only GET requests are supported.' } });
   }
 
-  // Browser calls must be same-origin. This is not user authentication, but it
-  // prevents arbitrary cross-origin websites from using the project's token.
+  // Validate browser-origin metadata without assuming every same-origin GET
+  // includes an Origin header. Chromium commonly omits Origin on GET requests.
+  // Prefer Origin when present; otherwise validate Referer, then Fetch Metadata.
   const origin = req.headers.origin;
   const host = req.headers.host;
-  if (!origin || !host) return send(res, 403, { error: { code: 'ORIGIN_REQUIRED', message: 'A same-origin browser request is required.' } });
+  const referer = req.headers.referer || req.headers.referrer;
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (!host) return send(res, 403, { error: { code: 'HOST_REQUIRED', message: 'The request host could not be validated.' } });
+
+  let browserOrigin = '';
   try {
-    const parsedOrigin = new URL(origin);
-    if (parsedOrigin.protocol !== 'https:' || parsedOrigin.host !== host) {
-      return send(res, 403, { error: { code: 'ORIGIN_FORBIDDEN', message: 'Cross-origin requests are not allowed.' } });
-    }
+    if (origin) browserOrigin = new URL(origin).origin;
+    else if (referer) browserOrigin = new URL(referer).origin;
   } catch (_) {
     return send(res, 403, { error: { code: 'ORIGIN_INVALID', message: 'The request origin is invalid.' } });
+  }
+
+  if (browserOrigin) {
+    const parsed = new URL(browserOrigin);
+    if (parsed.protocol !== 'https:' || parsed.host !== host) {
+      return send(res, 403, { error: { code: 'ORIGIN_FORBIDDEN', message: 'Cross-origin requests are not allowed.' } });
+    }
+  } else if (fetchSite !== 'same-origin') {
+    return send(res, 403, { error: { code: 'ORIGIN_UNVERIFIABLE', message: 'The browser did not provide verifiable same-origin request metadata.' } });
   }
 
   const token = process.env.GENIUS_ACCESS_TOKEN;
