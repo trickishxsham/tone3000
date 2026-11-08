@@ -1,0 +1,105 @@
+{
+  "module": "rhymelight",
+  "version": "4.9.8.964",
+  "mode": "offline-local",
+  "title": "Rhymelight — Rap Song Complexity Comparison",
+  "description": "Compare the rhyme architecture of selected rap-song passages with shared colour-coded phonetic rhyme groups.",
+  "maxTracks": 6,
+  "benchmarks": [
+    {
+      "id": "eminem",
+      "artist": "Eminem",
+      "song": "Rap God"
+    },
+    {
+      "id": "nas",
+      "artist": "Nas",
+      "song": "N.Y. State of Mind"
+    },
+    {
+      "id": "biggie",
+      "artist": "The Notorious B.I.G.",
+      "song": "Notorious Thugs"
+    },
+    {
+      "id": "black-thought",
+      "artist": "Black Thought",
+      "song": "Hot 97 10-Minute Freestyle"
+    },
+    {
+      "id": "rakim",
+      "artist": "Rakim",
+      "song": "Follow the Leader"
+    },
+    {
+      "id": "2pac",
+      "artist": "2Pac",
+      "song": "Me Against the World"
+    }
+  ],
+  "views": [
+    "syllables",
+    "words",
+    "lines"
+  ],
+  "metrics": [
+    {
+      "id": "rhymeDensity",
+      "label": "Rhyme density",
+      "description": "Within-song phonetic syllable groups repeated across different word forms, divided by that song’s total syllables."
+    },
+    {
+      "id": "multiRhymes",
+      "label": "Multi-syllable rhymes",
+      "description": "Distinct within-song repeated multisyllabic word endings and two-to-four-syllable line-ending sequences, normalised per 16 lines."
+    },
+    {
+      "id": "internalRhymes",
+      "label": "Internal rhymes",
+      "description": "Within-song repeated phonetic rhyme syllables occurring before a line’s final syllable, normalised per 100 syllables."
+    },
+    {
+      "id": "sharedRhymeSounds",
+      "label": "Shared sounds",
+      "description": "Phonetic rhyme sounds present in more than one selected song; reported separately from each song’s own complexity scores."
+    },
+    {
+      "id": "dictionaryCoverage",
+      "label": "Pronunciation coverage",
+      "description": "Share of words found in the bundled pronunciation dictionary."
+    }
+  ],
+  "palette": [
+    "#f6c85f",
+    "#6ec5ff",
+    "#f78da7",
+    "#8de0a8",
+    "#b69cff",
+    "#ff9f68",
+    "#55d6c2",
+    "#f0a6ca",
+    "#a6c8ff",
+    "#d7d86e",
+    "#e89bff",
+    "#9dd9d2"
+  ],
+  "pronunciation": {
+    "file": "rhymelight-pronunciations.json",
+    "format": "ARPABET",
+    "source": "CMU Pronouncing Dictionary",
+    "sourceVersion": "1.1.3",
+    "variantPolicy": "Primary pronunciation for each dictionary headword.",
+    "unknownWordPolicy": "Keep the word visible, estimate syllable count from spelling, and do not invent a phonetic rhyme match.",
+    "licenseFile": "CMUDICT-LICENSE.txt"
+  },
+  "processing": {
+    "execution": "on-device",
+    "ai": false,
+    "api": false,
+    "apiKey": false,
+    "speechRecognition": false,
+    "audioUpload": false,
+    "remoteServices": false
+  },
+  "lyricsPolicy": "No copyrighted lyrics are included. The user supplies the passages they want to compare."
+}
