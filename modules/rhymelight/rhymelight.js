@@ -1,6 +1,6 @@
 /*
  * RHYMELIGHT — IMPROVS2 rap-song comparison module with official Genius API integration
- * Build: 4.9.8.971
+ * Build: 4.9.8.972
  * Source export: modules/rhymelight/rhymelight.json
  * Pronunciations: bundled CMU Pronouncing Dictionary (see CMUDICT-LICENSE.txt)
  * No AI or Lovable API. Optional Genius developer API uses the user's own Genius client access token.
@@ -16,7 +16,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '4.9.8.971';
+  var VERSION = '4.9.8.972';
   var MAX_TRACKS = 6;
   var PALETTE = ['#F0F2D0', '#5188DE', '#FF873F', '#70D9BD', '#D65DB7', '#98E66D', '#191919', '#FFD400', '#72D0E8', '#F04443', '#00C978', '#A875C5'];
   var SECONDARY_PALETTE = ['#F6C85F', '#6EC5FF', '#F78DA7', '#8DE0A8', '#B69CFF', '#FF9F68', '#55D6C2', '#F0A6CA', '#A6C8FF', '#D7D86E', '#E89BFF', '#9DD9D2'];
@@ -43,7 +43,7 @@
   ];
   var state = {
     root: null, panel: null, mounted: false, open: false, initialisedWithConfig: false, tracks: [], results: null,
-    dictionary: null, dictionaryPromise: null, config: null, configPromise: null, seedLibrary: [], library: [], view: 'syllables', focus: null, status: '', geniusToken: '', geniusQuery: ''
+    dictionary: null, dictionaryPromise: null, config: null, configPromise: null, seedLibrary: [], library: [], view: 'syllables', focus: null, status: '', geniusToken: '', geniusQuery: '', geniusTrackIndex: -1
   };
 
   function escapeHTML(value) {
@@ -217,6 +217,8 @@
       wordplayScore: optionalNumber(track.wordplayScore, 0, 10),
       imageryScore: optionalNumber(track.imageryScore, 0, 10),
       technicalWitScore: optionalNumber(track.technicalWitScore, 0, 10),
+      geniusReferents: Array.isArray(track.geniusReferents) ? track.geniusReferents : [],
+      semanticEvidence: scoreGeniusEvidence(track.geniusReferents),
       lines: lines.map(function (line) {
         var last = line.words.length ? line.words[line.words.length - 1] : null;
         return { sourceIndex: line.sourceIndex, group: last ? last.group : null, words: line.words };
@@ -334,6 +336,202 @@
     return windows ? (sustained / windows) * 100 : 0;
   }
 
+  // Build an independent profile from the same phonetic families shown by the
+  // colour map. Palette hue/order is presentation only; the underlying sound
+  // group IDs, word forms and positions are the evidence.
+  function calculateColourWitProfile(analysis) {
+    analysis = analysis || { lines: [] };
+    var lines = analysis.lines || [], familyMap = new Map(), wordFamilyMap = new Map(), lineEndMap = new Map(), totalSyllables = 0, totalWords = 0;
+    var lineFamilySets = [], lineFlat = [], totalKnownSyllables = 0;
+    function ensure(map, id) {
+      if (!map.has(id)) map.set(id, { forms: new Set(), multiForms: new Set(), lines: new Set(), occurrences: 0, internal: 0 });
+      return map.get(id);
+    }
+    lines.forEach(function (line, li) {
+      var flat = [], words = line.words || [];
+      words.forEach(function (word, wi) {
+        totalWords++;
+        (word.syllables || []).forEach(function (syllable, si) {
+          totalSyllables++;
+          if (word.known) totalKnownSyllables++;
+          flat.push({ group: syllable.group || null });
+          if (syllable.group) {
+            var entry = ensure(familyMap, syllable.group);
+            entry.forms.add(normaliseWord(word.text));
+            entry.lines.add(li);
+            entry.occurrences++;
+            if (wi < words.length - 1 || si < (word.syllables || []).length - 1) entry.internal++;
+          }
+        });
+        if (word.group) {
+          var wordEntry = ensure(wordFamilyMap, word.group);
+          var wordForm = normaliseWord(word.text);
+          wordEntry.forms.add(wordForm);
+          wordEntry.lines.add(li);
+          wordEntry.occurrences++;
+          if ((word.syllables || []).length >= 2) wordEntry.multiForms.add(wordForm);
+        }
+      });
+      if (line.group && words.length) {
+        var finalWord = normaliseWord(words[words.length - 1].text);
+        var ending = ensure(lineEndMap, line.group);
+        ending.forms.add(finalWord);
+        ending.lines.add(li);
+        ending.occurrences++;
+      }
+      lineFamilySets.push(new Set());
+      lineFlat.push(flat);
+    });
+
+    var repeatedFamilies = new Map(), repeatedWordFamilies = new Map(), lineEndFamilies = new Map();
+    familyMap.forEach(function (entry, id) {
+      if (entry.forms.size >= 2) repeatedFamilies.set(id, entry);
+    });
+    wordFamilyMap.forEach(function (entry, id) {
+      if (entry.forms.size >= 2) repeatedWordFamilies.set(id, entry);
+    });
+    lineEndMap.forEach(function (entry, id) {
+      if (entry.forms.size >= 2) lineEndFamilies.set(id, entry);
+    });
+    var repeatedSyllables = 0, internalColourSyllables = 0, familyWordForms = 0;
+    var familyLineSpans = 0, multiWordFamilyForms = 0, linesWithLineEndRhyme = new Set();
+    repeatedWordFamilies.forEach(function (entry) {
+      if (entry.multiForms.size >= 2) multiWordFamilyForms += entry.multiForms.size;
+    });
+    lineEndFamilies.forEach(function (entry) { entry.lines.forEach(function (li) { linesWithLineEndRhyme.add(li); }); });
+    repeatedFamilies.forEach(function (entry) {
+      repeatedSyllables += entry.occurrences;
+      internalColourSyllables += entry.internal;
+      familyWordForms += entry.forms.size;
+      familyLineSpans += entry.lines.size;
+    });
+    var recurrentIds = new Set(repeatedFamilies.keys());
+    var colourTransitions = 0, interwovenLines = 0, linesWithColour = 0;
+    var blockCount = 0, sustainedWeaveBlocks = 0;
+    lineFlat.forEach(function (flat, li) {
+      var seen = new Set();
+      flat.forEach(function (item, index) {
+        var id = item.group && recurrentIds.has(item.group) ? item.group : null;
+        if (id) {
+          seen.add(id);
+          // Count adjacent coloured syllables only; a blank/non-rhyming syllable
+          // breaks adjacency rather than creating an artificial colour change.
+          if (index > 0) {
+            var prior = flat[index - 1].group;
+            if (prior && recurrentIds.has(prior) && prior !== id) colourTransitions++;
+          }
+        }
+      });
+      lineFamilySets[li] = seen;
+      if (seen.size) linesWithColour++;
+      if (seen.size >= 2) interwovenLines++;
+    });
+    for (var start = 0; start < lines.length; start += 4) {
+      blockCount++;
+      var perFamilyLines = new Map();
+      lineFamilySets.slice(start, start + 4).forEach(function (set, offset) {
+        set.forEach(function (id) {
+          if (!perFamilyLines.has(id)) perFamilyLines.set(id, new Set());
+          perFamilyLines.get(id).add(offset);
+        });
+      });
+      var sustainedFamilies = Array.from(perFamilyLines.values()).filter(function (lineSet) { return lineSet.size >= 2; }).length;
+      if (sustainedFamilies >= 2) sustainedWeaveBlocks++;
+    }
+    var multiPatterns = findMultiPatterns([analysis]).get(analysis.id) || new Set();
+    var familyCount = repeatedFamilies.size;
+    return {
+      lines: lines.length,
+      words: totalWords,
+      syllables: totalSyllables,
+      knownSyllables: totalKnownSyllables,
+      familyCount: familyCount,
+      familyWordForms: familyWordForms,
+      averageFormsPerFamily: familyCount ? familyWordForms / familyCount : 0,
+      familyLineSpans: familyLineSpans,
+      multiWordFamilyCount: Array.from(repeatedWordFamilies.values()).filter(function (entry) { return entry.multiForms.size >= 2; }).length,
+      multiWordFamilyFormDensity: totalWords ? multiWordFamilyForms / totalWords * 100 : 0,
+      lineEndFamilyCount: lineEndFamilies.size,
+      lineEndRhymeRate: lines.length ? linesWithLineEndRhyme.size / lines.length * 100 : 0,
+      lineEndFamilyDensityPer16: lines.length ? lineEndFamilies.size / lines.length * 16 : 0,
+      repeatedSyllables: repeatedSyllables,
+      repeatedSyllableDensity: totalSyllables ? repeatedSyllables / totalSyllables * 100 : 0,
+      internalColourDensity: totalSyllables ? internalColourSyllables / totalSyllables * 100 : 0,
+      familyWordFormDensity: totalWords ? familyWordForms / totalWords * 100 : 0,
+      colourTransitions: colourTransitions,
+      colourTransitionDensity: totalSyllables ? colourTransitions / totalSyllables * 100 : 0,
+      interwovenLineRate: lines.length ? interwovenLines / lines.length * 100 : 0,
+      colouredLineRate: lines.length ? linesWithColour / lines.length * 100 : 0,
+      familyDensityPer16: lines.length ? familyCount / lines.length * 16 : 0,
+      multiPatternCount: multiPatterns.size,
+      multiPatternDensity: lines.length ? multiPatterns.size / lines.length * 16 : 0,
+      sustainedWeaveRate: blockCount ? sustainedWeaveBlocks / blockCount * 100 : 0,
+      pronunciationCoverage: totalSyllables ? totalKnownSyllables / totalSyllables * 100 : 0
+    };
+  }
+
+  // Rap God (the supplied Eminem reference lyric) calibrates the top of this
+  // technical-wit scale. Each dimension is capped at its reference level so
+  // sheer volume in one dimension cannot compensate for weak pattern craft.
+  var COLOUR_WIT_REFERENCE = {
+    source: 'Eminem — Rap God (supplied benchmark lyric; CMU Pronouncing Dictionary 1.1.3)',
+    // Recomputed from the 171 non-empty lines in the supplied starter lyric.
+    // These are rates, so scores are comparable across different track lengths.
+    multiPatternDensity: 1.7777777778,
+    multiWordFamilyFormDensity: 2.2973835354,
+    internalColourDensity: 72.6470588235,
+    familyWordFormDensity: 47.3516273133,
+    colourTransitionDensity: 59.4117647059,
+    interwovenLineRate: 97.6608187135,
+    familyDensityPer16: 13.3801169591,
+    repeatedSyllableDensity: 80,
+    lineEndRhymeRate: 35.6725146199,
+    sustainedWeaveRate: 97.6744186047
+  };
+
+  function scoreColourWit(profile) {
+    var dimensions = [
+      { id: 'multiPatternDensity', label: 'Repeated multisyllabic colour patterns', weight: 18 },
+      { id: 'multiWordFamilyFormDensity', label: 'Polysyllabic word-rhyme families', weight: 12 },
+      { id: 'internalColourDensity', label: 'Internal colour placement', weight: 16 },
+      { id: 'familyWordFormDensity', label: 'Rhyme-family vocabulary range', weight: 14 },
+      { id: 'colourTransitionDensity', label: 'Adjacent colour interweaving', weight: 10 },
+      { id: 'interwovenLineRate', label: 'Multi-family line construction', weight: 10 },
+      { id: 'familyDensityPer16', label: 'Distinct recurring sound families', weight: 7 },
+      { id: 'repeatedSyllableDensity', label: 'Recurring phonetic coverage', weight: 6 },
+      { id: 'lineEndRhymeRate', label: 'Line-ending colour scheme', weight: 4 },
+      { id: 'sustainedWeaveRate', label: 'Sustained multi-family weaving', weight: 3 }
+    ];
+    var weighted = 0, activeWeight = 0;
+    dimensions.forEach(function (dimension) {
+      var reference = Number(COLOUR_WIT_REFERENCE[dimension.id]) || 0;
+      var observed = Number(profile && profile[dimension.id]) || 0;
+      if (reference <= 0) return;
+      var score = clampScore((observed / reference) * 100);
+      dimension.observed = Math.round(observed * 100) / 100;
+      dimension.reference = Math.round(reference * 100) / 100;
+      dimension.score = Math.round(score * 10) / 10;
+      weighted += score * dimension.weight;
+      activeWeight += dimension.weight;
+    });
+    var rawScore = activeWeight ? weighted / activeWeight : 0;
+    // Short excerpts can show a promising rhyme pattern by chance. Use an
+    // eight-line evidence floor so a tiny sample cannot tie a full benchmark.
+    var sampleFactor = Math.sqrt(Math.min(1, Math.max(0, Number(profile && profile.lines) || 0) / 8));
+    var pronunciationFactor = Math.min(1, Math.max(0, Number(profile && profile.pronunciationCoverage) || 0) / 80);
+    var confidence = Math.min(sampleFactor, pronunciationFactor);
+    var score = rawScore * sampleFactor * pronunciationFactor;
+    return {
+      score: Math.round(score) / 10,
+      rawScore: Math.round(rawScore) / 10,
+      confidence: Math.round(confidence * 100) / 100,
+      sampleFactor: Math.round(sampleFactor * 100) / 100,
+      pronunciationFactor: Math.round(pronunciationFactor * 100) / 100,
+      source: COLOUR_WIT_REFERENCE.source,
+      dimensions: dimensions.filter(function (dimension) { return dimension.score !== undefined; })
+    };
+  }
+
   function calculateLineLengthVariation(analysis) {
     var counts = (analysis.lines || []).map(function (line) {
       return (line.words || []).reduce(function (sum, word) { return sum + (word.syllables || []).length; }, 0);
@@ -401,6 +599,11 @@
     });
     var stressVariation = calculateTrackStressVariation(analysis);
     var flow = calculateFlowScore(analysis, totalSyllables, stressVariation);
+    var colourWitProfile = calculateColourWitProfile(analysis);
+    var colourWitCalibration = scoreColourWit(colourWitProfile);
+    var calculatedTechnicalWit = analysis.technicalWitScore === null
+      ? colourWitCalibration.score
+      : Number(analysis.technicalWitScore);
     var metrics = {
       lines: analysis.lines.length,
       syllables: totalSyllables,
@@ -424,7 +627,11 @@
       sustainedComplexity: calculateSustainedComplexity(analysis),
       wordplayScore: analysis.wordplayScore,
       imageryScore: analysis.imageryScore,
-      technicalWitScore: analysis.technicalWitScore
+      technicalWitScore: calculatedTechnicalWit,
+      technicalWitManual: analysis.technicalWitScore !== null,
+      colourWitProfile: colourWitProfile,
+      colourWitCalibration: colourWitCalibration,
+      semanticEvidence: analysis.semanticEvidence
     };
     metrics.complexityGrade = calculateComplexityGrade(metrics);
     return metrics;
@@ -480,6 +687,64 @@
 
   function clampScore(value) { return Math.max(0, Math.min(100, Number(value) || 0)); }
 
+
+  // Conservative semantic evidence scoring from Genius annotations.
+  // Votes are deliberately ignored: popularity is not evidence of lyrical quality.
+  var GENIUS_EVIDENCE_RULES = {
+    wordplay: [
+      /\b(wordplay|double meaning|double entendre|pun|homophone|homonym|plays on words|word play|ambiguity|multiple meanings)\b/i
+    ],
+    imagery: [
+      /\b(metaphor|simile|imagery|symboli[sz]|personification|visual imagery|figurative language|allegory|analogy|evokes? an image)\b/i
+    ],
+    technicalWit: [
+      /\b(internal rhyme|multisyllabic|multi-syllabic|rhyme scheme|rhyme pattern|alliteration|assonance|consonance|cadence|flow|technical|word choice|vocabulary|double rhyme|compound rhyme)\b/i
+    ]
+  };
+
+  function scoreGeniusEvidence(referents) {
+    var items = Array.isArray(referents) ? referents : [];
+    var output = {};
+    Object.keys(GENIUS_EVIDENCE_RULES).forEach(function (category) {
+      var evidence = [], seen = new Set(), verified = 0;
+      items.forEach(function (referent) {
+        var fragment = String(referent && referent.fragment || '').trim();
+        (Array.isArray(referent && referent.annotations) ? referent.annotations : []).forEach(function (annotation) {
+          var body = String(annotation && annotation.body || '').trim();
+          if (!body) return;
+          var matches = GENIUS_EVIDENCE_RULES[category].some(function (pattern) { return pattern.test(body); });
+          if (!matches) return;
+          var key = (fragment + ' ' + body).toLowerCase().replace(/\s+/g, ' ');
+          if (seen.has(key)) return;
+          seen.add(key);
+          var isVerified = !!annotation.verified;
+          if (isVerified) verified++;
+          evidence.push({
+            fragment: fragment,
+            excerpt: body.length > 260 ? body.slice(0, 257) + '…' : body,
+            verified: isVerified,
+            source: 'Genius community annotation'
+          });
+        });
+      });
+      if (!evidence.length) {
+        output[category] = { evidenceStrength: 0, confidence: 0, evidence: [], method: 'No matching Genius annotation evidence; left unscored.' };
+        return;
+      }
+      // A transparent evidence-count proxy, capped at 10. Verification modestly
+      // increases confidence, never evidence strength; votes and author popularity are ignored.
+      var evidenceStrength = Math.min(10, 2 + evidence.length * 1.5);
+      var confidence = Math.min(0.9, 0.25 + evidence.length * 0.12 + (verified ? 0.12 : 0));
+      output[category] = {
+        evidenceStrength: Math.round(evidenceStrength * 10) / 10,
+        confidence: Math.round(confidence * 100) / 100,
+        evidence: evidence.slice(0, 8),
+        method: 'Evidence-count proxy from Genius annotations; not an AI interpretation or an official Genius rating.'
+      };
+    });
+    return output;
+  }
+
   function calculateComplexityGrade(metrics) {
     metrics = metrics || {};
     var lines = Math.max(0, Number(metrics.lines) || 0);
@@ -492,9 +757,9 @@
       { id: 'internalRhymes', label: 'Internal rhyme density', weight: 15, score: clampScore((internalPer100 / 20) * 100), benchmark: '20 internal-rhyme syllables per 100 syllables = 100' },
       { id: 'rhymeDensity', label: 'Rhyme density', weight: 10, score: clampScore(((Number(metrics.rhymeDensity) || 0) / 0.4) * 100), benchmark: '40% repeated rhyme-syllable density = 100' },
       { id: 'flow', label: 'Flow & rhythmic complexity', weight: 15, score: clampScore(metrics.flowScore === undefined ? flowFallback : metrics.flowScore), benchmark: 'Delivery pace, beat density and stress variation; text-only proxy when timing is absent' },
-      { id: 'wordplay', label: 'Wordplay & double meanings', weight: 15, score: optionalNumber(metrics.wordplayScore, 0, 10) === null ? null : Number(metrics.wordplayScore) * 10, benchmark: 'Manual assessment from 0–10; local engine does not infer semantic double meanings' },
-      { id: 'imagery', label: 'Metaphor & imagery', weight: 10, score: optionalNumber(metrics.imageryScore, 0, 10) === null ? null : Number(metrics.imageryScore) * 10, benchmark: 'Manual assessment from 0–10; imagery is not guessed by phonetic analysis' },
-      { id: 'technicalWit', label: 'Technical vocabulary & wit', weight: 10, score: optionalNumber(metrics.technicalWitScore, 0, 10) === null ? null : Number(metrics.technicalWitScore) * 10, benchmark: 'Manual assessment from 0–10' },
+      { id: 'wordplay', label: 'Wordplay & double meanings', weight: 15, score: optionalNumber(metrics.wordplayScore, 0, 10) === null ? null : Number(metrics.wordplayScore) * 10, benchmark: 'Manual 0–10 rating; Genius annotations are shown as supporting evidence, not converted into a quality score' },
+      { id: 'imagery', label: 'Metaphor & imagery', weight: 10, score: optionalNumber(metrics.imageryScore, 0, 10) === null ? null : Number(metrics.imageryScore) * 10, benchmark: 'Manual 0–10 rating; Genius metaphor/imagery annotations are shown as supporting evidence' },
+      { id: 'technicalWit', label: 'Technical wit · colour-map analysis', weight: 10, score: optionalNumber(metrics.technicalWitScore, 0, 10) === null ? null : Number(metrics.technicalWitScore) * 10, benchmark: 'Automatic phonetic colour-pattern score calibrated to Eminem — Rap God; optional manual override' },
       { id: 'sustained', label: 'Sustained complexity', weight: 5, score: clampScore(metrics.sustainedComplexity || 0), benchmark: 'Share of four-line blocks containing a recurring phonetic rhyme family' }
     ];
     var missing = components.filter(function (component) { return component.score === null; }).map(function (component) { return component.id; });
@@ -510,7 +775,7 @@
       complete: missing.length === 0,
       missing: missing,
       activeWeight: activeWeight,
-      method: 'Weighted technical analysis plus manually supplied artistry ratings. Missing semantic ratings are excluded and the grade is provisional until supplied.'
+      method: 'Weighted technical analysis including automatic phonetic colour-pattern wit, plus manual semantic ratings. Missing wordplay/imagery ratings are excluded and the grade is provisional until supplied.'
     };
   }
 
@@ -643,7 +908,7 @@
   async function selectGeniusSong(songId, songUrl, title) {
     var results = state.panel && state.panel.querySelector('[data-rl-genius-api-results]');
     var frame = state.panel && state.panel.querySelector('[data-rl-genius-frame]');
-    if (results) results.innerHTML = '<div class="rl-muted">Loading song lyrics for ' + escapeHTML(title || 'song') + '…</div>';
+    if (results) results.innerHTML = '<div class="rl-muted">Loading official lyrics and annotation evidence…</div>';
     var detailResult = await geniusApiRequest(state.root, 'songs/' + Math.floor(Number(songId)), { text_format: 'plain' }).then(parseGeniusSongDetails).catch(function () { return null; });
     var embedSong = detailResult || { id: Number(songId), title: title || 'Genius song', url: songUrl };
     if (!validGeniusPageUrl(embedSong.url)) {
@@ -654,7 +919,29 @@
       frame.removeAttribute('src');
       frame.srcdoc = geniusEmbedDocument(embedSong);
     }
-    if (results) results.innerHTML = '<div class="rl-muted">Showing the official Genius song lyrics embed. Community lists and annotation results are excluded.</div>';
+    var referents = [];
+    try {
+      var referentPayload = await geniusApiRequest(state.root, 'referents', { song_id: Math.floor(Number(songId)), per_page: 50 });
+      referents = parseGeniusReferents(referentPayload);
+    } catch (err) {
+      // Lyrics preview remains available if Genius referents are unavailable.
+    }
+    var track = state.tracks[state.geniusTrackIndex];
+    if (track) {
+      track.geniusSongId = Math.floor(Number(songId));
+      track.geniusUrl = embedSong.url;
+      track.geniusReferents = referents;
+      if (state.results) {
+        state.results = analyzeComparison(state.tracks.filter(function (item) { return String(item.lyrics || '').trim(); }), state.dictionary || {});
+        renderComparison(state.results);
+      }
+    }
+    var evidence = scoreGeniusEvidence(referents);
+    var evidenceCount = Object.keys(evidence).reduce(function (n, key) { return n + evidence[key].evidence.length; }, 0);
+    if (results) results.innerHTML = '<div class="rl-muted">Official Genius lyrics are displayed above. ' +
+      (track ? 'Linked to ' + escapeHTML(track.name) + '. ' : '') +
+      referents.length + ' annotated fragments analysed; ' + evidenceCount +
+      ' category-specific evidence matches found. Annotation evidence is a transparent proxy, not an official Genius score. Paste the lyrics into this track to calculate phonetic metrics.</div>';
   }
 
   function buildColorCounts(analyses, colors) {
@@ -712,6 +999,9 @@
       wordplayScore: optionalNumber(input.wordplayScore, 0, 10),
       imageryScore: optionalNumber(input.imageryScore, 0, 10),
       technicalWitScore: optionalNumber(input.technicalWitScore, 0, 10),
+      geniusSongId: Number.isFinite(Number(input.geniusSongId)) && Number(input.geniusSongId) > 0 ? Math.floor(Number(input.geniusSongId)) : null,
+      geniusUrl: validGeniusPageUrl(input.geniusUrl) ? String(input.geniusUrl) : '',
+      geniusReferents: Array.isArray(input.geniusReferents) ? input.geniusReferents.slice(0, 50) : [],
       createdAt: previous && previous.createdAt || input.createdAt || Date.now(), updatedAt: Date.now()
     };
     var index = list.findIndex(function (item) { return item.id === id; });
@@ -888,7 +1178,7 @@
   }
 
   function panelMarkup() {
-    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY COMPARISON · BUILD 969</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
+    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY COMPARISON · BUILD 972</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
       '<p class="rl-intro">Compare the rhyme architecture of great rap passages. The same phonetic sound gets the same colour across every song — syllable by syllable, word by word and line by line.</p>' +
       '<div class="rl-local"><span class="rl-local-dot"></span>LOCAL LYRIC ANALYSIS <span>·</span> NO AI <span>·</span> GENIUS DEVELOPER API WHEN ENABLED</div>' +
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>MY SONG LIBRARY</strong><span class="rl-muted" data-rl-library-count>0 SONGS STORED ON THIS DEVICE</span></div><div class="rl-library-row"><select data-rl-library-select aria-label="Saved songs"><option value="">Choose a saved song…</option></select><button type="button" class="rl-quiet" data-rl-library-add>＋ ADD</button><button type="button" class="rl-quiet" data-rl-library-delete disabled>DELETE SELECTED</button></div><div class="rl-muted">Saved locally in this browser/device. No cloud account or upload.</div></div>' +
@@ -1011,8 +1301,8 @@
           '<label class="rl-meta-field">PASSAGE SECONDS<input data-rl-duration type="number" min="0.5" max="3600" step="0.1" placeholder="Exact duration" value="' + (track.durationSeconds == null ? '' : escapeHTML(track.durationSeconds)) + '"></label>' +
           '<label class="rl-meta-field">WORDPLAY / 10<input data-rl-wordplay type="number" min="0" max="10" step="1" placeholder="Rate 0–10" value="' + (track.wordplayScore == null ? '' : escapeHTML(track.wordplayScore)) + '"></label>' +
           '<label class="rl-meta-field">IMAGERY / 10<input data-rl-imagery type="number" min="0" max="10" step="1" placeholder="Rate 0–10" value="' + (track.imageryScore == null ? '' : escapeHTML(track.imageryScore)) + '"></label>' +
-          '<label class="rl-meta-field">TECHNICAL WIT / 10<input data-rl-technical-wit type="number" min="0" max="10" step="1" placeholder="Rate 0–10" value="' + (track.technicalWitScore == null ? '' : escapeHTML(track.technicalWitScore)) + '"></label>' +
-        '</div><div class="rl-editor-help">BPM + exact duration measure delivery. Three artistry ratings are human assessments; leave blank for a provisional technical grade.</div>' +
+          '<label class="rl-meta-field">TECHNICAL WIT / 10<input data-rl-technical-wit type="number" min="0" max="10" step="1" placeholder="Auto from colours · optional override" value="' + (track.technicalWitScore == null ? '' : escapeHTML(track.technicalWitScore)) + '"></label>' +
+        '</div><div class="rl-editor-help">BPM + exact duration measure delivery. Wordplay and imagery are subjective; technical wit is auto-scored from the colour map, with an optional manual override.</div>' +
         '<div class="rl-row rl-save-row"><button type="button" class="rl-quiet" data-rl-save="' + index + '">SAVE TO MY LIBRARY</button></div>' +
         '<div class="rl-muted">' + (index + 1) + ' / ' + getMaxTracks() + ' · ' + String((track.lyrics || '').length).toLocaleString() + ' characters</div></section>';
     }).join('');
@@ -1068,7 +1358,42 @@
         var absent = component.score === null;
         return '<div class="rl-grade-row"><span>' + escapeHTML(component.label) + ' (' + component.weight + '%)</span><span class="rl-grade-bar"><i style="width:' + (absent ? 0 : component.score).toFixed(1) + '%;opacity:' + (absent ? '.25' : '1') + '"></i></span><strong>' + (absent ? '—' : component.score.toFixed(0)) + '</strong></div>';
       }).join('');
-      if (!grade.complete) html += '<div class="rl-grade-missing">Complete the Wordplay, Imagery and Technical Wit ratings above for the full weighted grade.</div>';
+      if (!grade.complete) html += '<div class="rl-grade-missing">Wordplay and imagery remain subjective manual ratings. Technical wit is calculated automatically from the phonetic colour map; Genius annotations are supporting context, not quality scores.</div>';
+      if (metrics.colourWitProfile && metrics.colourWitCalibration) {
+        var witProfile = metrics.colourWitProfile, witCalibration = metrics.colourWitCalibration;
+        html += '<details class="rl-muted" style="margin:4px 9px 8px"><summary>TECHNICAL WIT · COLOUR MAP · ' + Number(metrics.technicalWitScore || 0).toFixed(1) + '/10' + (metrics.technicalWitManual ? ' · MANUAL OVERRIDE' : '') + ' · ' + Math.round(witProfile.pronunciationCoverage) + '% PRONUNCIATION COVERAGE · ' + Math.round(witCalibration.confidence * 100) + '% CONFIDENCE</summary>';
+        html += '<div style="margin:6px 0">Calibrated against ' + escapeHTML(witCalibration.source) + '. The palette colours themselves are not scored; the underlying recurring phonetic families, word forms and positions are.</div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin:6px 0">' + [
+          ['RECURRING COLOUR FAMILIES', witProfile.familyCount],
+          ['FAMILY WORD FORMS', witProfile.familyWordForms],
+          ['POLYSYLLABIC WORD-RHYME FAMILIES', witProfile.multiWordFamilyCount],
+          ['LINE-END RHYME FAMILIES', witProfile.lineEndFamilyCount],
+          ['MULTISYLLABIC PATTERNS / 16 LINES', witProfile.multiPatternDensity.toFixed(2)],
+          ['INTERNAL COLOUR HITS', witProfile.internalColourDensity.toFixed(1) + '%'],
+          ['COLOUR TRANSITIONS', witProfile.colourTransitionDensity.toFixed(1) + '%'],
+          ['MULTI-FAMILY LINES', witProfile.interwovenLineRate.toFixed(1) + '%'],
+          ['REPEATED SOUND COVERAGE', witProfile.repeatedSyllableDensity.toFixed(1) + '%'],
+          ['LINE-END RHYME RATE', witProfile.lineEndRhymeRate.toFixed(1) + '%'],
+          ['SUSTAINED COLOUR WEAVE', witProfile.sustainedWeaveRate.toFixed(1) + '%']
+        ].map(function (item) { return '<div><strong>' + escapeHTML(item[1]) + '</strong><div>' + escapeHTML(item[0]) + '</div></div>'; }).join('') + '</div>';
+        html += '<div style="display:grid;gap:4px;margin:7px 0">' + witCalibration.dimensions.map(function (dimension) {
+          return '<div style="display:flex;justify-content:space-between;gap:8px"><span>' + escapeHTML(dimension.label) + ' (' + dimension.weight + '%)</span><strong>' + dimension.score.toFixed(0) + '/100</strong></div>';
+        }).join('') + '</div>';
+        html += '<div>Each dimension is capped at the Rap God reference rate; one very high raw count cannot carry the whole score. Scores also account for excerpt length and pronunciation coverage.</div></details>';
+      }
+      if (metrics.semanticEvidence) {
+        var evidenceLabels = { wordplay: 'WORDPLAY', imagery: 'IMAGERY', technicalWit: 'TECHNICAL WIT' };
+        html += '<details class="rl-muted" style="margin:4px 9px 8px"><summary>GENIUS ANNOTATION EVIDENCE · ' + Object.keys(evidenceLabels).map(function (key) {
+          var item = metrics.semanticEvidence[key];
+          return evidenceLabels[key] + ': ' + (item.evidence.length ? item.evidence.length + ' MATCHES · STRENGTH ' + item.evidenceStrength.toFixed(1) + '/10 · ' + Math.round(item.confidence * 100) + '% CONFIDENCE' : 'NONE');
+        }).join(' · ') + '</summary>' + Object.keys(evidenceLabels).map(function (key) {
+          var item = metrics.semanticEvidence[key];
+          if (!item.evidence.length) return '';
+          return '<div style="margin:6px 0"><strong>' + evidenceLabels[key] + '</strong>' + item.evidence.slice(0, 3).map(function (entry) {
+            return '<div style="margin:4px 0;padding:5px 7px;border-left:2px solid #6f8299">“' + escapeHTML(entry.fragment) + '” — ' + escapeHTML(entry.excerpt) + (entry.verified ? ' <b class="rl-genius-verified">VERIFIED</b>' : '') + '</div>';
+          }).join('') + '</div>';
+        }).join('') + '<div>Annotation matches are supporting context only; community votes are not used to rate lyric quality.</div></details>';
+      }
       html += '<div class="rl-muted" style="margin:3px 9px 8px">' + escapeHTML(metrics.flowMethod) + (metrics.deliveryMeasured ? ' · ' + metrics.syllablesPerSecond.toFixed(2) + ' syllables/sec' + (metrics.syllablesPerBeat == null ? '' : ' · ' + metrics.syllablesPerBeat.toFixed(2) + ' syllables/beat @ ' + metrics.bpm + ' BPM') : '') + '</div>';
       html += '<div class="rl-metrics">' + [
         ['LINES', metrics.lines], ['SYLLABLES', metrics.syllables], ['RHYME DENSITY', Math.round(metrics.rhymeDensity * 100) + '%'],
@@ -1099,7 +1424,7 @@
         return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Find song lyrics on Genius inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
       }).join('') + '</div></section>';
     });
-    html += '<div class="rl-note">Grade weights: rhyme density 30%, multisyllabic patterns 30%, internal rhymes 25%, stress-pattern variation 15%. Each component is normalised against a fixed reference threshold and capped at 100. Dictionary coverage is shown separately as confidence context. This is an analysis heuristic, not a definitive measure of lyric quality, wordplay, delivery or influence.</div>';
+    html += '<div class="rl-note">Grade weights: multisyllabic rhyming 20%, internal rhyme density 15%, rhyme density 10%, flow 15%, wordplay 15%, imagery 10%, technical wit 10%, sustained complexity 5%. Technical wit is calculated from recurring phonetic colour families and calibrated to the supplied Eminem — Rap God reference; short excerpts and limited pronunciation coverage reduce confidence. Wordplay and imagery remain separate human assessments. These are transparent analysis heuristics, not definitive measures of lyric quality, delivery or influence.</div>';
     out.innerHTML = html;
   }
 
@@ -1110,6 +1435,7 @@
       { key: 'multiRhymes', label: 'Multi patterns / 16 lines', read: function (m) { return m.lines ? m.multiRhymes / m.lines * 16 : 0; }, format: function (v) { return v.toFixed(1); } },
       { key: 'internalRhymes', label: 'Internal / 100 syl', read: function (m) { return m.syllables ? m.internalRhymes / m.syllables * 100 : 0; }, format: function (v) { return v.toFixed(1); } },
       { key: 'flowScore', label: 'Flow / rhythm', read: function (m) { return m.flowScore; }, format: function (v) { return v.toFixed(0) + '%'; }, max: 100 },
+      { key: 'technicalWitScore', label: 'Technical wit / 10', read: function (m) { return m.technicalWitScore; }, format: function (v) { return v.toFixed(1); }, max: 10 },
       { key: 'sustainedComplexity', label: 'Sustained complexity', read: function (m) { return m.sustainedComplexity; }, format: function (v) { return v.toFixed(0) + '%'; }, max: 100 },
       { key: 'deliveryRate', label: 'Delivery pace (syllables/sec)', read: function (m) { return m.deliveryMeasured ? m.syllablesPerSecond : null; }, format: function (v) { return v == null ? '—' : v.toFixed(2); } },
       { key: 'sharedRhymeSounds', label: 'Shared sounds', read: function (m) { return m.sharedRhymeSounds; }, format: function (v) { return String(v); } }
@@ -1264,6 +1590,8 @@
         id: id, name: track.name, lyrics: track.lyrics, artist: '', isBuiltin: false,
         bpm: track.bpm, durationSeconds: track.durationSeconds, wordplayScore: track.wordplayScore,
         imageryScore: track.imageryScore, technicalWitScore: track.technicalWitScore,
+        geniusSongId: track.geniusSongId || null, geniusUrl: track.geniusUrl || '',
+        geniusReferents: Array.isArray(track.geniusReferents) ? track.geniusReferents : [],
         source: 'Saved from IMPROVS2 Rhymelight'
       });
       var saved = state.library[state.library.length - 1];
@@ -1318,6 +1646,9 @@
       track.bpm = saved.bpm; track.durationSeconds = saved.durationSeconds;
       track.wordplayScore = saved.wordplayScore; track.imageryScore = saved.imageryScore;
       track.technicalWitScore = saved.technicalWitScore;
+      track.geniusSongId = saved.geniusSongId || null;
+      track.geniusUrl = saved.geniusUrl || '';
+      track.geniusReferents = Array.isArray(saved.geniusReferents) ? saved.geniusReferents : [];
     } else {
       track.libraryId = '';
       var benchmark = getBenchmarks().find(function (b) { return b.id === track.preset; });
@@ -1342,7 +1673,12 @@
     var geniusSongButton = event.target.closest('[data-rl-genius-song-id]');
     if (geniusSongButton) { selectGeniusSong(Number(geniusSongButton.getAttribute('data-rl-genius-song-id')), geniusSongButton.getAttribute('data-rl-genius-song-url'), geniusSongButton.getAttribute('data-rl-genius-song-title')); return; }
     var geniusButton = event.target.closest('[data-rl-genius-search]');
-    if (geniusButton) { searchGeniusInApp(geniusButton.getAttribute('data-rl-genius-query') || ''); return; }
+    if (geniusButton) {
+      var geniusEditor = geniusButton.closest('[data-rl-track]');
+      state.geniusTrackIndex = geniusEditor ? Number(geniusEditor.getAttribute('data-rl-track')) : -1;
+      searchGeniusInApp(geniusButton.getAttribute('data-rl-genius-query') || '');
+      return;
+    }
     var closeButton = event.target.closest('[data-rl-close]');
     if (closeButton) { close(); return; }
     var save = event.target.closest('[data-rl-save]');
@@ -1483,6 +1819,9 @@
     buildColorMap: buildColorMap,
     buildColorCounts: buildColorCounts,
     calculateComplexityGrade: calculateComplexityGrade,
+    calculateColourWitProfile: calculateColourWitProfile,
+    scoreColourWit: scoreColourWit,
+    scoreGeniusEvidence: scoreGeniusEvidence,
     geniusSearchUrl: geniusSearchUrl,
     geniusApiUrl: geniusApiUrl,
     parseGeniusSearch: parseGeniusSearch,
