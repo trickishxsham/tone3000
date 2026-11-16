@@ -1,5 +1,5 @@
 <!--
-IMPROVS2 BUILD 972 — COLOUR-BASED RHYMELIGHT WIT SCORING
+IMPROVS2 BUILD 985 — HTML-FIRST RHYMELIGHT RESULTS AND T3K HANDOFF
 App shell carried forward from Build 955.
 Patched components in Build 958:
   - modules/voice2guitar/voice2guitar.js — continuous note auto-match at >=90% pitch confidence, stable for five frames, with no timeout
@@ -7,8 +7,8 @@ The shared microphone lease pool is retained. The global A-reference tuner integ
 -->
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<!-- Build 4.9.8.972 — Eminem-calibrated colour-map technical-wit scoring; Genius API and Build 963 audio engine/NAM/IR routing retained -->
+<head><script src="../capacitor.js"></script>
+<!-- Build 4.9.8.984 — Eminem-calibrated colour-map technical-wit scoring; Genius API and Build 963 audio engine/NAM/IR routing retained -->
 <script>
 // Build 958 retains Build 955 shared microphone stream leases. Key Listener and Voice2Guitar must not
 // independently open/stop the same device stream while the other feature is using it.
@@ -123,6 +123,16 @@ window.__rootRelative=function(path){
 // on window.__mod_<name> or via window.registerModule(name, api).
 // ══════════════════════════════════════════════════════════════
 window.__MODULES = window.__MODULES || {};
+// Explicit revisions invalidate the independent runtime modules when their code changes.
+window.__MODULE_CACHE_REVISIONS = Object.assign({}, window.__MODULE_CACHE_REVISIONS || {}, {
+  rig: '985-custom-tabs-oauth-r5',
+  rhymelight: '985-separated-results-r1'
+});
+window.__moduleScriptUrl = function(name){
+  var file = name==='snapshot'?'snapshots':name;
+  var revision = (window.__MODULE_CACHE_REVISIONS || {})[name] || '';
+  return window.__rootRelative('modules/' + file + '/' + file + '.js') + '?v=' + encodeURIComponent(window.BUILD||'') + (revision ? '&r=' + encodeURIComponent(revision) : '');
+};
 // Per-module versions (filled by registerModule). Scheme matches app: 4.9.8.NNN
 window.__MODULE_VERSIONS = window.__MODULE_VERSIONS || {};
 window.registerModule = function(name, api){
@@ -137,7 +147,7 @@ window.loadModule = function(name){
     if(window.__MODULES[name] && !window.__MODULES[name].isStub) return resolve(window.__MODULES[name]);
     if(window.__MODULES[name] && window.__MODULES[name].isStub===false) return resolve(window.__MODULES[name]);
     var s = document.createElement('script');
-    s.src = window.__rootRelative('modules/' + (name==='snapshot'?'snapshots':name) + '/' + (name==='snapshot'?'snapshots':name) + '.js') + '?v=' + encodeURIComponent(window.BUILD||'');
+    s.src = window.__moduleScriptUrl(name);
     s.async = true;
     var done = false;
     function finish(ok, err){
@@ -171,7 +181,7 @@ window.preloadModules = function(names){
     if(window.__MODULES[n]) return;
     var l = document.createElement('link');
     l.rel = 'preload'; l.as = 'script';
-    l.href = window.__rootRelative('modules/' + n + '/' + n + '.js') + '?v=' + encodeURIComponent(window.BUILD||'');
+    l.href = window.__moduleScriptUrl(n);
     document.head.appendChild(l);
   });
 };
@@ -338,10 +348,12 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.972';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.985';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
-window.T3K_REDIRECT_URI=(location.protocol==='https:')?location.origin+location.pathname:'';
+var __t3kNative=!!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform());
+var __t3kWebCallback=(location.protocol==='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')?location.origin+location.pathname:'';
+window.T3K_REDIRECT_URI=__t3kNative?'com.trickishxsham.improvs2.test://oauth/callback':__t3kWebCallback;
 </script>
 <title>IMPROVS2</title>
   <link rel="preload" href="../assets/fonts/Bangers-Regular.ttf" as="font" type="font/ttf" crossorigin>
@@ -3267,6 +3279,19 @@ function sampSliceFull(entry, lead){
   }catch(e){ return null; }
 }
 let _AC=null,_REV=null,_REVWET=null,_MASTER=null,_COMP=null,_BKGAIN=null,_INSTVOL=null,_NAMIN=null,_IRCAB=null,_MASTERCLIP=null,_RECBUS=null;
+let _RIG_INSTRUMENT_BUSES=Object.create(null);
+function _rigInstrumentBus(name){
+  if(!_AC||!_MASTER)return _MASTER;
+  const key=String(name||'other');
+  if(!_RIG_INSTRUMENT_BUSES[key]){
+    const bus=_AC.createGain();bus.gain.value=1;bus.connect(_MASTER);
+    _RIG_INSTRUMENT_BUSES[key]=bus;
+  }
+  return _RIG_INSTRUMENT_BUSES[key];
+}
+window.__IMPROVS2_RIG_INSTRUMENT_BUSES=_RIG_INSTRUMENT_BUSES;
+window.__IMPROVS2_RIG_INSTRUMENT_BUS=_rigInstrumentBus;
+
 let _namInGain=0.5;   // default: halve level into amp (synth runs hot); user-adjustable
 // v369: mixer — backing track was wired straight to ac.destination at full volume,
 // bypassing the master gain/compressor entirely, which is why it drowned out the
@@ -3470,6 +3495,9 @@ function ensureAudio(){
   console.info('[audio] AudioContext sample rate: '+_AC.sampleRate+' Hz; realtime NAM rate conversion is not yet implemented.');
   // master bus: gain boost into a limiter, so it's loud but never clips harshly
   _MASTER=_AC.createGain(); _MASTER.gain.value=1.5;
+  window.__IMPROVS2_RIG_MASTER=_MASTER;
+  ['piano','guitar','electric','strat','samp'].forEach(_rigInstrumentBus);
+
   _INSTVOL=_AC.createGain(); _INSTVOL.gain.value=_instVol;   // user "IMPROV" mixer slider
   _COMP=_AC.createDynamicsCompressor();
   _COMP.threshold.value=-6; _COMP.ratio.value=12;
@@ -3575,7 +3603,7 @@ function ensureAudio(){
     }catch(e){}
   };
   window._IRCAB=_IRCAB;
-  try{ if(window.KSEngine) KSEngine.ensure(_AC, _MASTER); }catch(e){}   // pre-load KS worklet
+  try{ if(window.KSEngine) KSEngine.ensure(_AC, _rigInstrumentBus('guitar')); }catch(e){}   // pre-load KS worklet
   _BKGAIN=_AC.createGain(); _BKGAIN.gain.value=_bkVol; _BKGAIN.connect(_MASTERCLIP);   // user "BK TRACK" mixer slider → master clipper
   const len=Math.floor(_AC.sampleRate*1.3);
   const imp=_AC.createBuffer(2,len,_AC.sampleRate);
@@ -3708,7 +3736,7 @@ function makeVoice(midi, vel, poly, meta){
   const pickT0=performance.now();            // when this string was picked (decay clock)
   const initFreq=base*Math.pow(2,bendSemis/12);   // start pre-bent if pad held
   const out=ac.createGain();
-  out.connect(_MASTER); out.connect(_REV);
+  out.connect(_rigInstrumentBus(instrument)||_MASTER); out.connect(_REV);
   const elec=instrument==='electric';
   // v213: smooth equal-loudness tilt centred on E4 (midi 64) — the old step table
   // capped the low boost at 1.85x and gave highs NO attenuation, so the new
@@ -3736,7 +3764,7 @@ function makeVoice(midi, vel, poly, meta){
   if(instrument==='guitar'){
     let ksHandle=null, ksFell=false;
     out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(0.0001,t);
-    KSEngine.ensure(ac, _MASTER).then(()=>{
+    KSEngine.ensure(ac, _rigInstrumentBus('guitar')).then(()=>{
       if(window._ksFailed){ ksFell=true; guitarOscFallback(); }
       else ksHandle=KSEngine.pluck(initFreq, V);
     });
@@ -7426,7 +7454,42 @@ window.__pickWalkForTrack=function(track){
   }catch(e){ return mWalkMode; }
 };
 function stopBkTrkAudio(){ try{ if(_bkTrkSrc){ _bkTrkSrc.stop(); _bkTrkSrc=null; } }catch(e){} }
-let _jamSyncEpoch=null;   // v738: shared by both jam participants — see the Jam module near </body>
+let _jamSyncEpoch=null;   // v738: shared by both jam participants — see the Jam module near <script>
+(function(){function install(){
+var samp=document.getElementById('sampToggle'),anchor=document.getElementById('rhymelightPanel');
+if(!samp||!anchor||!anchor.parentElement)return;
+var host=anchor.parentElement,rig=document.getElementById('btnRig'),rp=document.getElementById('rigPanel');
+if(rig){host.insertBefore(rig,anchor);rig.style.cssText+=';display:inline-block;margin:0 .4em .45em 0;padding:.3em .8em;font-family:Bangers,cursive;font-size:1.05em;letter-spacing:.06em;';}
+var vb=document.getElementById('voice2guitarToggle');
+if(!vb){vb=document.createElement('button');vb.id='voice2guitarToggle';vb.type='button';vb.textContent='🎙 VOICE2GUITAR';vb.setAttribute('data-tip-title','VOICE2GUITAR');vb.setAttribute('data-tip','Use your microphone or harmonica to trigger and bend guitar samples.');vb.style.cssText='display:inline-block;margin:0 .4em .45em 0;padding:.3em .8em;cursor:pointer;background:#0f766e;color:#fff;border:1px solid #34d399;border-radius:3px;font-weight:900;font-family:Bangers,cursive;font-size:1.05em;letter-spacing:.06em;';}
+host.insertBefore(vb,anchor);
+var vp=document.getElementById('voice2guitarFeaturePanel');
+if(!vp){vp=document.createElement('div');vp.id='voice2guitarFeaturePanel';vp.style.cssText='display:none;margin-top:8px;padding:8px;background:#071b1a;border:1px solid #0f766e;border-radius:8px;';}
+if(rp){rp.style.margin='8px 0';host.insertBefore(rp,anchor);}
+host.insertBefore(vp,anchor);
+function closeOthers(keep){
+['sampPanel','csPanel','hivePanel','btPanel','libPanel','notationPanel','rhymelightPanel','voice2guitarFeaturePanel','rigPanel'].forEach(function(id){
+if(id!==keep){var p=document.getElementById(id);if(p){if(id==='rigPanel')p.style.setProperty('display','none','important');else p.style.display='none';p.setAttribute('data-open','0');p.classList.remove('open');}}
+});
+['sampToggle','csToggle','hiveToggle','btToggle','libToggle','notationToggle','rhymelightToggle','voice2guitarToggle','btnRig'].forEach(function(id){
+if((id==='btnRig'&&keep==='rigPanel')||(id==='voice2guitarToggle'&&keep==='voice2guitarFeaturePanel'))return;
+var b=document.getElementById(id);if(b)b.classList.remove('active','open');
+});
+}
+if(!vb.__v2gBound){vb.__v2gBound=true;vb.addEventListener('click',function(){
+if(vp.style.display!=='none'){vp.style.display='none';vb.classList.remove('active');return;}
+closeOthers('voice2guitarFeaturePanel');vp.style.display='block';vb.classList.add('active');vb.disabled=true;
+window.loadModule('voice2guitar').then(function(){vb.disabled=false;}).catch(function(err){
+vb.disabled=false;vp.style.display='none';vb.classList.remove('active');console.error('[Voice2Guitar] load failed',err);
+if(window.showToast)window.showToast('Voice2Guitar could not load: '+(err.message||err),true);
+});
+});}
+if(rig&&!rig.__featureAccordionBound){rig.__featureAccordionBound=true;document.addEventListener('click',function(e){
+if(e.target&&e.target.closest&&e.target.closest('#btnRig'))closeOthers('rigPanel');
+},true);}
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
+})();
 function startBkTrkAudio(offsetSec){
   if(!_bkTrkBuf) return;
   // v876: if pack/hex module owns the audible track, do not start a second source
@@ -12307,7 +12370,7 @@ window.__ensureSampler = function(){
 (function wireSampler(){
   var btn = document.getElementById('sampToggle') || document.querySelector('[data-open-sampler]');
   // also common: sample pack panel open buttons
-  function load(){ return window.__ensureSampler().then(function(mod){ window.loadModule('voice2guitar').catch(function(e){ console.warn('[voice2guitar] module unavailable',e); }); return mod; }); }
+  function load(){ return window.__ensureSampler(); }
   ['sampToggle','packToggle'].forEach(function(id){
     var el=document.getElementById(id);
     if(el && !el.__sampWired){
@@ -17708,9 +17771,9 @@ window.GlobalBoard={
 // ══════════════════════════════════════════════════════════════
 (function(){
   var MAP={
-    sampToggle:'sampPanel', csToggle:'csPanel', hiveToggle:'hivePanel',
-    btToggle:'btPanel', libToggle:'libPanel', notationToggle:'notationPanel',
-    rhymelightToggle:'rhymelightPanel'
+    sampToggle:'sampPanel', btnRig:'rigPanel', voice2guitarToggle:'voice2guitarFeaturePanel',
+    csToggle:'csPanel', hiveToggle:'hivePanel', btToggle:'btPanel',
+    libToggle:'libPanel', notationToggle:'notationPanel', rhymelightToggle:'rhymelightPanel'
   };
   document.addEventListener('click',function(e){
     var t=e.target&&e.target.closest&&e.target.closest('[id]');
@@ -17724,7 +17787,7 @@ window.GlobalBoard={
         if(tid==='rhymelightToggle' && window.__MODULES && window.__MODULES.rhymelight && typeof window.__MODULES.rhymelight.close==='function'){
           try{ window.__MODULES.rhymelight.close(); }catch(err){ console.warn('[rhymelight] close during panel switch failed',err); }
         }
-        p.style.display='none';
+        if(tid==='btnRig')p.style.setProperty('display','none','important');else p.style.display='none';
         try{ p.setAttribute('data-open','0'); p.classList.remove('open'); }catch(e){}
         var tg=document.getElementById(tid);
         if(tg){tg.classList.remove('active');tg.style.boxShadow='none';}
