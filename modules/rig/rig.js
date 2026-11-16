@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.934-unified-resampler
+// version: 4.9.8.985-t3knam-library
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.931';
+var MODULE_VERSION = '4.9.8.985';
 var _booted=false;
 var _uiBound=false;
 
@@ -907,31 +907,87 @@ const T3K=(function(){
     return r.json();
   }
 
-  // Start OAuth. prompt omitted = standard connect (no tone browse). Returns via redirect.
+  function isNativeRuntime(){
+    return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform==='function' && window.Capacitor.isNativePlatform());
+  }
+  function nativeAuthPlugin(){
+    if(!isNativeRuntime()) return null;
+    if(!window.__T3KNativeAuthPlugin){
+      if(!window.Capacitor || typeof window.Capacitor.registerPlugin!=='function')
+        throw new Error('The native TONE3000 authentication bridge is unavailable. Rebuild IMPROVS2 TEST.');
+      window.__T3KNativeAuthPlugin=window.Capacitor.registerPlugin('T3KAuth');
+    }
+    return window.__T3KNativeAuthPlugin;
+  }
+
+  // Start OAuth with PKCE. Android opens the full external browser and returns through the
+  // registered com.trickishxsham.improvs2://oauth/callback app link.
   async function connect(prompt, extra){
-    if(!configured()) throw new Error('TONE3000 not configured');
-    if(!window.T3K_REDIRECT_URI) throw new Error('OAuth needs https hosting (GitHub Pages) — no redirect URI under file:// or content://');
-    const verifier=rand(48); const challenge=b64url(await sha256(verifier)); const state=rand(16);
-    sessionStorage.setItem(SS+'verifier',verifier); sessionStorage.setItem(SS+'state',state);
-    const p=new URLSearchParams({ client_id:window.T3K_PUBLISHABLE_KEY, redirect_uri:window.T3K_REDIRECT_URI,
+    if(!window.T3K_PUBLISHABLE_KEY) throw new Error('TONE3000 publishable client key is missing.');
+    const redirectUri=String(window.T3K_REDIRECT_URI||'').trim();
+    if(!redirectUri){
+      if(location.hostname==='localhost'||location.hostname==='127.0.0.1')
+        throw new Error('TONE3000 sign-in blocked: this localhost WebView has not detected the native Capacitor runtime. Reinstall the current IMPROVS2 TEST build; localhost is never a valid OAuth callback.');
+      throw new Error('TONE3000 OAuth has no registered redirect URI for this app.');
+    }
+    const verifier=rand(48), challenge=b64url(await sha256(verifier)), state=rand(16);
+    // The external browser runs as a separate app process. Keep the PKCE transaction in
+    // the app origin's persistent storage so a cold-start deep link can resume it.
+    localStorage.setItem(SS+'verifier',verifier);
+    localStorage.setItem(SS+'state',state);
+    localStorage.setItem(SS+'redirect',redirectUri);
+    sessionStorage.setItem(SS+'verifier',verifier);
+    sessionStorage.setItem(SS+'state',state);
+    const p=new URLSearchParams({ client_id:window.T3K_PUBLISHABLE_KEY, redirect_uri:redirectUri,
       response_type:'code', code_challenge:challenge, code_challenge_method:'S256', state });
     if(prompt) p.set('prompt',prompt);
     if(extra) for(const k in extra) p.set(k,extra[k]);
-    location.href=BASE+'/oauth/authorize?'+p.toString();
+    const authorizeUrl=BASE+'/oauth/authorize?'+p.toString();
+    if(isNativeRuntime()){
+      const T3KAuth=nativeAuthPlugin();
+      if(!T3KAuth || typeof T3KAuth.open!=='function')
+        throw new Error('The Android external-browser authentication bridge is not installed.');
+      await T3KAuth.open({ url: authorizeUrl });
+      return { opened:true, native:true };
+    }
+    location.href=authorizeUrl;
+    return { opened:true, native:false };
   }
 
-  // Complete OAuth on redirect return. Returns {toneId|null} or null if no callback.
-  async function handleCallback(){
-    const q=new URLSearchParams(location.search);
-    const code=q.get('code'); if(!code) return null;
-    const state=q.get('state'), toneId=q.get('tone_id');
-    if(state!==sessionStorage.getItem(SS+'state')) throw new Error('state mismatch');
+  // Complete OAuth from either a browser URL or the app's registered deep link.
+  // The token exchange must use the exact redirect_uri and verifier from the
+  // authorization request; these are deliberately not re-derived on return.
+  async function handleCallback(callbackUrl){
+    var callback;
+    try{ callback=new URL(callbackUrl || window.location.href); }
+    catch(_err){ throw new Error('TONE3000 returned an invalid OAuth callback URL.'); }
+    const oauthError=callback.searchParams.get('error');
+    if(oauthError) throw new Error(callback.searchParams.get('error_description') || ('TONE3000 sign-in failed: '+oauthError));
+    const code=callback.searchParams.get('code');
+    if(!code) return null;
+    const state=callback.searchParams.get('state'), toneId=callback.searchParams.get('tone_id');
+    const expectedState=localStorage.getItem(SS+'state') || sessionStorage.getItem(SS+'state');
+    const verifier=localStorage.getItem(SS+'verifier') || sessionStorage.getItem(SS+'verifier');
+    const redirectUri=localStorage.getItem(SS+'redirect') || window.T3K_REDIRECT_URI;
+    if(callbackUrl){
+      var expectedCallback;
+      try{ expectedCallback=new URL(redirectUri); }
+      catch(_err){ throw new Error('TONE3000 OAuth callback has no valid registered redirect URI.'); }
+      if(callback.protocol!==expectedCallback.protocol || callback.host!==expectedCallback.host || callback.pathname!==expectedCallback.pathname)
+        throw new Error('TONE3000 returned to an unrecognised app callback URI.');
+    }
+    if(!state || !expectedState || state!==expectedState) throw new Error('TONE3000 OAuth state mismatch. Start the connection again.');
+    if(!verifier || !redirectUri) throw new Error('The TONE3000 PKCE session expired. Start the connection again.');
     const r=await fetch(BASE+'/oauth/token',{ method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body:new URLSearchParams({ grant_type:'authorization_code', code, code_verifier:sessionStorage.getItem(SS+'verifier'),
-        redirect_uri:window.T3K_REDIRECT_URI, client_id:window.T3K_PUBLISHABLE_KEY }) });
+      body:new URLSearchParams({ grant_type:'authorization_code', code, code_verifier:verifier,
+        redirect_uri:redirectUri, client_id:window.T3K_PUBLISHABLE_KEY }) });
     if(!r.ok) throw new Error('token exchange failed '+r.status);
     storeTokens(await r.json());
-    history.replaceState(null,'',window.T3K_REDIRECT_URI);
+    ['verifier','state','redirect'].forEach(function(key){
+      localStorage.removeItem(SS+key);
+      sessionStorage.removeItem(SS+key);
+    });
+    if(!callbackUrl) history.replaceState(null,'',window.T3K_REDIRECT_URI);
     return { toneId };
   }
 
@@ -977,7 +1033,7 @@ const T3K=(function(){
     return r.blob();
   }
 
-  return { configured, connected, connect, handleCallback, clearTokens, search, favorited, getTone, listModels, resolveModel, downloadModel };
+  return { configured, connected, connect, handleCallback, nativeAuthPlugin, clearTokens, search, favorited, getTone, listModels, resolveModel, downloadModel };
 })();
 window.T3K=T3K;
 
@@ -1545,7 +1601,7 @@ window.T3K=T3K;
     if(t3kGear)t3kGear.value=format==='ir'?'cab':'';
     if(!T3K.configured()){setStat('TONE3000 is not configured');return;}
     if(!T3K.connected()){
-      sessionStorage.setItem('t3k_new_search_return',JSON.stringify({target:target,format:format}));
+      sessionStorage.setItem('t3k_new_search_return',JSON.stringify({target:target,format:format}));localStorage.setItem('t3k_new_search_return',JSON.stringify({target:target,format:format}));
       setStat('connecting to TONE3000…');
       T3K.connect().catch(err=>setStat('connect failed: '+(err.message||err)));
       return;
@@ -1553,32 +1609,59 @@ window.T3K=T3K;
     modal.style.display='flex';curPage=1;runSearch();
   };
 
-  // handle OAuth return - v698: ONLY when the URL actually carries an OAuth callback. Before,
-  //   this ran handleCallback() on every load; on desktop it returned truthy with no real
-  //   callback, force-opening the T3K search modal on startup (the 'LOAD FAILED: UNDEFINED'
-  //   box over the fretboard). Gate it on the redirect params being present.
+  // Native deep-link callback plus web callback. Pending callback state is
+  // retained by T3KAuthPlugin until this page has exchanged the code successfully.
+  var t3kCallbackPromise=null;
+  async function completeT3KCallback(callbackUrl){
+    if(t3kCallbackPromise) return t3kCallbackPromise;
+    t3kCallbackPromise=(async function(){
+      var cb=await T3K.handleCallback(callbackUrl);
+      if(!cb) return null;
+      // The originating search target is persisted as well as session-scoped so
+      // a cold-start callback restores the correct NAM/IR slot.
+      var pendingNewSearch=localStorage.getItem('t3k_new_search_return') || sessionStorage.getItem('t3k_new_search_return');
+      if(pendingNewSearch){
+        localStorage.removeItem('t3k_new_search_return');
+        sessionStorage.removeItem('t3k_new_search_return');
+        var pendingTarget={target:'L1',format:'nam'};
+        try{ pendingTarget=Object.assign(pendingTarget,JSON.parse(pendingNewSearch)||{}); }catch(_e){}
+        if(window.__openLegacyT3KForNAM8) window.__openLegacyT3KForNAM8(pendingTarget.target,pendingTarget.format);
+        else { openT3K(pendingTarget.target,pendingTarget.format); searchT3K(); }
+      }else{
+        panel.style.display='flex'; modal.style.display='flex'; curPage=1; runSearch();
+      }
+      if(callbackUrl){
+        var nativeBridge=T3K.nativeAuthPlugin();
+        if(nativeBridge && typeof nativeBridge.clearPendingOAuthCallback==='function')
+          await nativeBridge.clearPendingOAuthCallback();
+      }
+      return cb;
+    })();
+    try{ return await t3kCallbackPromise; }
+    finally{ t3kCallbackPromise=null; }
+  }
   (async function(){
     if(!T3K.configured()) return;
     try{
-      var qs=location.search||''; var hs=location.hash||'';
-      var hasCb=/[?&#](code|state|access_token|error)=/.test(qs) || /[?&#](code|state|access_token|error)=/.test(hs);
-      if(!hasCb) return;                       // no OAuth redirect -> never auto-open on load
-      var cb=await T3K.handleCallback();
-      if(cb){
-        // Restore the newer NAM/IR search if OAuth was launched from that modal.
-        // Otherwise retain the legacy store's existing callback behavior.
-        var pendingNewSearch=sessionStorage.getItem('t3k_new_search_return');
-        if(pendingNewSearch){
-          sessionStorage.removeItem('t3k_new_search_return');
-          var pendingTarget={target:'L1',format:'nam'};
-          try{ pendingTarget=Object.assign(pendingTarget,JSON.parse(pendingNewSearch)||{}); }catch(_e){}
-          if(window.__openLegacyT3KForNAM8) window.__openLegacyT3KForNAM8(pendingTarget.target,pendingTarget.format);
-          else { openT3K(pendingTarget.target,pendingTarget.format); searchT3K(); }
-        }else{
-          panel.style.display='flex'; modal.style.display='flex'; curPage=1; runSearch();
-        }
+      if(window.Capacitor && typeof window.Capacitor.isNativePlatform==='function' && window.Capacitor.isNativePlatform()){
+        var nativeBridge=T3K.nativeAuthPlugin();
+        if(!nativeBridge) throw new Error('The Android TONE3000 authentication bridge is unavailable.');
+        await nativeBridge.addListener('oauthCallback',function(event){
+          completeT3KCallback(event && event.url).catch(function(err){
+            console.warn('[T3K native callback]',err && err.message || err);
+            if(typeof setStat==='function') setStat('TONE3000 sign-in failed: '+(err && err.message || err));
+          });
+        });
+        var pending=await nativeBridge.getPendingOAuthCallback();
+        if(pending && pending.url) await completeT3KCallback(pending.url);
       }
-    }catch(e){ console.warn('[T3K cb]', e&&e.message); }
+      var qs=location.search||'', hs=location.hash||'';
+      var hasWebCallback=/[?&#](code|state|access_token|error)=/.test(qs) || /[?&#](code|state|access_token|error)=/.test(hs);
+      if(hasWebCallback) await completeT3KCallback();
+    }catch(e){
+      console.warn('[T3K cb]', e&&e.message);
+      if(typeof setStat==='function') setStat('TONE3000 sign-in failed: '+(e && e.message || e));
+    }
   })();
 
   window._namRtOverrun=function(slot){ setStat('⚠ '+(slot||'')+' CPU high, lower quality'); };
@@ -1627,12 +1710,12 @@ if(!namReady() && typeof window.loadModule === 'function'){
 }
 })();
 
-/* IMPROVS2 Build 940 — mixed NAM/IR serial chain, measured render-load meter, compiled-module cache. */
+/* IMPROVS2 Build 980 — mixed NAM/IR serial chain, measured render-load meter, compiled-module cache. */
 (function(){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.940';
+const VERSION='4.9.8.985';
 const SIDES=['R'];
 const NAM_KEYS=['R1','R2','R3','R4','R5','R6','R7','R8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -1660,6 +1743,12 @@ const NAM={}; NAM_KEYS.forEach(k=>NAM[k]={key:k,loaded:false,json:null,tier:null
 const EMPTY_IR=()=>({loaded:false,enabled:true,buffer:null,name:'Empty',toneId:null,modelId:null,modelName:'',toneTitle:'',thumbnail:'',fx:Object.assign({},IR_FX_DEFAULT)});
 const IR={}; IR_KEYS.forEach(k=>IR[k]=EMPTY_IR());
 const INPUT_MODE_KEY='improvs2.rig.inputMode';
+const INSTRUMENT_SOURCE_KEY='improvs2.rig.instrumentSource.v1';
+const INSTRUMENT_SOURCE_OPTIONS=['all','guitar','samp','electric','strat','piano'];
+function readInstrumentSource(){try{const v=window.localStorage.getItem(INSTRUMENT_SOURCE_KEY);return INSTRUMENT_SOURCE_OPTIONS.includes(v)?v:'all';}catch(e){return 'all';}}
+let selectedInstrumentSource=readInstrumentSource();
+function getInstrumentBus(key){const buses=window.__IMPROVS2_RIG_INSTRUMENT_BUSES;return buses&&buses[key]||null;}
+
 function readSideInput(side){try{const v=window.localStorage.getItem(INPUT_MODE_KEY+'.'+side);if(['both','left','right'].includes(v))return v;}catch(e){}return 'both';}
 const inputModes={L:readSideInput('L'),R:readSideInput('R')};
 const NAMMODE_KEY='improvs2.rig.namMode';let namMode='dual';try{const v=window.localStorage.getItem(NAMMODE_KEY);if(['dual','singleL','singleR'].includes(v))namMode=v;}catch(e){}
@@ -1667,12 +1756,280 @@ function srcSideOf(){return null;}
 const HALF_KEY='improvs2.rig.halfRate';let halfRate=false;try{window.localStorage.setItem(HALF_KEY,'0');}catch(e){}
 const DSP_DEFAULT={enabled:false,compOn:false,eqOn:false,inputDb:0,drive:0,lowCut:70,bassFreq:120,bass:5,midFreq:750,midQ:0.8,middle:5,trebleFreq:3000,treble:5,highCut:12000,reverb:0,compThreshold:-24,compRatio:3,compAttack:20,compRelease:150,outputDb:0};
 const DSP=Object.assign({},DSP_DEFAULT);
-let ctx=null,source=null,graphSrc=null,graphCtx=null,inputSplitter=null,chainInputs={},chainOutputs={},masterNodes={},slotFx={},irNodes={},irFx={},outputMerger=null,outputGain=null,graphNodes=new Set(),routeQueue=Promise.resolve(),fileTarget=null,t3kTarget=null,snapshotSaveMode=false;
+let ctx=null,source=null,graphSrc=null,graphCtx=null,inputSplitter=null,chainInputs={},chainOutputs={},masterNodes={},slotFx={},irNodes={},irFx={},outputMerger=null,outputGain=null,graphNodes=new Set(),inputSoftClipperNode=null,routeQueue=Promise.resolve(),fileTarget=null,t3kTarget=null,snapshotSaveMode=false;
 const SNAPSHOTS=[null,null,null,null,null,null,null];
 let meters={},meterTok=0;
 function el(id){return document.getElementById(id);}
 function status(s){const n=el('rigStat');if(n)n.textContent=s||'';const n2=el('nam8Status');if(n2)n2.textContent=s||'';}
 function audioContext(){try{if(typeof window.ensureAudio==='function')window.ensureAudio();}catch(e){}return (window.getAC&&window.getAC())||window._AC||null;}
+
+/* RIG_EXTERNAL_INPUT_CONTROLLER_BEGIN */
+function createRigExternalInputController(deps){
+ 'use strict';
+ deps=deps||{};
+ const MODE_KEY='improvs2.rig.externalInputMode.v1';
+ const DEVICE_KEY='improvs2.rig.externalInputDevice.v1';
+ const ALLOWED_MODES=['internal','mic','guitar-hiz','line'];
+ const storage=deps.storage||null;
+ function read(key){try{return storage&&storage.getItem?storage.getItem(key):null;}catch(e){return null;}}
+ function write(key,value){try{if(storage&&storage.setItem)storage.setItem(key,String(value));}catch(e){}}
+ function positiveNumber(value){const n=Number(value);return Number.isFinite(n)&&n>0?n:null;}
+ function describeRange(value){
+  if(value&&typeof value==='object'){
+   if(Array.isArray(value)&&value.length)return value.join('–');
+   const low=positiveNumber(value.min),high=positiveNumber(value.max);
+   if(low&&high)return low+'–'+high;
+  }
+  return positiveNumber(value);
+ }
+ function normaliseMode(value){return ALLOWED_MODES.includes(value)?value:'internal';}
+ let mode=normaliseMode(deps.initialMode||read(MODE_KEY));
+ let selectedDeviceId=String(deps.initialDeviceId||read(DEVICE_KEY)||'');
+ let stream=null,sourceNode=null,trackInfo=null;
+ function snapshot(){
+  const deviceRate=trackInfo?trackInfo.deviceSampleRate:null;
+  return {
+   mode,deviceId:selectedDeviceId,activeDeviceId:trackInfo&&trackInfo.deviceId||'',
+   connected:!!(stream&&sourceNode),deviceLabel:trackInfo&&trackInfo.label||'',
+   channelCount:trackInfo?trackInfo.channelCount:null,
+   sampleRate:deviceRate,deviceSampleRate:deviceRate,
+   hostSampleRate:trackInfo?trackInfo.hostSampleRate:null,
+   sampleSizeBits:trackInfo?trackInfo.sampleSizeBits:null,
+   sampleRateRange:trackInfo&&trackInfo.sampleRateRange||null,
+   sampleSizeRange:trackInfo&&trackInfo.sampleSizeRange||null,
+   deviceVerified:trackInfo?trackInfo.deviceVerified:null,
+   deviceVerification:trackInfo?trackInfo.deviceVerification:'not-connected'
+  };
+ }
+ function notify(){const state=snapshot();try{if(typeof deps.onChange==='function')deps.onChange(state);}catch(e){}return state;}
+ function mediaDevices(){return typeof deps.getMediaDevices==='function'?deps.getMediaDevices():null;}
+ function stopStream(target){
+  try{if(target&&typeof target.getTracks==='function')target.getTracks().forEach(track=>track.stop());}catch(e){}
+ }
+ function releaseCurrent(){
+  const oldNode=sourceNode,oldStream=stream;
+  sourceNode=null;stream=null;trackInfo=null;
+  try{if(oldNode)oldNode.disconnect();}catch(e){}
+  stopStream(oldStream);
+ }
+ async function enumerateInputs(){
+  const media=mediaDevices();
+  if(!media||typeof media.enumerateDevices!=='function')throw new Error('Audio input enumeration is unavailable in this app WebView.');
+  const devices=await media.enumerateDevices();
+  return (Array.isArray(devices)?devices:[]).filter(d=>d&&d.kind==='audioinput').map((d,index)=>({
+   deviceId:String(d.deviceId||''),label:String(d.label||('Audio input '+(index+1))),kind:'audioinput'
+  }));
+ }
+ function setDeviceId(value){
+  selectedDeviceId=String(value||'');write(DEVICE_KEY,selectedDeviceId);return notify();
+ }
+ async function setMode(value){
+  const next=normaliseMode(value);
+  if(next!==value)throw new Error('Unsupported Rig input type.');
+  mode=next;write(MODE_KEY,mode);
+  if(mode==='internal')releaseCurrent();
+  return notify();
+ }
+ async function connect(deviceId){
+  if(mode==='internal')throw new Error('Select Microphone, Guitar Hi-Z or Line input before connecting.');
+  const media=mediaDevices();
+  if(!media||typeof media.getUserMedia!=='function')throw new Error('Audio input capture is unavailable in this app WebView.');
+  const requested=String(deviceId===undefined?selectedDeviceId:deviceId||'');
+  const audio={
+   echoCancellation:false,noiseSuppression:false,autoGainControl:false,
+   channelCount:{ideal:2},sampleSize:{ideal:32}
+  };
+  if(requested)audio.deviceId={exact:requested};
+  let nextStream=null,nextNode=null;
+  try{
+   nextStream=await media.getUserMedia({audio});
+   const tracks=nextStream&&typeof nextStream.getAudioTracks==='function'?nextStream.getAudioTracks():[];
+   const track=tracks&&tracks[0];
+   if(!track)throw new Error('The selected device opened without an audio input track.');
+   if(track.readyState&&track.readyState!=='live')throw new Error('Android returned an audio track that is not live.');
+   let settings={},capabilities={};
+   try{settings=typeof track.getSettings==='function'?track.getSettings()||{}:{};}catch(e){}
+   try{capabilities=typeof track.getCapabilities==='function'?track.getCapabilities()||{}:{};}catch(e){}
+   const activeDeviceId=String(settings.deviceId||'');
+   if(requested&&activeDeviceId&&activeDeviceId!==requested){
+    throw new Error('Android opened a different input device than the one selected. Requested device ID '+requested+'; active device ID '+activeDeviceId+'. The USB input has not been connected.');
+   }
+   const context=typeof deps.getAudioContext==='function'?deps.getAudioContext():null;
+   if(!context||typeof context.createMediaStreamSource!=='function')throw new Error('The Rig audio context is not ready.');
+   nextNode=context.createMediaStreamSource(nextStream);
+   const deviceVerified=requested?(activeDeviceId?activeDeviceId===requested:null):null;
+   const nextInfo={
+    deviceId:activeDeviceId,
+    label:String(track.label||'External audio input'),
+    channelCount:positiveNumber(settings.channelCount),
+    deviceSampleRate:positiveNumber(settings.sampleRate),
+    hostSampleRate:positiveNumber(context.sampleRate),
+    sampleSizeBits:positiveNumber(settings.sampleSize),
+    sampleRateRange:describeRange(capabilities.sampleRate),
+    sampleSizeRange:describeRange(capabilities.sampleSize),
+    deviceVerified,
+    deviceVerification:requested?(deviceVerified===true?'verified':deviceVerified===false?'mismatch':'not-exposed'):'system-default'
+   };
+   const onEnded=()=>{
+    if(stream!==nextStream)return;
+    releaseCurrent();notify();
+    try{if(typeof deps.onStreamEnded==='function')deps.onStreamEnded();}catch(e){}
+   };
+   if(typeof track.addEventListener==='function')track.addEventListener('ended',onEnded,{once:true});
+   else track.onended=onEnded;
+   const previousStream=stream,previousNode=sourceNode;
+   stream=nextStream;sourceNode=nextNode;trackInfo=nextInfo;
+   selectedDeviceId=requested||activeDeviceId;
+   if(selectedDeviceId)write(DEVICE_KEY,selectedDeviceId);
+   try{if(previousNode)previousNode.disconnect();}catch(e){}
+   stopStream(previousStream);
+   return notify();
+  }catch(error){
+   if(nextStream&&nextStream!==stream){
+    try{if(nextNode)nextNode.disconnect();}catch(e){}
+    stopStream(nextStream);
+   }
+   throw error;
+  }
+ }
+ async function disconnect(){releaseCurrent();return notify();}
+ return {enumerateInputs,setMode,setDeviceId,connect,disconnect,getSourceNode:()=>sourceNode,getState:snapshot};
+}
+/* RIG_EXTERNAL_INPUT_CONTROLLER_END */
+
+/* RIG_INPUT_SOFT_CLIPPER_BEGIN */
+function buildRigInputSoftClipCurve(thresholdDb,size){
+ const db=Math.max(-24,Math.min(0,Number.isFinite(Number(thresholdDb))?Number(thresholdDb):-6));
+ const count=Math.max(257,Math.floor(Number(size)||2049));
+ const threshold=Math.pow(10,db/20),span=Math.max(1e-6,1-threshold);
+ const curve=new Float32Array(count);
+ for(let i=0;i<count;i++){
+  const x=2*i/(count-1)-1,mag=Math.abs(x);
+  let y=mag;
+  if(mag>threshold)y=threshold+span*Math.tanh((mag-threshold)/span);
+  curve[i]=x<0?-y:y;
+ }
+ return curve;
+}
+function createRigInputSoftClipperController(storage){
+ const KEY='improvs2.rig.inputSoftClipper.v1';
+ function read(name){try{return storage&&storage.getItem?storage.getItem(KEY+'.'+name):null;}catch(e){return null;}}
+ function write(name,value){try{if(storage&&storage.setItem)storage.setItem(KEY+'.'+name,String(value));}catch(e){}}
+ function normalise(value){const n=Number(value);return Math.round(Math.max(-24,Math.min(0,Number.isFinite(n)?n:-6))*2)/2;}
+ let enabled=read('enabled')==='1';
+ let thresholdDb=normalise(read('thresholdDb')==null?-6:read('thresholdDb'));
+ function snapshot(){return {enabled,thresholdDb};}
+ function setEnabled(value){enabled=!!value;write('enabled',enabled?'1':'0');return snapshot();}
+ function setThreshold(value,save){thresholdDb=normalise(value);if(save!==false)write('thresholdDb',thresholdDb);return snapshot();}
+ return {getState:snapshot,setEnabled,setThreshold};
+}
+/* RIG_INPUT_SOFT_CLIPPER_END */
+const rigInputSoftClipper=createRigInputSoftClipperController((()=>{try{return window.localStorage;}catch(e){return null;}})());
+
+
+function rigInputModeName(mode){return mode==='guitar-hiz'?'Guitar Hi-Z':mode==='line'?'Line input':mode==='mic'?'Microphone':'Internal instruments';}
+function paintRigInputUI(state){
+ state=state||rigExternalInput.getState();
+ const type=el('rigInputType'),device=el('rigInputDevice'),line=el('rigInputStatus'),hint=el('rigInputHint'),diagnostics=el('rigInputDiagnostics');
+ const instrumentSelect=el('rigInputInstrument');
+ if(instrumentSelect){instrumentSelect.value=selectedInstrumentSource;instrumentSelect.disabled=state.mode!=='internal';}
+
+ const clipState=rigInputSoftClipper.getState(),clipToggle=el('rigInputSoftClipperEnabled'),clipThreshold=el('rigInputSoftClipperThreshold'),clipValue=el('rigInputSoftClipperValue');
+ if(clipToggle)clipToggle.checked=clipState.enabled;
+ if(clipThreshold&&clipThreshold.value!==String(clipState.thresholdDb))clipThreshold.value=String(clipState.thresholdDb);
+ if(clipValue)clipValue.textContent=clipState.thresholdDb.toFixed(1)+' dBFS';
+ if(type&&type.value!==state.mode)type.value=state.mode;
+ if(device&&state.deviceId&&device.value!==state.deviceId&&Array.from(device.options||[]).some(o=>o.value===state.deviceId))device.value=state.deviceId;
+ if(line){
+  if(state.mode==='internal')line.textContent='INTERNAL AUDIO · Existing IMPROVS2 instrument bus';
+  else if(state.connected){
+   const channels=state.channelCount?state.channelCount+' ch':'channel count not exposed';
+   const usbRate=state.deviceSampleRate?state.deviceSampleRate+' Hz (Android track report)':'track rate not exposed';
+   const hostRate=state.hostSampleRate?state.hostSampleRate+' Hz':'host rate unknown';
+   const verified=state.deviceVerified===true?' · DEVICE VERIFIED':state.deviceVerified===false?' · DEVICE MISMATCH':' · DEVICE ID NOT EXPOSED';
+   line.textContent='CONNECTED · '+(state.deviceLabel||'External audio input')+' · '+channels+' · TRACK '+usbRate+' · HOST '+hostRate+verified;
+  }else line.textContent=rigInputModeName(state.mode).toUpperCase()+' SELECTED · Choose an input device and press CONNECT INPUT';
+ }
+ if(diagnostics){
+  if(state.mode==='internal')diagnostics.textContent='USB TRACK: not connected · WEB AUDIO HOST: '+(state.hostSampleRate||'—')+' Hz · WEB AUDIO processing uses Float32 samples.';
+  else if(state.connected){
+   const usbRate=state.deviceSampleRate?state.deviceSampleRate+' Hz (Android capture track)':'not reported by Android WebView';
+   const sampleSize=state.sampleSizeBits?state.sampleSizeBits+'-bit sample size reported (USB transport encoding is not exposed)':'sample size/USB transport encoding not exposed';
+   const caps=state.sampleRateRange?' · Device capability range: '+state.sampleRateRange+' Hz':'';
+   diagnostics.textContent='ANDROID CAPTURE TRACK: '+usbRate+' · '+sampleSize+' · '+(state.channelCount||'Unknown')+' channel(s)'+caps+' · WEB AUDIO HOST: '+(state.hostSampleRate||'Unknown')+' Hz · Web Audio samples: Float32. The physical USB UAC transport rate/format may not be exposed by the WebView.';
+  }else diagnostics.textContent='Waiting for an external input. Refresh Inputs after connecting the USB interface to reveal Android input devices.';
+ }
+ if(hint){
+  const usbNote=' Web Audio processes Float32 samples; Android WebView does not expose the USB transport format, so 32-bit float on the interface must be verified from the reported track settings/device control panel.';
+  hint.textContent=state.mode==='guitar-hiz'?'Enable the interface’s physical Hi-Z switch for the guitar input. Set hardware Direct Monitor off to avoid hearing the dry signal alongside the processed signal.'+usbNote:
+   state.mode==='line'?'Use a line-level interface input. Disable hardware direct monitoring when listening to the processed Rig output.'+usbNote:
+   state.mode==='mic'?'Raw microphone capture is requested with echo cancellation, noise suppression and automatic gain control disabled.'+usbNote:
+   'External inputs are captured only after you press CONNECT INPUT. Existing Voice2Guitar microphone capture remains separate.'+usbNote;
+ }
+}
+const rigExternalInput=createRigExternalInputController({
+ getMediaDevices:()=>window.navigator&&window.navigator.mediaDevices||null,
+ getAudioContext:()=>ctx||audioContext(),
+ storage:(()=>{try{return window.localStorage;}catch(e){return null;}})(),
+ onChange:paintRigInputUI,
+ onStreamEnded:()=>{route().catch(e=>status('Rig input ended: '+(e.message||e)));}
+});
+async function refreshRigInputDevices(requestPermission){
+ const media=window.navigator&&window.navigator.mediaDevices||null;
+ if(requestPermission){
+  if(!media||typeof media.getUserMedia!=='function')throw new Error('Android WebView does not provide microphone permission capture.');
+  let permissionStream=null;
+  try{
+   permissionStream=await media.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }finally{
+   try{if(permissionStream&&permissionStream.getTracks)permissionStream.getTracks().forEach(track=>track.stop());}catch(e){}
+  }
+ }
+ const select=el('rigInputDevice');if(!select)return [];
+ const current=rigExternalInput.getState();
+ const previous=select.value||current.deviceId||'';
+ const devices=await rigExternalInput.enumerateInputs();
+ select.replaceChildren();
+ const defaultOption=document.createElement('option');defaultOption.value='';defaultOption.textContent='System default input';select.appendChild(defaultOption);
+ devices.forEach((item,index)=>{
+  if(!item.deviceId)return;
+  const option=document.createElement('option');option.value=item.deviceId;
+  option.textContent=item.label||('Audio input '+(index+1));select.appendChild(option);
+ });
+ if(previous&&!devices.some(item=>item.deviceId===previous)){
+  const saved=document.createElement('option');saved.value=previous;saved.textContent=current.deviceLabel||'Previously selected input';select.appendChild(saved);
+ }
+ select.value=previous&&Array.from(select.options).some(option=>option.value===previous)?previous:'';
+ if(!current.connected&&select.value!==current.deviceId)rigExternalInput.setDeviceId(select.value);
+ const state=rigExternalInput.getState();
+ const selectable=devices.filter(item=>!!item.deviceId);
+ const line=el('rigInputStatus');
+ if(!devices.length){
+  if(line)line.textContent='NO AUDIO INPUTS REPORTED · Check USB connection and Android USB audio permission.';
+ }else if(!selectable.length){
+  if(line)line.textContent='ANDROID HIDES INPUT DEVICE IDs · Only the system default can be requested; the active device must be verified after connecting.';
+ }else if(requestPermission&&line){
+  line.textContent=selectable.length+' selectable audio input(s) found. Choose the USB audio interface, then CONNECT INPUT.';
+ }
+ if(!state.connected&&state.mode!=='internal'&&devices.length===0)status('No audio inputs were reported by Android.');
+ return devices;
+}
+function buildRigExternalInputUI(layout){
+ const panel=document.createElement('section');panel.id='rigExternalInputPanel';
+ panel.style.cssText='margin:8px 0;padding:9px;background:#0b1420;border:1px solid #256b78;border-radius:7px;color:#e2e8f0;';
+ panel.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#67e8f9;font-size:1.02em;">RIG INPUT</strong><span style="color:#94a3b8;font-size:.75em;">MIC · GUITAR HI-Z · LINE · USB AUDIO</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:7px;"><label style="display:block;color:#cbd5e1;font-size:.82em;">INPUT TYPE<select id="rigInputType" style="display:block;width:100%;margin-top:3px;padding:7px;background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="internal">Internal instruments</option><option value="mic">Microphone</option><option value="guitar-hiz">Guitar Hi-Z</option><option value="line">Line input</option></select></label><label style="display:block;color:#cbd5e1;font-size:.82em;">INTERNAL INSTRUMENT<select id="rigInputInstrument" style="display:block;width:100%;margin-top:3px;padding:7px;background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="all">All internal instruments</option><option value="guitar">MIDI GUITAR · GTR</option><option value="samp">SAMPLER · SAMP</option><option value="electric">ELECTRIC · ELEC</option><option value="strat">STRAT</option><option value="piano">PIANO</option></select></label><label style="display:block;color:#cbd5e1;font-size:.82em;">INPUT DEVICE<select id="rigInputDevice" style="display:block;width:100%;margin-top:3px;padding:7px;background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="">System default input</option></select></label></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:7px;margin-top:8px;padding:8px;background:#101827;border:1px solid #334155;border-radius:6px;"><label style="display:flex;align-items:center;gap:7px;color:#cbd5e1;font-size:.84em;"><input id="rigInputSoftClipperEnabled" type="checkbox" style="accent-color:#22c55e;">INPUT SOFT CLIPPER</label><label style="display:block;color:#cbd5e1;font-size:.82em;">INPUT THRESHOLD <span id="rigInputSoftClipperValue" style="color:#67e8f9;font-weight:800;">-6.0 dBFS</span><input id="rigInputSoftClipperThreshold" type="range" min="-24" max="0" step="0.5" value="-6" style="display:block;width:100%;margin-top:5px;accent-color:#22d3ee;"></label><small style="grid-column:1/-1;color:#94a3b8;font-size:.75em;">OFF preserves the unprocessed dry path. When enabled, peaks above the selected threshold are smoothly saturated before NAM processing or dry output.</small></div><div id="rigInputMeter" style="margin-top:8px;padding:8px;background:#070d17;border:1px solid #334155;border-radius:6px;"><div style="display:flex;justify-content:space-between;gap:8px;color:#67e8f9;font-size:.82em;font-weight:900;"><span>LIVE INPUT SOURCE</span><span id="rigInputMeterReadout" style="color:#a7f3d0;">NO INPUT</span></div><div style="display:flex;align-items:center;gap:9px;margin-top:9px;"><div style="height:20px;flex:1;background:#1e293b;border:1px solid #334155;border-radius:6px;overflow:hidden;"><div id="rigInputMeterMain" style="height:100%;width:0%;background:linear-gradient(90deg,#16a34a 0%,#a3e635 62%,#facc15 83%,#ef4444 100%);border-radius:5px;"></div></div><strong id="rigInputMeterMainDb" style="min-width:70px;text-align:right;color:#e2e8f0;font:12px monospace;">−∞ dBFS</strong></div><div style="display:flex;justify-content:space-between;color:#64748b;font:9px monospace;margin-top:3px;"><span>−60 dBFS</span><span>−30</span><span>−12</span><span>0 dBFS</span></div><div style="display:grid;grid-template-columns:24px 1fr 64px;gap:7px;align-items:center;margin-top:9px;font:11px monospace;"><span>L</span><div style="height:11px;background:#1e293b;border-radius:8px;overflow:hidden;"><div id="rigInputMeterLeft" style="height:100%;width:0%;background:#22c55e;border-radius:8px;"></div></div><span id="rigInputMeterLeftDb" style="text-align:right;color:#cbd5e1;">— dBFS</span><span>R</span><div style="height:11px;background:#1e293b;border-radius:8px;overflow:hidden;"><div id="rigInputMeterRight" style="height:100%;width:0%;background:#22c55e;border-radius:8px;"></div></div><span id="rigInputMeterRightDb" style="text-align:right;color:#cbd5e1;">— dBFS</span></div></div><div id="rigInputDiagnostics" style="margin-top:7px;padding:7px;background:#101827;border:1px solid #334155;border-radius:5px;color:#aebed0;font:11px/1.5 monospace;">USB TRACK: not connected · WEB AUDIO samples: Float32.</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" data-rig-input-action="refresh" style="padding:6px 9px;border:1px solid #475569;border-radius:5px;background:#172033;color:#cbd5e1;">REFRESH INPUTS</button><button type="button" data-rig-input-action="connect" style="padding:6px 10px;border:1px solid #0e7490;border-radius:5px;background:#164e63;color:#ecfeff;font-weight:800;">CONNECT INPUT</button><button type="button" data-rig-input-action="disconnect" style="padding:6px 9px;border:1px solid #7f1d1d;border-radius:5px;background:#3f151c;color:#fecaca;">DISCONNECT</button></div><div id="rigInputStatus" role="status" aria-live="polite" style="margin-top:7px;color:#86efac;font:12px/1.4 monospace;">INTERNAL AUDIO · Existing IMPROVS2 instrument bus</div><small id="rigInputHint" style="display:block;margin-top:5px;color:#94a3b8;font-size:.76em;">External inputs are captured only after you press CONNECT INPUT. Existing Voice2Guitar microphone capture remains separate.</small>';
+ layout.insertBefore(panel,layout.querySelector('.nam8-grid'));
+ paintRigInputUI(rigExternalInput.getState());
+ refreshRigInputDevices(false).catch(error=>{const line=el('rigInputStatus');if(line)line.textContent='INPUT LIST UNAVAILABLE · '+(error.message||error);});
+ const media=window.navigator&&window.navigator.mediaDevices;
+ if(media&&typeof media.addEventListener==='function')media.addEventListener('devicechange',()=>refreshRigInputDevices(false).catch(()=>{}));
+}
+function routeInputWithSoftClipper(src,c){
+ const state=rigInputSoftClipper.getState();
+ if(!state.enabled){inputSoftClipperNode=null;return src;}
+ const shaper=track(c.createWaveShaper());shaper.curve=buildRigInputSoftClipCurve(state.thresholdDb,2049);shaper.oversample='4x';src.connect(shaper);inputSoftClipperNode=shaper;return shaper;
+}
+
 function active(){return NAM_KEYS.some(k=>NAM[k].loaded&&NAM[k].enabled)||IR_KEYS.some(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer)||!!DSP.enabled;}
 // Build 936 stress test: allow all eight NAM slots to run concurrently.
 const MAX_ACTIVE_NAMS=NAM_KEYS.length;
@@ -1754,7 +2111,7 @@ async function ensureWorklet(){const c=ctx||audioContext();if(!c)throw new Error
 function updateCpuMonitor(){let work=0,budget=0,count=0;for(const k of NAM_KEYS){const x=NAM[k].renderLoad;if(NAM[k].loaded&&NAM[k].enabled&&x&&Date.now()-x.at<1500){work+=x.workMs;budget=Math.max(budget,x.callbackMs);count++;}}const pct=budget>0?Math.min(999,work/budget*100):null;const v=el('nam8CpuValue'),bar=el('nam8CpuBar'),note=el('nam8CpuNote');if(v)v.textContent=pct==null?'Waiting for audio':pct.toFixed(0)+'%';if(bar){bar.style.width=(pct==null?0:Math.min(100,pct))+'%';bar.style.background=pct>=90?'#ef4444':pct>=70?'#f59e0b':'#34d399';}if(note)note.textContent=pct==null?'Measured NAM inference time ÷ audio callback budget; play audio to measure. IR/browser/device overhead is not included.':(pct>=90?'Overload risk: stutters likely. ':pct>=70?'High load: reduced headroom. ':'Target range: 60–70% is a useful balance. ')+'Active NAM renderers: '+count+'. This is an estimate from measured NAM inference time, not total device CPU.';}
 async function ensureNode(key){if(NAM[key].node)return NAM[key].node;const c=await ensureWorklet();const st=NAM[key];const nd=new AudioWorkletNode(c,'nam-processor',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],channelCount:1,channelCountMode:'explicit',channelInterpretation:'discrete',processorOptions:{slotKey:key}});nd.port.onmessage=e=>{const d=e.data||{};if(d.type==='render-load'){st.renderLoad={workMs:Number(d.workMs)||0,callbackMs:Number(d.callbackMs)||0,at:Date.now()};updateCpuMonitor();}else if(d.type==='ready'){st.workletStatus='READY';st.workletError='';st.workletMeter={inputPeak:null,outputPeak:null,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:false};paintRig();}else if(d.type==='processing'){st.workletStatus='PROCESSING';paintRig();}else if(d.type==='slot-meter'){st.workletMeter={inputPeak:Number(d.inputPeak)||0,outputPeak:Number(d.outputPeak)||0,modelRate:d.modelRate,hostRate:d.hostRate,blockSize:d.blockSize,streamReady:!!d.streamReady};st.workletStatus=d.streamReady?'RUNNING':'BUFFERING';paintRig();}else if(d.type==='error'){st.workletStatus='WORKLET ERROR';st.workletError=d.msg||'unknown';status(key+' NAM error: '+st.workletError);paintRig();}else if(d.type==='runtime-exception'){st.workletStatus='RUNTIME EXCEPTION';st.workletError=(d.stage||'process')+': '+(d.msg||'unknown').split('\n')[0];st.compiled=false;status(key+' NAM runtime exception: '+st.workletError);paintRig();}else if(d.type==='buffer'){status(key+' NAM buffer increased to '+d.blockSize+' samples');if(st.workletMeter)st.workletMeter.blockSize=d.blockSize;paintRig();}else if(d.type==='deadline-risk'||d.type==='overrun'){st.workletStatus='REALTIME WARNING';status('Warning: '+key+' NAM near realtime limit'+(d.blockSize?' · '+d.blockSize+'-sample blocks':'')+'; choose a lighter model tier if glitches persist');paintRig();}};nd.onprocessorerror=()=>{st.workletStatus='PROCESSOR CRASH';st.workletError='AudioWorklet processorerror event';st.compiled=false;status(key+' NAM processor crashed');paintRig();};nd.port.postMessage({type:'bypass',value:true});st.workletStatus='NODE CREATED';NAM[key].node=nd;return nd;}
 function transferList(m){return m.layout.writesF.map(w=>w.data.buffer).concat(m.layout.writesI.map(w=>w.data.buffer));}
-async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);st.workletStatus='COMPILING';st.workletError='';st.workletMeter=null;paintRig();if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=24000,blockSize=64;st.rateWarning='unified 24000 Hz resampled inference · 64-sample chunks';const emitted=window.NAMRealtime.emitChain(spec),cacheKey=byteKey(emitted.bytes);let module=compiledModuleCache.get(cacheKey);if(!module){module=await WebAssembly.compile(emitted.bytes);if(compiledModuleCache.size>=12)compiledModuleCache.delete(compiledModuleCache.keys().next().value);compiledModuleCache.set(cacheKey,module);}if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate,blockSize};nd.port.postMessage(msg,transferList(msg));st.compiled=true;return true;}
+async function compileAndSend(key,json,tier){const st=NAM[key];if(!st)throw new Error('Unknown NAM slot '+key);const token=++st.compileToken,nd=await ensureNode(key);st.workletStatus='COMPILING';st.workletError='';st.workletMeter=null;paintRig();if(!window.NAMRealtime||typeof window.NAMRealtime.flattenModel!=='function')throw new Error('NAM model builder unavailable');const spec=window.NAMRealtime.flattenModel(json,tier),modelRate=Number(spec.sampleRate),blockSize=64;if(!Number.isFinite(modelRate)||modelRate<8000||modelRate>192000)throw new Error('NAM model sample_rate is missing or invalid; refusing to run at a guessed rate');st.rateWarning='model '+modelRate+' Hz → host '+(ctx&&ctx.sampleRate||'?')+' Hz resampled inference · 64-sample chunks';const emitted=window.NAMRealtime.emitChain(spec),cacheKey=byteKey(emitted.bytes);let module=compiledModuleCache.get(cacheKey);if(!module){module=await WebAssembly.compile(emitted.bytes);if(compiledModuleCache.size>=12)compiledModuleCache.delete(compiledModuleCache.keys().next().value);compiledModuleCache.set(cacheKey,module);}if(token!==st.compileToken)return false;const msg={type:'model',module,layout:emitted.layout,modelRate,blockSize};nd.port.postMessage(msg,transferList(msg));st.compiled=true;return true;}
 function setNamMode(){return route().then(paintRig).catch(err=>status(err.message));}
 async function setHalfRate(on){halfRate=!!on;try{window.localStorage.setItem(HALF_KEY,halfRate?'1':'0');}catch(e){}const keys=NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].json);status((halfRate?'Half-rate':'Full-rate')+' NAM: reloading '+keys.length+' model(s)…');try{for(const k of keys)await compileAndSend(k,NAM[k].json,NAM[k].tier);}catch(err){status('Rate change failed: '+(err&&err.message||err));paintRig();return;}paintRig();status((halfRate?'Half-rate NAM active (models run at half their sample rate: ~2x lighter, tone shifts)':'Full-rate NAM active')+' · '+keys.length+' model(s) reloaded');}
 function keyAlias(key){if(NAM[key])return key;const m={pedal:'R1',amp:'R2',nam1:'R1',nam2:'R2',L1:'R5',L2:'R6',L3:'R7',L4:'R8',L5:'R1',L6:'R2',L7:'R3',L8:'R4'};return m[key]||key;}
@@ -1801,24 +2158,111 @@ function ensureMasterFx(){if(masterNodes.input)return masterNodes;const c=ctx;ma
 function applyMasterFx(){if(!masterNodes.input)return;const m=masterNodes,f=DSP,on=!!f.enabled;m.input.gain.value=on?Math.pow(10,f.inputDb/20):1;const driveAmount=on?Number(f.drive)||0:0;if(m._lastDrive!==driveAmount){m.drive.curve=makeDriveCurve(driveAmount);m.drive.oversample=driveAmount>0?'2x':'none';m._lastDrive=driveAmount;}m.comp.threshold.value=f.compThreshold;m.comp.ratio.value=f.compRatio;m.comp.attack.value=f.compAttack/1000;m.comp.release.value=f.compRelease/1000;m.low.frequency.value=f.lowCut;m.bass.frequency.value=f.bassFreq;m.bass.gain.value=(f.bass-5)*3;m.mid.frequency.value=f.midFreq;m.mid.Q.value=f.midQ;m.mid.gain.value=(f.middle-5)*3;m.treble.frequency.value=f.trebleFreq;m.treble.gain.value=(f.treble-5)*3;m.high.frequency.value=f.highCut;m.output.gain.value=on?Math.pow(10,f.outputDb/20):1;m.verbSend.gain.value=on?Math.min(.35,Math.max(0,f.reverb/100)):0;}
 function normalizeIRBuffer(buffer){if(!buffer)return null;const c=ctx||audioContext();if(!c)return buffer;if(buffer.numberOfChannels===1)return buffer;const b=c.createBuffer(1,buffer.length,buffer.sampleRate),out=b.getChannelData(0);for(let ch=0;ch<buffer.numberOfChannels;ch++){const src=buffer.getChannelData(ch),scale=1/buffer.numberOfChannels;for(let i=0;i<src.length;i++)out[i]+=src[i]*scale;}return b;}
 function ensureIRNode(key){if(!irNodes[key]){const c=ctx;irNodes[key]=track(c.createConvolver());irNodes[key].normalize=true;}irNodes[key].buffer=IR[key].loaded&&IR[key].enabled?IR[key].buffer:null;return irNodes[key];}
-function clearGraph(){meterTok++;meters={};if(source)disconnect(source);for(const n of graphNodes)disconnect(n);NAM_KEYS.forEach(k=>disconnect(NAM[k].node));graphNodes=new Set();inputSplitter=null;chainInputs={};chainOutputs={};outputMerger=null;outputGain=null;masterNodes={};slotFx={};irNodes={};irFx={};}
+function clearGraph(){meterTok++;meters={};inputSoftClipperNode=null;const oldSource=source,oldGraphSource=graphSrc;source=null;graphSrc=null;if(oldSource)disconnect(oldSource);if(oldGraphSource&&oldGraphSource!==oldSource)disconnect(oldGraphSource);for(const n of graphNodes)disconnect(n);NAM_KEYS.forEach(k=>disconnect(NAM[k].node));graphNodes=new Set();inputSplitter=null;chainInputs={};chainOutputs={};outputMerger=null;outputGain=null;masterNodes={};slotFx={};irNodes={};irFx={};}
+function readRigMeter(analyser){
+ if(!analyser)return {peak:0,db:null};
+ const size=Math.max(32,analyser.fftSize||512),samples=new Float32Array(size);
+ try{
+  if(typeof analyser.getFloatTimeDomainData==='function')analyser.getFloatTimeDomainData(samples);
+  else if(typeof analyser.getByteTimeDomainData==='function'){
+   const bytes=new Uint8Array(size);analyser.getByteTimeDomainData(bytes);
+   for(let i=0;i<bytes.length;i++)samples[i]=(bytes[i]-128)/128;
+  }else return {peak:0,db:null};
+ }catch(_){return {peak:0,db:null};}
+ let peak=0;for(let i=0;i<samples.length;i++)peak=Math.max(peak,Math.abs(samples[i]));
+ return {peak,db:peak>=1e-5?20*Math.log10(peak):null};
+}
+function peakDb(analyser){
+ const value=readRigMeter(analyser);
+ return value.db===null?'silent':value.db.toFixed(0)+' dB';
+}
+function createRigInputMeters(src,c){
+ const splitter=track(c.createChannelSplitter(2));
+ const left=track(c.createAnalyser()),right=track(c.createAnalyser());
+ left.fftSize=right.fftSize=1024;left.smoothingTimeConstant=right.smoothingTimeConstant=0.35;
+ src.connect(splitter);splitter.connect(left,0,0);splitter.connect(right,1,0);
+ meters.INPUT_L=left;meters.INPUT_R=right;
+}
+function updateRigInputMeter(){
+ const state=rigExternalInput.getState();
+ const source=readRigMeter(meters.INPUT),left=readRigMeter(meters.INPUT_L),right=readRigMeter(meters.INPUT_R);
+ function paintBar(id,valueId,reading){
+  const bar=el(id),label=el(valueId);
+  const db=reading.db===null?-60:reading.db;
+  const percent=Math.max(0,Math.min(100,(db+60)/60*100));
+  if(bar)bar.style.width=percent.toFixed(1)+'%';
+  if(label)label.textContent=reading.db===null?'−∞ dBFS':reading.db.toFixed(1)+' dBFS';
+ }
+ paintBar('rigInputMeterMain','rigInputMeterMainDb',source);
+ paintBar('rigInputMeterLeft','rigInputMeterLeftDb',left);
+ paintBar('rigInputMeterRight','rigInputMeterRightDb',right);
+ const readout=el('rigInputMeterReadout');
+ if(readout){
+  if(!state.connected&&state.mode!=='internal')readout.textContent='WAITING FOR USB INPUT';
+  else if(source.db===null)readout.textContent=state.connected?'USB CONNECTED · NO SIGNAL':'NO INPUT SIGNAL';
+  else readout.textContent='LIVE SIGNAL · '+source.db.toFixed(1)+' dBFS';
+ }
+}
+function startRigMeterPolling(){
+ const token=++meterTok;
+ (function poll(){
+  if(token!==meterTok)return;
+  const state=rigExternalInput.getState(),input=peakDb(meters.INPUT),chain=peakDb(meters.R);
+  updateRigInputMeter();
+  let node=el('nam8Meter');
+  if(!node){const anchor=el('nam8Status');if(anchor&&anchor.parentNode){node=document.createElement('div');node.id='nam8Meter';node.style.cssText='color:#a7f3d0;font-size:.9em;margin-top:2px;';anchor.parentNode.insertBefore(node,anchor.nextSibling);}}
+  if(node)node.textContent=(state.mode==='internal'?'APP INPUT ':'EXT INPUT ')+input+(meters.R?' · NAM/IR '+chain:' · dry passthrough');
+  setTimeout(poll,50);
+ })();
+}
 async function routeNow(){
  const budgetDisabled=enforceNAMBudget();
  const c=ctx||audioContext();if(!c)return;ctx=c;
  if(budgetDisabled.length)status('NAM CPU limit applied; disabled '+budgetDisabled.join(', '));
- const src=window._namMasterNode||window._INSTVOL||null,dst=window._MASTERCLIP||(c&&c.destination);
- if(!src){status('Waiting for instrument audio source');return;}
- source=src;try{if(c.state==='suspended')await c.resume();}catch(e){}
- clearGraph();graphSrc=src;graphCtx=c;
+ const externalState=rigExternalInput.getState();
+ const internalSource=window._namMasterNode||window._INSTVOL||null;
+ const selectedBus=externalState.mode==='internal'&&selectedInstrumentSource!=='all'?getInstrumentBus(selectedInstrumentSource):null;
+ if(externalState.mode==='internal'&&selectedInstrumentSource!=='all'&&!selectedBus)throw new Error('The selected internal instrument bus is unavailable; reload the audio engine.');
+ const src=externalState.mode==='internal'?(selectedBus||internalSource):rigExternalInput.getSourceNode();
+ const rigMaster=window.__IMPROVS2_RIG_MASTER||null;
+ const dst=selectedBus?(rigMaster||window._MASTERCLIP):(window._MASTERCLIP||(c&&c.destination));
+ if(!src){
+  const waitingForExternal=externalState.mode!=='internal';
+  const fallback=waitingForExternal?internalSource:null;
+  clearGraph();
+  const fallbackBuses=window.__IMPROVS2_RIG_INSTRUMENT_BUSES||{};
+  Object.keys(fallbackBuses).forEach(key=>{const bus=fallbackBuses[key];try{bus.disconnect();}catch(e){}try{bus.connect(rigMaster||window._MASTERCLIP);}catch(e){}});
+  if(fallback){
+   source=fallback;graphSrc=fallback;graphCtx=c;
+   try{fallback.disconnect();}catch(e){}
+   try{const fallbackPath=routeInputWithSoftClipper(fallback,c),comp=window._COMP_NODE;if(comp)fallbackPath.connect(comp);else fallbackPath.connect(dst);}catch(e){status('Internal dry fallback failed: '+(e.message||e));}
+   status(rigInputModeName(externalState.mode)+' selected — connect an input; internal audio remains on the dry path');
+  }else{
+   source=null;
+   status(waitingForExternal?rigInputModeName(externalState.mode)+' selected — connect an audio input':'Waiting for instrument audio source');
+  }
+  paintRig();return;
+ }
+ try{if(c.state==='suspended')await c.resume();}catch(e){}
+ clearGraph();
+ const instrumentBuses=window.__IMPROVS2_RIG_INSTRUMENT_BUSES||{};
+ Object.keys(instrumentBuses).forEach(key=>{const bus=instrumentBuses[key];try{bus.disconnect();}catch(e){}if(bus!==selectedBus){try{bus.connect(rigMaster||window._MASTERCLIP);}catch(e){}}});
+ if(src!==internalSource&&internalSource&&window._COMP_NODE){try{internalSource.disconnect();}catch(e){}try{internalSource.connect(window._COMP_NODE);}catch(e){}}
+ // A first-time route must remove the pre-existing dry connection before attaching meters/DSP.
+ disconnect(src);
+ source=src;graphSrc=src;graphCtx=c;
+ const inputMeter=track(c.createAnalyser());inputMeter.fftSize=512;src.connect(inputMeter);meters.INPUT=inputMeter;
+ createRigInputMeters(src,c);
+ const inputPath=routeInputWithSoftClipper(src,c);
  if(!active()){
   const comp=window._COMP_NODE;
-  try{if(comp)src.connect(comp);else src.connect(dst);}catch(e){status('Dry route failed: '+e.message);}
-  paintRig();return;
+  try{if(selectedBus)inputPath.connect(dst);else if(comp)inputPath.connect(comp);else inputPath.connect(dst);}catch(e){status('Dry route failed: '+e.message);}
+  startRigMeterPolling();paintRig();return;
  }
  try{
   // NAM captures are mono. Select/sum the requested stereo input, then duplicate the
   // processed mono chain to BOTH output channels. No left-chain NAM/IR DSP exists.
-  const upmix=track(c.createGain());upmix.channelCount=2;upmix.channelCountMode='explicit';upmix.channelInterpretation='speakers';src.connect(upmix);
+  const upmix=track(c.createGain());upmix.channelCount=2;upmix.channelCountMode='explicit';upmix.channelInterpretation='speakers';inputPath.connect(upmix);
   inputSplitter=track(c.createChannelSplitter(2));upmix.connect(inputSplitter);
   outputMerger=track(c.createChannelMerger(2));outputMerger.channelInterpretation='discrete';
   const input=track(c.createGain());chainInputs.R=input;
@@ -1844,9 +2288,8 @@ async function routeNow(){
    mt.connect(m.high);m.high.connect(m.output);const dry=track(c.createGain());dry.gain.value=1;m.output.connect(dry);m.output.connect(m.verbSend);m.verbSend.connect(m.verb);m.verb.connect(dry);finalNode=dry;
   }
   finalNode.connect(dst);
-  {const mt=++meterTok;(function poll(){if(mt!==meterTok)return;let txt='';const an=meters.R;if(an){const d=new Float32Array(an.fftSize);an.getFloatTimeDomainData(d);let p=0;for(let i=0;i<d.length;i++){const a=Math.abs(d[i]);if(a>p)p=a;}txt='R '+(p>=1e-4?(20*Math.log10(p)).toFixed(0)+' dB':'silent');}let n=el('nam8Meter');if(!n){const sn=el('nam8Status');if(sn&&sn.parentNode){n=document.createElement('div');n.id='nam8Meter';n.style.cssText='color:#a7f3d0;font-size:.9em;margin-top:2px;';sn.parentNode.insertBefore(n,sn.nextSibling);}}if(n)n.textContent='Serial chain level: '+txt+' · stereo out';setTimeout(poll,500);})();}
-  status('Single serial chain active · '+NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/8 NAM · '+IR_KEYS.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/4 IR · stereo out');
- }catch(err){clearGraph();try{if(window._COMP_NODE)src.connect(window._COMP_NODE);else src.connect(dst);}catch(e){}status('Rig routing failed; dry audio restored: '+(err&&err.message||err));throw err;}
+  startRigMeterPolling();  status('Single serial chain active · '+NAM_KEYS.filter(k=>NAM[k].loaded&&NAM[k].enabled).length+'/8 NAM · '+IR_KEYS.filter(k=>IR[k].loaded&&IR[k].enabled&&IR[k].buffer).length+'/4 IR · stereo out');
+ }catch(err){clearGraph();try{const fallbackPath=routeInputWithSoftClipper(src,c);if(window._COMP_NODE)fallbackPath.connect(window._COMP_NODE);else fallbackPath.connect(dst);}catch(e){try{if(window._COMP_NODE)src.connect(window._COMP_NODE);else src.connect(dst);}catch(_){}status('Rig routing failed; raw dry audio restored because clipper fallback failed: '+(e&&e.message||e));}source=src;graphSrc=src;graphCtx=c;status('Rig routing failed; dry audio restored'+(inputSoftClipperNode?' with input soft clipper':'')+': '+(err&&err.message||err));throw err;}
  paintRig();
 }
 function route(){routeQueue=routeQueue.catch(()=>{}).then(routeNow).catch(err=>{status('Stereo rig routing failed: '+(err&&err.message||err));throw err;});return routeQueue;}
@@ -1898,6 +2341,7 @@ function applyMayerPreset(){Object.assign(DSP,{enabled:true,compOn:true,eqOn:tru
 function buildUI(){
  const panel=el('rigPanel');if(!panel||el('rig8Layout'))return;const snapRow=el('rigSnapRow');panel.querySelectorAll('.rigSlot,.rigFxPanel').forEach(n=>n.remove());
  const layout=document.createElement('div');layout.id='rig8Layout';layout.innerHTML='<div style="font-size:1.08em;font-weight:900;color:#fbbf24;margin:1px 0 4px;">8× NAM → 4× IR · SINGLE SERIAL CHAIN · STEREO OUT</div><div style="font-size:.92em;color:#b7bfd0;margin-bottom:5px;">R1–R8 run in series, followed by IR1–IR4 in series. The processed signal feeds both stereo output channels. Host sample rate and buffer configuration are unchanged.</div><div class="nam8-grid" style="display:grid;grid-template-columns:minmax(0,1fr);gap:8px;"></div>'+masterDSPMarkup()+'<input id="nam8File" type="file" accept=".nam,.zip,application/json,application/zip" style="display:none"><input id="nam8IRFile" type="file" accept=".wav,audio/wav,audio/*" style="display:none"><div id="nam8Status" style="color:#7dd3fc;font-size:.9em;min-height:1em;margin-top:3px;"></div>';
+ buildRigExternalInputUI(layout);
  const grid=layout.querySelector('.nam8-grid');
  function slotRow(key,side){
   const row=document.createElement('div');row.setAttribute('data-nam8-slot',key);row.style.cssText='display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px;background:#0b0f18;border-radius:5px;border:1px solid #273244;';
@@ -1912,7 +2356,7 @@ function buildUI(){
  {
   const side='R';
   const section=document.createElement('section');section.style.cssText='background:#101521;border:1px solid #be185d;border-radius:7px;padding:7px;min-width:0;';
-  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#f9a8d4;font-size:1.08em;">SERIAL CHAIN · R1–R8 + IR1–IR4</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">INPUT <select id="nam8InputModeR" data-input-side="R" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div class="nam8-chain" style="display:flex;flex-direction:column;gap:6px;"></div><button type="button" class="nam8-add-slot" style="display:none;align-items:center;justify-content:center;margin:7px auto 2px;width:58px;height:48px;border-radius:24px;font-size:30px;font-weight:900;background:#fbbf24;color:#111827;border:2px solid #fde68a;box-shadow:0 0 12px #f59e0b88;" aria-label="Add NAM slot" title="Show the next NAM slot">＋</button><div id="nam8CpuMonitor" style="margin-top:8px;padding:8px;border:1px solid #334155;border-radius:6px;color:#cbd5e1;"><div style="display:flex;justify-content:space-between;gap:8px;"><strong>DSP LOAD · NAM render time</strong><strong id="nam8CpuValue">Waiting for audio</strong></div><div style="height:9px;background:#1e293b;border-radius:6px;overflow:hidden;margin:6px 0;"><div id="nam8CpuBar" style="height:100%;width:0%;background:#34d399;transition:width .2s;"></div></div><small id="nam8CpuNote">Measured NAM inference time ÷ audio callback budget; IR/browser/device overhead is not included.</small></div>';
+  section.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;"><strong style="color:#f9a8d4;font-size:1.08em;">SERIAL CHAIN · R1–R8 + IR1–IR4</strong><label style="display:flex;align-items:center;gap:4px;color:#cbd5e1;">CHANNEL <select id="nam8InputModeR" data-input-side="R" style="background:#101827;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:5px;"><option value="both">L+R (mono sum)</option><option value="left">L only</option><option value="right">R only</option></select></label></div><div class="nam8-chain" style="display:flex;flex-direction:column;gap:6px;"></div><button type="button" class="nam8-add-slot" style="display:none;align-items:center;justify-content:center;margin:7px auto 2px;width:58px;height:48px;border-radius:24px;font-size:30px;font-weight:900;background:#fbbf24;color:#111827;border:2px solid #fde68a;box-shadow:0 0 12px #f59e0b88;" aria-label="Add NAM slot" title="Show the next NAM slot">＋</button><div id="nam8CpuMonitor" style="margin-top:8px;padding:8px;border:1px solid #334155;border-radius:6px;color:#cbd5e1;"><div style="display:flex;justify-content:space-between;gap:8px;"><strong>DSP LOAD · NAM render time</strong><strong id="nam8CpuValue">Waiting for audio</strong></div><div style="height:9px;background:#1e293b;border-radius:6px;overflow:hidden;margin:6px 0;"><div id="nam8CpuBar" style="height:100%;width:0%;background:#34d399;transition:width .2s;"></div></div><small id="nam8CpuNote">Measured NAM inference time ÷ audio callback budget; IR/browser/device overhead is not included.</small></div>';
   const slots=section.querySelector('.nam8-chain');CHAIN_ORDER.forEach(key=>slots.appendChild(NAM_KEYS.includes(key)?slotRow(key,side):irRow(key,side)));
   section.querySelector('.nam8-add-slot').addEventListener('click',()=>{extraEmptyNAMSlots=Math.min(NAM_KEYS.length,extraEmptyNAMSlots+1);updateNAMSlotVisibility();const next=Array.from(slots.querySelectorAll('[data-nam8-slot]')).find(row=>row.style.display!=='none'&&!NAM[row.dataset.nam8Slot].loaded);if(next)next.scrollIntoView({behavior:'smooth',block:'nearest'});});
   grid.appendChild(section);
@@ -1920,16 +2364,25 @@ function buildUI(){
  layout.querySelectorAll('button').forEach(b=>{if(b.classList.contains('nam8-add-slot'))return;b.style.cssText+='padding:4px 7px;border-radius:4px;border:1px solid #475569;background:#172033;color:#e2e8f0;';if(b.classList.contains('nam8-file')){b.style.background='#1f1235';b.style.color='#c4b5fd';}if(b.classList.contains('nam8-t3k')||b.classList.contains('nam8-ir-t3k')){b.style.background='#0c2740';b.style.color='#7dd3fc';}if(b.classList.contains('nam8-ir-file')){b.style.background='#12302b';b.style.color='#5eead4';}});
  if(snapRow){const oldSave=snapRow.querySelector('.rigSnapSave');if(oldSave){const b=oldSave.cloneNode(false);b.textContent='SAVE';oldSave.replaceWith(b);}snapRow.querySelectorAll('.rigSnap').forEach(old=>old.replaceWith(old.cloneNode(false)));}panel.insertBefore(layout,snapRow||panel.lastChild);
  const namFile=el('nam8File'),irFile=el('nam8IRFile');
- layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;const row=t.closest('[data-nam8-slot]'),key=row&&row.dataset.nam8Slot,irrow=t.closest('[data-nam8-ir]'),irk=irrow&&irrow.dataset.nam8Ir;if(t.classList.contains('rig-master-mayer'))applyMayerPreset();else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=irk;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(irk,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(irk).catch(err=>status(err.message));});
- layout.addEventListener('change',e=>{const t=e.target;if(t.id==='nam8HalfRate'||t.id==='nam8Mode')return;if(t.matches('select[data-input-side]')){const side=t.dataset.inputSide;inputModes[side]=['both','left','right'].includes(t.value)?t.value:(side==='L'?'left':'right');try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,inputModes[side]);}catch(err){}route().catch(err=>status(err.message));}else if(t.classList.contains('nam8-enabled')){const row=t.closest('[data-nam8-slot]');if(row){setNAMEnabled(row.dataset.nam8Slot,t.checked).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-ir-enabled')){const row=t.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=t.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-slot-eq')){const k=t.dataset.slotKey;NAM[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-ir-eq')){const k=t.dataset.irKey;IR[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-tier')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=t.value===''?null:Number(t.value),st=NAM[key];if(st.json)setNAM(key,st.json,{name:st.name,tier,enabled:st.enabled,toneId:st.toneId,modelId:st.modelId,modelName:st.modelName,toneTitle:st.toneTitle,thumbnail:st.thumbnail,variants:st.variants}).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-model-variant')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,m=(NAM[key].variants||[]).find(x=>String(x.id)===String(t.value));if(m&&String(m.id)!==String(NAM[key].modelId))switchNAMVariant(key,m);}}else if(t.classList.contains('rig-master-enable')){DSP.enabled=t.checked;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-comp')){DSP.compOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-eq')){DSP.eqOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}});
+ layout.addEventListener('click',e=>{e.stopPropagation();const t=e.target.closest('button');if(!t)return;
+  if(t.dataset.rigInputAction==='refresh'){const line=el('rigInputStatus');if(line)line.textContent='REQUESTING AUDIO PERMISSION · SCANNING INPUTS…';refreshRigInputDevices(true).then(list=>{const count=list.filter(item=>!!item.deviceId).length;if(line)line.textContent=count?count+' selectable audio input(s) found. Choose USB audio and connect.':'Android did not expose selectable device IDs. Check the USB connection and Android audio routing.';}).catch(err=>{if(line)line.textContent='INPUT SCAN FAILED · '+(err.message||err);status('Input scan failed: '+(err.message||err));});return;}
+  if(t.dataset.rigInputAction==='connect'){(async()=>{try{const picked=el('rigInputDevice')&&el('rigInputDevice').value||'';const state=await rigExternalInput.connect(picked);await refreshRigInputDevices();await route();status(rigInputModeName(state.mode)+' connected · '+(state.deviceLabel||'external input')+' · '+(state.sampleRate||'unknown')+' Hz');}catch(err){const message=err&&err.message||String(err);const line=el('rigInputStatus');if(line)line.textContent='CONNECTION FAILED · '+message;status('Rig input connection failed: '+message);}})();return;}
+  if(t.dataset.rigInputAction==='disconnect'){rigExternalInput.disconnect().then(()=>route()).then(()=>status('External Rig input disconnected')).catch(err=>status('Input disconnect failed: '+(err.message||err)));return;}
+  const row=t.closest('[data-nam8-slot]'),key=row&&row.dataset.nam8Slot,irrow=t.closest('[data-nam8-ir]'),irk=irrow&&irrow.dataset.nam8Ir;if(t.classList.contains('rig-master-mayer'))applyMayerPreset();else if(t.classList.contains('nam8-file')){fileTarget=key;namFile.value='';namFile.click();}else if(t.classList.contains('nam8-t3k'))openT3K(key,'nam');else if(t.classList.contains('nam8-clear'))clearNAM(key).catch(err=>status(err.message));else if(t.classList.contains('nam8-ir-file')){fileTarget=irk;irFile.value='';irFile.click();}else if(t.classList.contains('nam8-ir-t3k'))openT3K(irk,'ir');else if(t.classList.contains('nam8-ir-clear'))clearIR(irk).catch(err=>status(err.message));});
+ layout.addEventListener('change',e=>{const t=e.target;
+ if(t.id==='rigInputType'){rigExternalInput.setMode(t.value).then(async state=>{await route();paintRigInputUI(state);if(state.mode!=='internal'&&!state.connected)status(rigInputModeName(state.mode)+' selected · choose a device and CONNECT INPUT');}).catch(err=>status('Input type change failed: '+(err.message||err)));return;}
+ if(t.id==='rigInputInstrument'){const value=INSTRUMENT_SOURCE_OPTIONS.includes(t.value)?t.value:'all';selectedInstrumentSource=value;try{window.localStorage.setItem(INSTRUMENT_SOURCE_KEY,value);}catch(err){}route().then(()=>{paintRigInputUI();status('Rig input: '+(value==='all'?'all internal instruments':value.toUpperCase()));}).catch(err=>status('Instrument input routing failed: '+(err.message||err)));return;}
+ if(t.id==='rigInputDevice'){rigExternalInput.setDeviceId(t.value);return;}
+ if(t.id==='rigInputSoftClipperEnabled'){rigInputSoftClipper.setEnabled(t.checked);paintRigInputUI();route().catch(err=>status('Input soft clipper routing failed: '+(err.message||err)));return;}
+ if(t.id==='nam8HalfRate'||t.id==='nam8Mode')return;if(t.matches('select[data-input-side]')){const side=t.dataset.inputSide;inputModes[side]=['both','left','right'].includes(t.value)?t.value:(side==='L'?'left':'right');try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,inputModes[side]);}catch(err){}route().catch(err=>status(err.message));}else if(t.classList.contains('nam8-enabled')){const row=t.closest('[data-nam8-slot]');if(row){setNAMEnabled(row.dataset.nam8Slot,t.checked).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-ir-enabled')){const row=t.closest('[data-nam8-ir]');if(row){IR[row.dataset.nam8Ir].enabled=t.checked;route().then(paintRig).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-slot-eq')){const k=t.dataset.slotKey;NAM[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-ir-eq')){const k=t.dataset.irKey;IR[k].fx.eqOn=t.checked;route().then(paintRig).catch(err=>status(err.message));}else if(t.classList.contains('nam8-tier')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,tier=t.value===''?null:Number(t.value),st=NAM[key];if(st.json)setNAM(key,st.json,{name:st.name,tier,enabled:st.enabled,toneId:st.toneId,modelId:st.modelId,modelName:st.modelName,toneTitle:st.toneTitle,thumbnail:st.thumbnail,variants:st.variants}).catch(err=>status(err.message));}}else if(t.classList.contains('nam8-model-variant')){const row=t.closest('[data-nam8-slot]');if(row){const key=row.dataset.nam8Slot,m=(NAM[key].variants||[]).find(x=>String(x.id)===String(t.value));if(m&&String(m.id)!==String(NAM[key].modelId))switchNAMVariant(key,m);}}else if(t.classList.contains('rig-master-enable')){DSP.enabled=t.checked;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-comp')){DSP.compOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}else if(t.classList.contains('rig-master-eq')){DSP.eqOn=t.checked;if(t.checked)DSP.enabled=true;route().catch(err=>status(err.message));}});
  layout.addEventListener('click',e=>{const b=e.target.closest('[data-order-kind][data-order-key][data-order-delta]');if(!b)return;moveChainItem(b.dataset.orderKind,b.dataset.orderKey,Number(b.dataset.orderDelta));});
- layout.addEventListener('input',e=>{const t=e.target;const eqParams=['bassFreq','bass','midFreq','midQ','middle','trebleFreq','treble'];if(t.matches('[data-slot-param]')){const k=t.dataset.slotKey,p=t.dataset.slotParam;if(NAM[k]&&NAM[k].fx&&p in NAM[k].fx){NAM[k].fx[p]=Number(t.value);if(eqParams.includes(p)){NAM[k].fx.eqOn=true;const row=t.closest('[data-nam8-slot]'),eq=row&&row.querySelector('.nam8-slot-eq');if(eq)eq.checked=true;}const fx=slotFx[k];if(fx)fx.apply();else if(NAM[k].loaded)route().catch(err=>status(err.message));}}else if(t.matches('[data-ir-param]')){const k=t.dataset.irKey,p=t.dataset.irParam;if(IR[k]&&IR[k].fx&&p in IR[k].fx){IR[k].fx[p]=Number(t.value);if(eqParams.includes(p)){IR[k].fx.eqOn=true;const row=t.closest('[data-nam8-ir]'),eq=row&&row.querySelector('.nam8-ir-eq');if(eq)eq.checked=true;}const fx=irFx[k];if(fx)fx.apply();else if(IR[k].loaded)route().catch(err=>status(err.message));}}else if(t.classList.contains('rig-master-param')){const c=DSP_CONTROLS.find(x=>x.key===t.dataset.param);if(c){DSP[c.key]=Number(t.value);applyMasterFx();const out=layout.querySelector('output[data-master-param="'+c.key+'"]');if(out)out.textContent=fmt(DSP[c.key],c.step,c.unit);}}});
+ layout.addEventListener('input',e=>{const t=e.target;if(t.id==='rigInputSoftClipperThreshold'){const clip=rigInputSoftClipper.setThreshold(Number(t.value));const out=el('rigInputSoftClipperValue');if(out)out.textContent=clip.thresholdDb.toFixed(1)+' dBFS';if(inputSoftClipperNode)inputSoftClipperNode.curve=buildRigInputSoftClipCurve(clip.thresholdDb,2049);return;}const eqParams=['bassFreq','bass','midFreq','midQ','middle','trebleFreq','treble'];if(t.matches('[data-slot-param]')){const k=t.dataset.slotKey,p=t.dataset.slotParam;if(NAM[k]&&NAM[k].fx&&p in NAM[k].fx){NAM[k].fx[p]=Number(t.value);if(eqParams.includes(p)){NAM[k].fx.eqOn=true;const row=t.closest('[data-nam8-slot]'),eq=row&&row.querySelector('.nam8-slot-eq');if(eq)eq.checked=true;}const fx=slotFx[k];if(fx)fx.apply();else if(NAM[k].loaded)route().catch(err=>status(err.message));}}else if(t.matches('[data-ir-param]')){const k=t.dataset.irKey,p=t.dataset.irParam;if(IR[k]&&IR[k].fx&&p in IR[k].fx){IR[k].fx[p]=Number(t.value);if(eqParams.includes(p)){IR[k].fx.eqOn=true;const row=t.closest('[data-nam8-ir]'),eq=row&&row.querySelector('.nam8-ir-eq');if(eq)eq.checked=true;}const fx=irFx[k];if(fx)fx.apply();else if(IR[k].loaded)route().catch(err=>status(err.message));}}else if(t.classList.contains('rig-master-param')){const c=DSP_CONTROLS.find(x=>x.key===t.dataset.param);if(c){DSP[c.key]=Number(t.value);applyMasterFx();const out=layout.querySelector('output[data-master-param="'+c.key+'"]');if(out)out.textContent=fmt(DSP[c.key],c.step,c.unit);}}});
  namFile.addEventListener('change',async()=>{const f=namFile.files&&namFile.files[0];if(!f||!fileTarget)return;const k=fileTarget;fileTarget=null;try{status('Loading '+k+'…');await loadNAMFile(f,k);}catch(e){status(k+' load failed: '+(e.message||e));}});
  irFile.addEventListener('change',async()=>{const f=irFile.files&&irFile.files[0];if(!f||!fileTarget)return;const k=fileTarget;fileTarget=null;try{status('Loading '+k+'…');const c=audioContext();if(!c)throw new Error('Audio engine not ready');const b=await c.decodeAudioData(await f.arrayBuffer());await setIR(k,b,{name:f.name,enabled:true});status(k+' loaded');}catch(e){status(k+' load failed: '+(e.message||e));}});
  const rowSave=snapRow&&snapRow.querySelector('.rigSnapSave');if(rowSave)rowSave.addEventListener('click',e=>{e.stopPropagation();snapshotSaveMode=!snapshotSaveMode;const st=el('rigSnapStat');if(st)st.textContent=snapshotSaveMode?'Tap A–G to save current rig':'';paintSnapshots();});if(snapRow)snapRow.querySelectorAll('.rigSnap').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const i=Number(b.dataset.snap);if(snapshotSaveMode){SNAPSHOTS[i]=capture();snapshotSaveMode=false;persistSnapshot(i).then(()=>{const st=el('rigSnapStat');if(st)st.textContent='Saved '+('ABCDEFG'[i]);}).catch(err=>status('Snapshot save failed: '+err.message));paintSnapshots();}else recallSnapshot(i).catch(err=>status('Snapshot recall failed: '+err.message));}));paintSnapshots();paintRig();
 }
-function openT3K(target,format){if(window.__openLegacyT3KForNAM8){window.__openLegacyT3KForNAM8(target,format);return;}t3kTarget={target,format};let modal=el('nam8T3KModal');if(!modal){modal=document.createElement('div');modal.id='nam8T3KModal';modal.style.cssText='position:fixed;inset:0;z-index:10020;background:rgba(3,7,18,.94);display:none;flex-direction:column;padding:18px;gap:9px;color:#e2e8f0;font:14px system-ui,sans-serif;';modal.innerHTML='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong style="font-size:18px;color:#7dd3fc;">TONE3000 · NAM / IR</strong><span id="nam8T3KTarget" style="flex:1;color:#a5b4fc;"></span><button id="nam8T3KClose" type="button">CLOSE</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;"><input id="nam8T3KQuery" placeholder="Search tones…" style="flex:1;min-width:140px;padding:8px;background:#111827;color:#fff;border:1px solid #475569;border-radius:5px;"><select id="nam8T3KGear" style="padding:7px;background:#111827;color:#fff;"><option value="amp">Amp</option><option value="pedal">Pedal</option><option value="amp-cab">Amp + Cab</option><option value="cab">Cab / IR</option></select><button id="nam8T3KConnect" type="button">CONNECT</button><button id="nam8T3KSearch" type="button">SEARCH</button></div><div id="nam8T3KResults" style="flex:1;overflow:auto;border:1px solid #334155;border-radius:6px;"></div>';document.body.appendChild(modal);el('nam8T3KClose').onclick=()=>modal.style.display='none';el('nam8T3KSearch').onclick=()=>searchT3K();el('nam8T3KQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchT3K();});el('nam8T3KConnect').onclick=()=>{if(window.T3K&&window.T3K.connect){sessionStorage.setItem('t3k_new_search_return',JSON.stringify(t3kTarget));window.T3K.connect().catch(err=>{sessionStorage.removeItem('t3k_new_search_return');el('nam8T3KResults').textContent=err.message;});}else el('nam8T3KResults').textContent='TONE3000 module unavailable';};}modal.style.display='flex';el('nam8T3KTarget').textContent='Target: '+(format==='ir'?target:'NAM '+target);const gear=el('nam8T3KGear');if(format==='ir')gear.value='cab';else if(gear.value==='cab')gear.value='amp';el('nam8T3KResults').textContent=(window.T3K&&window.T3K.connected&&window.T3K.connected())?'Search for a model, then choose a variant.':'Connect to TONE3000, then search.';}
-async function searchT3K(){const box=el('nam8T3KResults');if(!box)return;try{if(!window.T3K||!T3K.connected())throw new Error('Connect to TONE3000 first');box.textContent='Searching…';const q=el('nam8T3KQuery').value.trim(),gear=el('nam8T3KGear').value,fmt2=t3kTarget.format==='ir'?'ir':'nam';const res=await T3K.search({query:q,gears:gear,format:fmt2,sort:'trending',page:1,page_size:30});const list=Array.isArray(res)?res:(res.data||res.tones||res.results||[]);box.innerHTML='';if(!list.length){box.textContent='No results found.';return;}list.forEach(t=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(t.title||t.name||'Untitled')+' · '+(t.gear||t.format||gear)+' · '+((t.user&&t.user.username)||'');b.onclick=()=>showT3KModels(t);box.appendChild(b);});}catch(e){box.textContent='Search failed: '+(e.message||e);}}
+function openT3K(target,format){if(window.__openLegacyT3KForNAM8){window.__openLegacyT3KForNAM8(target,format);return;}t3kTarget={target,format};let modal=el('nam8T3KModal');if(!modal){modal=document.createElement('div');modal.id='nam8T3KModal';modal.style.cssText='position:fixed;inset:0;z-index:10020;background:rgba(3,7,18,.94);display:none;flex-direction:column;padding:18px;gap:9px;color:#e2e8f0;font:14px system-ui,sans-serif;';modal.innerHTML='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong style="font-size:18px;color:#7dd3fc;">TONE3000 · NAM / IR</strong><span id="nam8T3KTarget" style="flex:1;color:#a5b4fc;"></span><button id="nam8T3KClose" type="button">CLOSE</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;"><input id="nam8T3KQuery" placeholder="Search tones…" style="flex:1;min-width:140px;padding:8px;background:#111827;color:#fff;border:1px solid #475569;border-radius:5px;"><select id="nam8T3KGear" style="padding:7px;background:#111827;color:#fff;"><option value="amp">Amp</option><option value="pedal">Pedal</option><option value="amp-cab">Amp + Cab</option><option value="cab">Cab / IR</option></select><button id="nam8T3KConnect" type="button">CONNECT</button><button id="nam8T3KSearch" type="button">SEARCH</button></div><div id="nam8T3KResults" style="flex:1;overflow:auto;border:1px solid #334155;border-radius:6px;"></div>';document.body.appendChild(modal);el('nam8T3KClose').onclick=()=>modal.style.display='none';el('nam8T3KSearch').onclick=()=>searchT3K();el('nam8T3KQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchT3K();});el('nam8T3KConnect').onclick=()=>{if(window.T3K&&window.T3K.connect){sessionStorage.setItem('t3k_new_search_return',JSON.stringify(t3kTarget));localStorage.setItem('t3k_new_search_return',JSON.stringify(t3kTarget));window.T3K.connect().catch(err=>{sessionStorage.removeItem('t3k_new_search_return');el('nam8T3KResults').textContent=err.message;});}else el('nam8T3KResults').textContent='TONE3000 module unavailable';};}modal.style.display='flex';el('nam8T3KTarget').textContent='Target: '+(format==='ir'?target:'NAM '+target);const gear=el('nam8T3KGear');if(format==='ir')gear.value='cab';else if(gear.value==='cab')gear.value='amp';el('nam8T3KResults').textContent=(window.T3K&&window.T3K.connected&&window.T3K.connected())?'Search for a model, then choose a variant.':'Connect to TONE3000, then search.';}
+async function searchT3K(){const box=el('nam8T3KResults');if(!box)return;try{if(!window.T3K||!T3K.connected())throw new Error('Connect to TONE3000 first');box.textContent='Searching…';const q=el('nam8T3KQuery').value.trim(),gear=el('nam8T3KGear').value,fmt2=t3kTarget.format==='ir'?'ir':'nam';const res=await T3K.search({query:q,gears:gear,format:fmt2,sort:'trending',page:1,page_size:25});const list=Array.isArray(res)?res:(res.data||res.tones||res.results||[]);box.innerHTML='';if(!list.length){box.textContent='No results found.';return;}list.forEach(t=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(t.title||t.name||'Untitled')+' · '+(t.gear||t.format||gear)+' · '+((t.user&&t.user.username)||'');b.onclick=()=>showT3KModels(t);box.appendChild(b);});}catch(e){box.textContent='Search failed: '+(e.message||e);}}
 function preferredA2Lite(models){if(!Array.isArray(models))return null;return models.find(m=>/\bA2[\s_-]*Lite\b/i.test(String(m&&m.name||'')))||null;}
 function explicitTierForVariant(json,model){if(!json||json.architecture!=='SlimmableContainer'||!json.config||!Array.isArray(json.config.submodels)||!(/\bA2[\s_-]*Full\b/i.test(String(model&&model.name||''))))return null;const vals=json.config.submodels.map(x=>Number(x&&x.max_value)).filter(Number.isFinite);return vals.length?Math.max(...vals):null;}
 async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{const isIR=t3kTarget.format==='ir'||String(tone.format||'').toLowerCase()==='ir';const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent=isIR?'No downloadable IR models were returned.':'No downloadable model variants.';return;}if(!isIR){const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite available — loading…';await loadT3KTone(tone,lite,false,models);return;}}models.forEach((m,i)=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:'+(isIR?'#5eead4':'#e2e8f0')+';border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||(isIR?'IR model':'NAM model'))+' · ID '+(m.id==null?i+1:m.id);b.onclick=()=>loadT3KTone(tone,m,isIR,models);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+(e.message||e);}}
@@ -1949,8 +2402,83 @@ async function switchNAMVariant(key,model){
  }catch(e){status(key+' variant switch failed: '+(e.message||e));paintRig();}
 }
 async function loadT3KModel(slot,tone,model){if(IR_KEYS.includes(slot)||['cab','IR','IR-L','IR-R'].includes(slot)){t3kTarget={target:IR_KEYS.includes(slot)?slot:(slot==='IR-R'?'IR3':slot==='IR-L'?'IR1':'IR1'),format:'ir'};}else{t3kTarget={target:keyAlias(slot==='pedal'?'L1':slot==='amp'?'L2':slot),format:'nam'};}if(t3kTarget.format==='ir'){const blob=await T3K.downloadModel(model.model_url),c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(t3kTarget.target,buf,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,thumbnail:toneThumbnail(tone,model)});}else{const blob=await T3K.downloadModel(model.model_url);let variants=[];try{const vr=await T3K.listModels(tone.id);variants=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];}catch(e){}if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);await setNAM(t3kTarget.target,JSON.parse(await blob.text()),{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants,thumbnail:toneThumbnail(tone,model)});}}
-function initialize(){buildUI();loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:setNAMEnabled,setInputMode:(side,mode)=>{side=String(side||'').toUpperCase();if(!SIDES.includes(side)||!['both','left','right'].includes(mode))throw new Error('Invalid side/input mode');inputModes[side]=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
+function initialize(){buildUI();paintRigInputUI(rigExternalInput.getState());loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,input:{getState:rigExternalInput.getState,enumerate:refreshRigInputDevices,setMode:rigExternalInput.setMode,setDeviceId:rigExternalInput.setDeviceId,connect:rigExternalInput.connect,disconnect:rigExternalInput.disconnect},setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:setNAMEnabled,setInputMode:(side,mode)=>{side=String(side||'').toUpperCase();if(!SIDES.includes(side)||!['both','left','right'].includes(mode))throw new Error('Invalid side/input mode');inputModes[side]=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
 console.log('[modules] single-chain 8-NAM/4-IR stereo-out rig '+VERSION+' · R4 resampler preserved; non-R4 legacy direct renderer');
+})();
+
+/* Build 979 — T3K NAM Library bundled for offline use in the Android app. */
+(function(){'use strict';
+var LIBRARY_ROOT=typeof window.__rootRelative==='function'?window.__rootRelative('t3knam/'):'../t3knam/',INDEX=LIBRARY_ROOT+'index.json',BASE=LIBRARY_ROOT,files=[],loaded=false,loading=false;
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function render(){
+ var list=document.getElementById('t3kNamList'),search=document.getElementById('t3kNamSearch');
+ var q=(search&&search.value||'').toLowerCase();
+ if(!list)return;
+ var found=files.filter(function(f){return !q||f.path.toLowerCase().indexOf(q)>=0;});
+ var groups=Object.create(null);
+ found.forEach(function(f){var group=f.collection||'Other';(groups[group]||(groups[group]=[])).push(f);});
+ list.innerHTML=Object.keys(groups).sort().map(function(group){
+  var rows=groups[group].map(function(f){
+   var name=f.path.split('/').pop(),ir=f.kind==='ir_wav'||/\.wav$/i.test(name);
+   return '<div style="display:flex;align-items:center;gap:8px;padding:7px;background:#1b1530;border:1px solid #382b55;border-radius:5px"><div style="min-width:0;flex:1"><div style="font-weight:700;font-size:.88em;overflow-wrap:anywhere">'+esc(name)+'</div><div style="font-size:.72em;color:#a78bfa">'+(ir?'IR WAV':'NAM model')+' · '+Math.round((f.size||0)/1024)+' KB</div></div><button type="button" data-t3knam-path="'+esc(f.path)+'" style="flex:0 0 auto;background:'+(ir?'#0f766e':'#5b21b6')+';color:#fff;border:0;border-radius:4px;padding:6px 9px;font-weight:800">LOAD</button></div>';
+  }).join('');
+  return '<details style="border:1px solid #382b55;border-radius:6px;padding:6px;background:#171126"><summary style="cursor:pointer;color:#c4b5fd;font-weight:800;padding:3px">'+esc(group)+' <span style="color:#a78bfa;font-weight:500">· '+groups[group].length+'</span></summary><div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">'+rows+'</div></details>';
+ }).join('')||'<div style="padding:12px;color:#9ca3af">No matching library files.</div>';
+ var status=document.getElementById('t3kNamStatus');
+ if(status)status.textContent=found.length+' of '+files.length+' bundled files · '+files.filter(function(f){return f.kind==='nam';}).length+' NAM · '+files.filter(function(f){return f.kind==='ir_wav';}).length+' IR · available offline';
+}
+async function loadIndex(){
+ if(loaded||loading)return;loading=true;
+ var status=document.getElementById('t3kNamStatus');
+ try{
+  var indexUrl=new URL(INDEX,document.baseURI);if(indexUrl.origin!==location.origin)throw new Error('Bundled index resolved outside the app origin.');
+  var r=await fetch(indexUrl.href,{cache:'no-store'});
+  if(!r.ok)throw new Error('Bundled library index returned HTTP '+r.status);
+  var data=await r.json();
+  if(!data||!Array.isArray(data.files)||data.files.length!==data.file_count)throw new Error('Bundled library index is invalid or incomplete.');
+  files=data.files.filter(function(f){return f&&typeof f.path==='string'&&/\.(nam|wav)$/i.test(f.path);});
+  if(files.length!==data.file_count)throw new Error('Bundled library contains an unexpected file type.');
+  loaded=true;render();
+ }catch(e){if(status)status.textContent='BUNDLED LIBRARY UNAVAILABLE · '+(e.message||e)+' · '+INDEX;console.error('[T3K NAM Library]',e);}
+ finally{loading=false;}
+}
+function build(){
+ var panel=document.getElementById('rigPanel');
+ if(!panel)return;
+ var existing=document.getElementById('t3kNamLibrary');if(existing)existing.remove();
+ var box=document.createElement('section');box.id='t3kNamLibrary';box.setAttribute('data-t3k-library-build','980');
+ box.style.cssText='margin-top:10px;padding:10px;border:1px solid #7c3aed;border-radius:8px;background:#120d20;color:#e5e7eb;';
+ box.innerHTML='<details id="t3kNamLibraryDetails" style="margin:0;border:1px solid #51436f;border-radius:7px;padding:6px;background:#120d20"><summary style="cursor:pointer;color:#c4b5fd;font-weight:900;padding:7px">LIMITED PEDAL LIBRARY · 107 NAM · 3 IR · EXPAND</summary><div id="t3kNamLibraryBody" style="padding:7px 2px 2px"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><strong style="color:#c4b5fd;font-size:1.05em">T3K NAM LIBRARY</strong><span style="color:#a78bfa;font-size:.85em">107 NAM · 3 IR · OFFLINE</span></div><div style="display:flex;gap:7px;flex-wrap:wrap;margin:8px 0"><input id="t3kNamSearch" type="search" placeholder="Search models and collections" style="flex:1;min-width:150px;background:#0b1020;color:#fff;border:1px solid #51436f;border-radius:5px;padding:7px"><select id="t3kNamSlot" aria-label="Load destination" style="background:#0b1020;color:#fff;border:1px solid #51436f;border-radius:5px;padding:7px"><optgroup label="NAM slots">'+Array.from({length:8},function(_,i){return '<option value="R'+(i+1)+'">R'+(i+1)+'</option>';}).join('')+'</optgroup><optgroup label="IR slots">'+Array.from({length:4},function(_,i){return '<option value="IR'+(i+1)+'">IR'+(i+1)+'</option>';}).join('')+'</optgroup></select></div><div id="t3kNamStatus" role="status" style="font-size:.82em;color:#a5b4fc;margin:4px 0">Loading bundled offline library…</div><div id="t3kNamList" style="display:flex;flex-direction:column;gap:5px;max-height:340px;overflow:auto"></div></div></details>';
+ panel.insertBefore(box,panel.firstChild);
+ box.querySelector('#t3kNamSearch').addEventListener('input',render);
+ loadIndex();
+}
+async function loadFile(path,button){
+ var status=document.getElementById('t3kNamStatus'),slot=document.getElementById('t3kNamSlot').value;
+ button.disabled=true;button.textContent='…';
+ try{
+  if(!window.NAM8)throw new Error('Rig engine is not ready.');
+  var url=BASE+path.split('/').map(encodeURIComponent).join('/'),resolved=new URL(url,document.baseURI);if(resolved.origin!==location.origin)throw new Error('Bundled model resolved outside the app origin.');var r=await fetch(resolved.href);
+  if(!r.ok)throw new Error('Bundled file could not be read (HTTP '+r.status+').');
+  var name=path.split('/').pop();
+  if(/\.nam$/i.test(path)){
+   if(!/^R[1-8]$/.test(slot))throw new Error('Choose an R1–R8 slot for a NAM model.');
+   await window.NAM8.setModel(slot,JSON.parse(await r.text()),{name:name,enabled:true});
+  }else{
+   if(!/^IR[1-4]$/.test(slot))throw new Error('Choose an IR1–IR4 slot for an impulse response.');
+   if(window.ensureAudio)window.ensureAudio();
+   var ac=window.getAC&&window.getAC();if(!ac)throw new Error('Audio engine is not ready.');
+   var buf=await ac.decodeAudioData(await r.arrayBuffer());
+   await window.NAM8.setIR(slot,buf,{name:name,enabled:true});
+  }
+  if(status)status.textContent=name+' loaded into '+slot+'.';
+  if(window.showToast)window.showToast(name+' loaded into '+slot+'.',false);
+ }catch(e){if(status)status.textContent='Load failed: '+(e.message||e);console.error('[T3K NAM Library] load failed',e);}
+ finally{button.disabled=false;button.textContent='LOAD';}
+}
+document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-t3knam-path]');if(b)loadFile(b.getAttribute('data-t3knam-path'),b);});
+window.__T3KNAMLibrary={loadIndex:loadIndex,getFiles:function(){return files.slice();}};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',build,{once:true});else build();
 })();
