@@ -1,6 +1,6 @@
 /*
  * RHYMELIGHT — IMPROVS2 rap-song comparison module with official Genius API integration
- * Build: 4.9.8.972
+ * Build: 4.9.8.985
  * Source export: modules/rhymelight/rhymelight.json
  * Pronunciations: bundled CMU Pronouncing Dictionary (see CMUDICT-LICENSE.txt)
  * No AI or Lovable API. Optional Genius developer API uses the user's own Genius client access token.
@@ -16,7 +16,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '4.9.8.972';
+  var VERSION = '4.9.8.985';
   var MAX_TRACKS = 6;
   var PALETTE = ['#F0F2D0', '#5188DE', '#FF873F', '#70D9BD', '#D65DB7', '#98E66D', '#191919', '#FFD400', '#72D0E8', '#F04443', '#00C978', '#A875C5'];
   var SECONDARY_PALETTE = ['#F6C85F', '#6EC5FF', '#F78DA7', '#8DE0A8', '#B69CFF', '#FF9F68', '#55D6C2', '#F0A6CA', '#A6C8FF', '#D7D86E', '#E89BFF', '#9DD9D2'];
@@ -43,7 +43,7 @@
   ];
   var state = {
     root: null, panel: null, mounted: false, open: false, initialisedWithConfig: false, tracks: [], results: null,
-    dictionary: null, dictionaryPromise: null, config: null, configPromise: null, seedLibrary: [], library: [], view: 'syllables', focus: null, status: '', geniusToken: '', geniusQuery: '', geniusTrackIndex: -1
+    dictionary: null, dictionaryPromise: null, config: null, configPromise: null, seedLibrary: [], library: [], view: 'syllables', lyricTrackId: null, focus: null, status: '', geniusToken: '', geniusQuery: '', geniusTrackIndex: -1
   };
 
   function escapeHTML(value) {
@@ -783,6 +783,17 @@
     return 'https://genius.com/search?q=' + encodeURIComponent(String(query || '').trim());
   }
 
+  function geniusProxyOrigin(pageOrigin) {
+    // Capacitor's WebView uses a local origin. Calling /api/genius there returns
+    // the app shell (HTML), not the Vercel function. Route native and preview
+    // hosts to the production API; keep the production web app same-origin.
+    try {
+      var page = new URL(String(pageOrigin || ''));
+      if (page.protocol === 'https:' && page.hostname === 'improvs2.vercel.app') return page.origin;
+    } catch (_) {}
+    return 'https://improvs2.vercel.app';
+  }
+
   function geniusApiUrl(endpoint, params) {
     var allowed = endpoint === 'search' || endpoint === 'referents' || /^songs\/\d+$/.test(String(endpoint || ''));
     if (!allowed) throw new Error('Unsupported Genius API endpoint.');
@@ -849,20 +860,76 @@
     else if (endpoint === 'referents') action = 'referents';
     else if (/^songs\/\d+$/.test(String(endpoint || ''))) { action = 'song'; query.songId = String(endpoint).split('/')[1]; }
     else throw new Error('Unsupported Genius API request.');
-    var url = '/api/genius?action=' + encodeURIComponent(action);
+    var pageOrigin = root && root.location && root.location.origin;
+    var apiOrigin = geniusProxyOrigin(pageOrigin);
+    var url = new URL('/api/genius', apiOrigin);
+    url.searchParams.set('action', action);
     Object.keys(query).forEach(function (key) {
-      if (query[key] !== undefined && query[key] !== null && query[key] !== '') url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(String(query[key]));
+      if (query[key] !== undefined && query[key] !== null && query[key] !== '') url.searchParams.set(key, String(query[key]));
     });
-    if (!root || typeof root.fetch !== 'function') throw new Error('This app has no network request provider available for the Genius proxy.');
+    if (!root) throw new Error('This app has no network request provider available for the Genius proxy.');
     var response;
-    try { response = await root.fetch(url, { method: 'GET', credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store' }); }
-    catch (err) { throw new Error('Could not reach the IMPROVS2 Genius proxy. Check that the latest Vercel deployment is active.'); }
-    var payload;
-    try { payload = await response.json(); } catch (err) { throw new Error('The IMPROVS2 Genius proxy returned an unreadable response.'); }
+    var capacitor = root.Capacitor;
+    var nativeHttp = capacitor && typeof capacitor.isNativePlatform === 'function' &&
+      capacitor.isNativePlatform() && capacitor.Plugins && capacitor.Plugins.CapacitorHttp;
+    if (nativeHttp && typeof nativeHttp.get === 'function') {
+      try {
+        // Native Capacitor HTTP bypasses WebView CORS. The production Origin and
+        // Referer satisfy the existing same-origin Vercel proxy guard; no token
+        // or Genius credential is sent from the device.
+        var nativeResponse = await nativeHttp.get({
+          url: url.toString(),
+          headers: { Accept: 'application/json', Origin: apiOrigin, Referer: apiOrigin + '/' },
+          connectTimeout: 15000,
+          readTimeout: 15000,
+          responseType: 'text'
+        });
+        var nativeHeaders = nativeResponse.headers || {};
+        var nativeStatus = Number(nativeResponse.status) || 0;
+        var nativeBody = typeof nativeResponse.data === 'string' ? nativeResponse.data : JSON.stringify(nativeResponse.data);
+        response = {
+          status: nativeStatus,
+          ok: nativeStatus >= 200 && nativeStatus < 300,
+          headers: { get: function (name) {
+            var key = Object.keys(nativeHeaders).find(function (item) { return item.toLowerCase() === String(name).toLowerCase(); });
+            return key ? String(nativeHeaders[key]) : '';
+          } },
+          text: async function () { return nativeBody || ''; }
+        };
+      } catch (err) {
+        throw new Error('The native Genius proxy request failed before an HTTP response was received from ' + apiOrigin + '.');
+      }
+    } else {
+      if (typeof root.fetch !== 'function') throw new Error('This app has no network request provider available for the Genius proxy.');
+      try {
+        response = await root.fetch(url.toString(), {
+          method: 'GET', credentials: apiOrigin === pageOrigin ? 'same-origin' : 'omit',
+          headers: { Accept: 'application/json' }, cache: 'no-store'
+        });
+      } catch (err) {
+        throw new Error('The Genius proxy request failed before an HTTP response was received from ' + apiOrigin + '.');
+      }
+    }
+    var raw = '';
+    try { raw = await response.text(); }
+    catch (err) { throw new Error('The Genius proxy response body could not be read (HTTP ' + (response.status || 'unknown') + ').'); }
+    var contentType = '';
+    try { contentType = response.headers && response.headers.get ? String(response.headers.get('content-type') || '') : ''; } catch (err) {}
+    var payload = null;
+    if (String(raw || '').trim()) {
+      try { payload = JSON.parse(raw); }
+      catch (err) {
+        var preview = String(raw).replace(/\\s+/g, ' ').trim().slice(0, 140);
+        var htmlResponse = /text\/html/i.test(contentType) || /^\s*<(?:!doctype|html|head|body)/i.test(raw);
+        throw new Error('Genius proxy returned ' + (htmlResponse ? 'HTML' : 'non-JSON') + ' (HTTP ' + (response.status || 'unknown') + (contentType ? ', ' + contentType : '') + '). ' + (htmlResponse ? 'The deployed /api/genius route may be returning a page instead of JSON. ' : '') + (preview ? 'Response: ' + preview : ''));
+      }
+    } else {
+      throw new Error('The Genius proxy returned an empty response (HTTP ' + (response.status || 'unknown') + (contentType ? ', ' + contentType : '') + ').');
+    }
     if (!response.ok) throw new Error(payload && payload.error && payload.error.message || 'Genius proxy returned HTTP ' + response.status + '.');
+    if (!payload || typeof payload !== 'object') throw new Error('The Genius proxy returned an unexpected JSON payload.');
     return payload;
   }
-
   function validGeniusPageUrl(url) { return /^https:\/\/genius\.com\//i.test(String(url || '')); }
 
   function renderGeniusSongs(songs) {
@@ -889,22 +956,23 @@
     state.geniusQuery = String(query || '').trim();
     var panel = state.panel && state.panel.querySelector('[data-rl-genius-panel]');
     var results = state.panel && state.panel.querySelector('[data-rl-genius-api-results]');
+    var preview = state.panel && state.panel.querySelector('[data-rl-genius-embed-details]');
     var frame = state.panel && state.panel.querySelector('[data-rl-genius-frame]');
     if (panel) { panel.hidden = false; panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
-    if (results) results.innerHTML = '<div class=\"rl-muted\">Searching Genius…</div>';
+    if (preview) preview.open = false;
+    if (frame) { frame.removeAttribute('src'); frame.removeAttribute('srcdoc'); delete frame.dataset.pendingSrcdoc; }
+    if (results) results.innerHTML = '<div class="rl-muted">Searching Genius…</div>';
     try {
       var payload = await geniusApiRequest(state.root, 'search', { q: state.geniusQuery });
       var songs = parseGeniusSearch(payload);
       renderGeniusSongs(songs);
-      if (songs.length === 1) await selectGeniusSong(songs[0].id, songs[0].url, songs[0].title);
-      else if (!songs.length && results) results.innerHTML = '<div class=\"rl-muted\">No matching Genius songs found.</div>';
-      // Do not assign frame.src here: selectGeniusSong() installs the official Genius embed via srcdoc.
+      if (!songs.length && results) results.innerHTML = '<div class="rl-muted">No matching Genius songs found.</div>';
+      // A result must be selected explicitly. The lyrics iframe remains collapsed until expanded.
     } catch (err) {
-      if (results) results.innerHTML = '<div class=\"rl-genius-error\">' + escapeHTML(err.message || 'Genius API request failed.') + '</div>';
+      if (results) results.innerHTML = '<div class="rl-genius-error">' + escapeHTML(err.message || 'Genius API request failed.') + '</div>';
       updateStatus(err.message || 'Genius API request failed.', 'error');
     }
   }
-
   async function selectGeniusSong(songId, songUrl, title) {
     var results = state.panel && state.panel.querySelector('[data-rl-genius-api-results]');
     var frame = state.panel && state.panel.querySelector('[data-rl-genius-frame]');
@@ -915,9 +983,16 @@
       if (results) results.innerHTML = '<div class="rl-genius-error">Genius did not return a valid song lyrics page.</div>';
       return;
     }
+    var preview = state.panel && state.panel.querySelector('[data-rl-genius-embed-details]');
+    if (preview) preview.open = false;
     if (frame) {
       frame.removeAttribute('src');
-      frame.srcdoc = geniusEmbedDocument(embedSong);
+      frame.removeAttribute('srcdoc');
+      frame.dataset.pendingSrcdoc = geniusEmbedDocument(embedSong);
+    }
+    if (preview) {
+      var summary = preview.querySelector('summary');
+      if (summary) summary.textContent = 'EXPAND GENIUS LYRICS PREVIEW · ' + String(embedSong.title || title || 'SELECTED SONG');
     }
     var referents = [];
     try {
@@ -1161,8 +1236,7 @@
   function initialTracks() {
     var rapGod = (state.seedLibrary || []).find(function (song) { return song.id === 'benchmark-rap-god'; });
     return [
-      { id: 'track-1', preset: 'eminem', libraryId: 'benchmark-rap-god', name: 'Eminem — Rap God', lyrics: rapGod ? rapGod.lyrics : '' },
-      { id: 'track-2', preset: getBenchmarks()[1].id, name: getBenchmarks()[1].artist + ' — ' + getBenchmarks()[1].song, lyrics: '' }
+      { id: 'track-1', preset: 'eminem', libraryId: 'benchmark-rap-god', name: 'Eminem — Rap God', lyrics: rapGod ? rapGod.lyrics : '' }
     ];
   }
 
@@ -1178,17 +1252,17 @@
   }
 
   function panelMarkup() {
-    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY COMPARISON · BUILD 972</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
+    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY COMPARISON · BUILD 980</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
       '<p class="rl-intro">Compare the rhyme architecture of great rap passages. The same phonetic sound gets the same colour across every song — syllable by syllable, word by word and line by line.</p>' +
       '<div class="rl-local"><span class="rl-local-dot"></span>LOCAL LYRIC ANALYSIS <span>·</span> NO AI <span>·</span> GENIUS DEVELOPER API WHEN ENABLED</div>' +
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>MY SONG LIBRARY</strong><span class="rl-muted" data-rl-library-count>0 SONGS STORED ON THIS DEVICE</span></div><div class="rl-library-row"><select data-rl-library-select aria-label="Saved songs"><option value="">Choose a saved song…</option></select><button type="button" class="rl-quiet" data-rl-library-add>＋ ADD</button><button type="button" class="rl-quiet" data-rl-library-delete disabled>DELETE SELECTED</button></div><div class="rl-muted">Saved locally in this browser/device. No cloud account or upload.</div></div>' +
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>CHOOSE YOUR TRACKS</strong><span class="rl-muted">2–6 SONGS</span></div>' +
       '<div data-rl-track-editors></div>' +
       '<div class="rl-row rl-actions"><button type="button" class="rl-quiet" data-rl-add>＋ ADD SONG</button><button type="button" class="rl-primary" data-rl-compare>COMPARE RHYMES</button></div>' +
-      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP SONG LYRICS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">Only Genius song results are shown. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; community lists and annotation panels are excluded, and no lyrics are scraped or copied into Rhymelight.</div></section>' +
+      '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP SONG LYRICS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><details class="rl-genius-embed-details" data-rl-genius-embed-details><summary>EXPAND GENIUS LYRICS PREVIEW</summary><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">Only Genius song results are shown. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; community lists and annotation panels are excluded, and no lyrics are scraped or copied into Rhymelight.</div></details></section>' +
       '<div class="rl-status" data-rl-status hidden></div></div>' +
       '<div data-rl-results></div>' +
-      '<div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API through the IMPROVS2 server-side proxy to find song matches and preview lyrics only. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div>'; 
+      '<details class="rl-analysis-details"><summary>ABOUT RHYMELIGHT · ANALYSIS, SCORING & GENIUS</summary><div class="rl-analysis-detail-body"><div class="rl-note">Rap God is preloaded from the lyrics you supplied. Benchmark entries are elite reference titles, not fabricated fixed scores; each grade is calculated from the actual passage entered. Enter BPM and the exact passage duration to measure delivery pace and syllables per beat. Rate wordplay, imagery and technical wit yourself (0–10); those semantic dimensions cannot be reliably inferred by the phonetic analyser. Use the official Genius API through the IMPROVS2 server-side proxy to find song matches and preview lyrics only. The full song page is also presented in the in-app preview when Genius permits embedding. Rhymelight does not use Lovable APIs or scrape Genius lyrics. Save your own verses or imported passages to this device library. JPEG and PDF exports include the new metrics.</div></div></details>'; 
   }
 
   var CSS = [
@@ -1203,6 +1277,10 @@
     '#rhymelightPanel .rl-intro{margin:7px 0 10px;color:#bac8d9;font-size:12px}',
     '#rhymelightPanel .rl-local{display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:#96bfae;font-size:9px;font-weight:900;letter-spacing:.7px;margin:8px 0 12px}',
     '#rhymelightPanel .rl-local-dot{width:7px;height:7px;border-radius:50%;background:#70d8a4;box-shadow:0 0 8px #70d8a477}',
+    '#rhymelightPanel .rl-analysis-details{margin:8px 0;border:1px solid #34465d;border-radius:7px;background:#0d1724;overflow:hidden}',
+    '#rhymelightPanel .rl-analysis-details>summary{padding:11px;cursor:pointer;color:#f5d76e;font-weight:900;font-size:11px;letter-spacing:.65px;list-style-position:inside}',
+    '#rhymelightPanel .rl-analysis-details[open]>summary{border-bottom:1px solid #34465d;background:#111e2e}',
+    '#rhymelightPanel .rl-analysis-detail-body{padding:0 7px 8px}',
     '#rhymelightPanel .rl-sheet{background:#101b29;border:1px solid #26384e;border-radius:7px;padding:10px;margin-top:9px}',
     '#rhymelightPanel .rl-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
     '#rhymelightPanel .rl-sectionhead{justify-content:space-between;color:#f5d76e;font-size:11px;letter-spacing:.75px}',
@@ -1230,6 +1308,8 @@
     '#rhymelightPanel .rl-colour-count{padding:6px;border-radius:5px;font-size:9px;font-weight:800;border:1px solid #ffffff30;cursor:pointer;text-align:left}',
     '#rhymelightPanel .rl-status{margin-top:9px;color:#c1d0e2;font-size:11px}#rhymelightPanel .rl-status.error{color:#ff9d9d}#rhymelightPanel .rl-status.warn{color:#f4d58a}',
     '#rhymelightPanel .rl-results-head{margin:16px 0 8px;font-weight:900;color:#f5d76e;letter-spacing:1px}',
+    '#rhymelightPanel .rl-lyrics-front{margin:10px 0 14px;padding:10px;background:#101b29;border:1px solid #26384e;border-radius:7px}',
+    '#rhymelightPanel .rl-lyrics-tabs{margin:8px 0}',
     '#rhymelightPanel .rl-legend{display:flex;gap:5px;flex-wrap:wrap;margin:9px 0}',
     '#rhymelightPanel .rl-chip{border:1px solid #3a4a5e;border-radius:20px;padding:4px 8px;color:var(--rl-text-color,#000000);background:var(--rl-color,#263548);font-size:10px;font-weight:900;cursor:pointer}',
     '#rhymelightPanel .rl-chip.dimmed{opacity:.2}',
@@ -1253,6 +1333,9 @@
     '#rhymelightPanel .rl-genius-mark{display:inline-block;margin-left:6px;color:#91a9c5;font:800 8px/1.4 Inter,system-ui,sans-serif;vertical-align:middle}',
     '#rhymelightPanel .rl-genius-preview{margin-top:12px;border:1px solid #354960;border-radius:8px;overflow:hidden;background:#fff}',
     '#rhymelightPanel .rl-genius-preview-head{padding:9px 10px;background:#172538;color:#f5d76e;align-items:center}',
+    '#rhymelightPanel .rl-genius-embed-details{margin:10px 0;border:1px solid #354960;border-radius:7px;background:#0d1724;color:#e5edf7}',
+    '#rhymelightPanel .rl-genius-embed-details>summary{padding:10px;cursor:pointer;color:#f5d76e;font-size:11px;font-weight:900;letter-spacing:.4px;list-style-position:inside}',
+    '#rhymelightPanel .rl-genius-embed-details[open]>summary{border-bottom:1px solid #354960}',
     '#rhymelightPanel .rl-genius-preview iframe{display:block;width:100%;height:min(68vh,720px);min-height:420px;border:0;background:#fff}',
     '#rhymelightPanel .rl-genius-settings{padding:10px;background:#0d1724;border:1px solid #354960;border-radius:7px;margin:10px 0}',
     '#rhymelightPanel .rl-genius-settings label{display:block;color:#aebed0;font-size:10px;font-weight:900;letter-spacing:.4px}',
@@ -1317,6 +1400,42 @@
     return 'style="--rl-color:' + color + ';--rl-text-color:' + paletteTextColor(color) + '"';
   }
 
+  function renderLyricsSummary(result, colorFor) {
+    if(!result||!Array.isArray(result.tracks)||!result.tracks.length)return '';
+    var track=result.tracks.find(function(item){return String(item.id)===String(state.lyricTrackId);});
+    if(!track){track=result.tracks[0];state.lyricTrackId=track.id;}
+    var letters=schemeLetters(track.analysis.lines,new Set(tally([track.analysis],'lines').keys()));
+    var html='<section class="rl-lyrics-front"><div class="rl-results-head">LYRICS</div>';
+    html+='<div class="rl-tabs rl-lyrics-tabs" role="tablist" aria-label="Choose song lyrics">'+result.tracks.map(function(item){
+      var selected=String(item.id)===String(state.lyricTrackId);
+      return '<button type="button" class="rl-pill '+(selected?'active':'')+'" data-rl-lyric-track="'+escapeHTML(item.id)+'" aria-pressed="'+(selected?'true':'false')+'">'+escapeHTML(item.name)+'</button>';
+    }).join('')+'</div>';
+    html+='<section class="rl-track-result"><div class="rl-result-title"><span class="rl-result-name">'+escapeHTML(track.name)+'</span></div>';
+      html += '<div class="rl-song-sheet">' + track.analysis.lines.map(function (line, li) {
+        var lineColor = state.view === 'lines' ? colorFor(line.group) : undefined;
+        var content = line.words.map(function (word, wi) {
+          var space = wi < line.words.length - 1 ? ' ' : '';
+          var dimWord = state.focus && state.view === 'words' && state.focus !== word.group ? ' dimmed' : '';
+          if (state.view === 'lines') return escapeHTML(word.text) + space;
+          if (state.view === 'words') {
+            var c = colorFor(word.group);
+            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + dimWord + '" ' + colorStyle(c) + '>' + escapeHTML(word.text) + '</span>' + space;
+          }
+          return word.syllables.map(function (syllable) {
+            var c = colorFor(syllable.group), dim = state.focus && state.focus !== syllable.group ? ' dimmed' : '';
+            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + (syllable.stressed ? ' rl-stress' : '') + dim + '" ' + colorStyle(c) + '>' + escapeHTML(syllable.text) + '</span>';
+          }).join('<span style="color:#62748b">·</span>') + space;
+        }).join('');
+        var lineDim = state.focus && state.view === 'lines' && state.focus !== line.group ? ' dimmed' : '';
+        var lineStyle = lineColor === undefined ? '' : 'style="background:' + getPalette()[lineColor] + '18;border-left:3px solid ' + getPalette()[lineColor] + ';padding-left:5px"';
+        var count = line.words.reduce(function (n, w) { return n + w.syllables.length; }, 0);
+        var rawLyricLine = line.words.map(function (word) { return word.text; }).join(' ');
+        var geniusQuery = track.name + ' lyrics';
+        return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Find song lyrics on Genius inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
+      }).join('') + '</div></section>';
+    return html+'</section>';
+  }
+
   function renderComparison(result) {
     var out = state.panel.querySelector('[data-rl-results]');
     if (!out) return;
@@ -1327,7 +1446,12 @@
     var globalSounds = new Map(result.groups.map(function (g) { return [g.id, g.sound]; }));
     function colorFor(id) { return id && (allCounts.get(id) || 0) >= 2 ? colors.get(id) : undefined; }
     var legend = Array.from(allCounts.entries()).filter(function (pair) { return pair[1] >= 2; }).sort(function (a, b) { return (colors.get(a[0]) || 0) - (colors.get(b[0]) || 0); });
-    var html = '<div class="rl-results-head">COMPARISON MAP</div><div class="rl-sheet"><div class="rl-row" style="justify-content:space-between"><strong>' + result.tracks.length + ' TRACKS · ' + result.tracks.reduce(function (n, t) { return n + t.metrics.lines; }, 0) + ' LINES</strong><span class="rl-muted">ONE COLOUR = ONE SOUND</span></div>';
+    var resultLineCount = result.tracks.reduce(function (n, track) { return n + track.metrics.lines; }, 0);
+    // Keep the two user-facing results above the optional phonetic data.
+    // Lyrics first, complexity ratings second; the entire analysis remains below.
+    var html = renderLyricsSummary(result, colorFor);
+    html += renderMetricComparison(result);
+    html += '<details class="rl-analysis-details" data-rl-analysis-details><summary>EXPAND RHYMELIGHT ANALYSIS · ' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</summary><div class="rl-analysis-detail-body"><div class="rl-results-head">COMPARISON MAP</div><div class="rl-sheet"><div class="rl-row" style="justify-content:space-between"><strong>' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</strong><span class="rl-muted">ONE COLOUR = ONE SOUND</span></div>';
     html += '<div class="rl-tabs" role="tablist">' + ['syllables', 'words', 'lines'].map(function (view) {
       return '<button type="button" class="rl-pill ' + (state.view === view ? 'active' : '') + '" data-rl-view="' + view + '">' + view.toUpperCase() + '</button>';
     }).join('') + '</div>';
@@ -1347,10 +1471,8 @@
       html += '<div class="rl-muted" style="margin-top:8px">SHARED BETWEEN TRACKS: ' + result.sharedGroups.map(function (g) { return escapeHTML(g.sound); }).join(' · ') + '</div>';
     }
     html += '</div>';
-    html += renderMetricComparison(result);
     result.tracks.forEach(function (track) {
       var metrics = track.metrics, grade = metrics.complexityGrade || calculateComplexityGrade(metrics);
-      var letters = schemeLetters(track.analysis.lines, new Set(tally([track.analysis], 'lines').keys()));
       var trackId = escapeHTML(track.id);
       html += '<section class="rl-track-result"><div class="rl-result-title"><span class="rl-result-name">' + escapeHTML(track.name) + '</span><span class="rl-muted">' + Math.round(metrics.dictionaryCoverage * 100) + '% PHONETIC COVERAGE</span></div>';
       html += '<div class="rl-grade"><div class="rl-grade-score">' + grade.total + '%</div><div class="rl-grade-detail"><strong>OVERALL LYRIC COMPLEXITY</strong><br><span class="' + (grade.complete ? '' : 'rl-grade-incomplete') + '">' + (grade.complete ? 'Full weighted grade' : 'PROVISIONAL · ' + grade.missing.length + ' artistry ratings missing') + '</span><br>Automated phonetic metrics + transparent human ratings</div></div>';
@@ -1401,31 +1523,14 @@
         ['SUSTAINED', metrics.sustainedComplexity.toFixed(0) + '%'], ['TEMPO', metrics.bpm == null ? '—' : metrics.bpm + ' BPM'], ['SHARED SOUNDS', metrics.sharedRhymeSounds]
       ].map(function (item) { return '<div class="rl-metric"><strong>' + item[1] + '</strong><span>' + item[0] + '</span></div>'; }).join('') + '</div>';
       html += '<div class="rl-export-row"><button type="button" class="rl-quiet" data-rl-export-jpeg="' + trackId + '">EXPORT JPEG</button><button type="button" class="rl-quiet" data-rl-export-pdf="' + trackId + '">EXPORT PDF</button></div>';
-      html += '<div class="rl-song-sheet">' + track.analysis.lines.map(function (line, li) {
-        var lineColor = state.view === 'lines' ? colorFor(line.group) : undefined;
-        var content = line.words.map(function (word, wi) {
-          var space = wi < line.words.length - 1 ? ' ' : '';
-          var dimWord = state.focus && state.view === 'words' && state.focus !== word.group ? ' dimmed' : '';
-          if (state.view === 'lines') return escapeHTML(word.text) + space;
-          if (state.view === 'words') {
-            var c = colorFor(word.group);
-            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + dimWord + '" ' + colorStyle(c) + '>' + escapeHTML(word.text) + '</span>' + space;
-          }
-          return word.syllables.map(function (syllable) {
-            var c = colorFor(syllable.group), dim = state.focus && state.focus !== syllable.group ? ' dimmed' : '';
-            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + (syllable.stressed ? ' rl-stress' : '') + dim + '" ' + colorStyle(c) + '>' + escapeHTML(syllable.text) + '</span>';
-          }).join('<span style="color:#62748b">·</span>') + space;
-        }).join('');
-        var lineDim = state.focus && state.view === 'lines' && state.focus !== line.group ? ' dimmed' : '';
-        var lineStyle = lineColor === undefined ? '' : 'style="background:' + getPalette()[lineColor] + '18;border-left:3px solid ' + getPalette()[lineColor] + ';padding-left:5px"';
-        var count = line.words.reduce(function (n, w) { return n + w.syllables.length; }, 0);
-        var rawLyricLine = line.words.map(function (word) { return word.text; }).join(' ');
-        var geniusQuery = track.name + ' lyrics';
-        return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Find song lyrics on Genius inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
-      }).join('') + '</div></section>';
+      html += '</section>';
     });
     html += '<div class="rl-note">Grade weights: multisyllabic rhyming 20%, internal rhyme density 15%, rhyme density 10%, flow 15%, wordplay 15%, imagery 10%, technical wit 10%, sustained complexity 5%. Technical wit is calculated from recurring phonetic colour families and calibrated to the supplied Eminem — Rap God reference; short excerpts and limited pronunciation coverage reduce confidence. Wordplay and imagery remain separate human assessments. These are transparent analysis heuristics, not definitive measures of lyric quality, delivery or influence.</div>';
+    html += '</div></details>';
     out.innerHTML = html;
+    // Re-rendering must never reopen hundreds of phonetic rows by accident.
+    var analysisDetails = out.querySelector('[data-rl-analysis-details]');
+    if (analysisDetails) analysisDetails.open = false;
   }
 
   function renderMetricComparison(result) {
@@ -1666,8 +1771,14 @@
   }
 
   function onPanelClick(event) {
+    var lyricTrack = event.target.closest('[data-rl-lyric-track]');
+    if (lyricTrack) {
+      state.lyricTrackId = lyricTrack.getAttribute('data-rl-lyric-track');
+      if (state.results) renderComparison(state.results);
+      return;
+    }
     var geniusClose = event.target.closest('[data-rl-genius-close]');
-    if (geniusClose) { var geniusPanel = state.panel.querySelector('[data-rl-genius-panel]'); var geniusFrame = state.panel.querySelector('[data-rl-genius-frame]'); if (geniusFrame) geniusFrame.src = 'about:blank'; if (geniusPanel) geniusPanel.hidden = true; return; }
+    if (geniusClose) { var geniusPanel = state.panel.querySelector('[data-rl-genius-panel]'); var geniusFrame = state.panel.querySelector('[data-rl-genius-frame]'); var geniusDetails = state.panel.querySelector('[data-rl-genius-embed-details]'); if (geniusFrame) { geniusFrame.src = 'about:blank'; geniusFrame.removeAttribute('srcdoc'); delete geniusFrame.dataset.pendingSrcdoc; } if (geniusDetails) geniusDetails.open = false; if (geniusPanel) geniusPanel.hidden = true; return; }
         var geniusOpenUrl = event.target.closest('[data-rl-genius-open-url]');
     if (geniusOpenUrl) { var openUrl = geniusOpenUrl.getAttribute('data-rl-genius-open-url'); var openFrame = state.panel.querySelector('[data-rl-genius-frame]'); if (openFrame && validGeniusPageUrl(openUrl)) openFrame.src = openUrl; return; }
     var geniusSongButton = event.target.closest('[data-rl-genius-song-id]');
@@ -1777,6 +1888,18 @@
     state.tracks = initialTracks();
     state.panel.innerHTML = panelMarkup();
     state.panel.addEventListener('click', onPanelClick);
+    var geniusDetails = state.panel.querySelector('[data-rl-genius-embed-details]');
+    if (geniusDetails && !geniusDetails.dataset.rlBound) {
+      geniusDetails.addEventListener('toggle', function () {
+        if (!geniusDetails.open) return;
+        var frame = geniusDetails.querySelector('[data-rl-genius-frame]');
+        if (frame && frame.dataset.pendingSrcdoc) {
+          frame.srcdoc = frame.dataset.pendingSrcdoc;
+          delete frame.dataset.pendingSrcdoc;
+        }
+      });
+      geniusDetails.dataset.rlBound = '1';
+    }
     state.panel.addEventListener('input', onPanelInput);
     state.panel.addEventListener('change', onPanelChange);
     renderTrackEditors();
@@ -1824,6 +1947,7 @@
     scoreGeniusEvidence: scoreGeniusEvidence,
     geniusSearchUrl: geniusSearchUrl,
     geniusApiUrl: geniusApiUrl,
+    geniusProxyOrigin: geniusProxyOrigin,
     parseGeniusSearch: parseGeniusSearch,
     parseGeniusSongDetails: parseGeniusSongDetails,
     geniusEmbedDocument: geniusEmbedDocument,
