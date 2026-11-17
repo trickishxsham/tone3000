@@ -1064,7 +1064,10 @@ const T3K=(function(){
   }
 
   function search(opts){ // {query,gears,format,architecture,sort,page,page_size}
-    const p=new URLSearchParams({ architecture:'2', page:String(opts.page||1), page_size:String(opts.page_size||20) });
+    // TONE3000 /tones/search has a hard page_size maximum of 25.
+    const requestedSize=Number(opts.page_size)||20;
+    const pageSize=Math.max(1,Math.min(25,Math.floor(requestedSize)));
+    const p=new URLSearchParams({ architecture:String(opts.architecture||'2'), page:String(opts.page||1), page_size:String(pageSize) });
     if(opts.query) p.set('query',opts.query);
     if(opts.gears) p.set('gears',opts.gears);
     if(opts.format) p.set('format',opts.format);
@@ -1098,11 +1101,26 @@ const T3K=(function(){
     if(!model||!model.model_url) throw new Error('TONE3000 returned no download URL for model '+id);
     return {model,variants};
   }
-  async function downloadModel(modelUrl){
-    const t=await token();
-    const r=await fetch(modelUrl,{ headers:{ Authorization:'Bearer '+t } });
-    if(!r.ok) throw new Error('download failed '+r.status);
-    return r.blob();
+  async function downloadModel(modelUrl, expectedFormat){
+    let access=await token();
+    let r=await fetch(modelUrl,{ headers:{ Authorization:'Bearer '+access } });
+    // A token can expire between the catalogue request and the binary download.
+    if(r.status===401){
+      access=await refresh();
+      r=await fetch(modelUrl,{ headers:{ Authorization:'Bearer '+access } });
+    }
+    if(!r.ok){
+      let detail='';
+      try{detail=(await r.clone().text()).replace(/\s+/g,' ').trim().slice(0,180);}catch(e){}
+      throw new Error('TONE3000 model download failed HTTP '+r.status+(detail?' · '+detail:''));
+    }
+    const blob=await r.blob(),type=String(r.headers&&r.headers.get&&r.headers.get('content-type')||blob.type||'').toLowerCase();
+    if(!blob.size) throw new Error('TONE3000 returned an empty model file.');
+    if(expectedFormat==='ir' && /text\/html|application\/json/.test(type))
+      throw new Error('TONE3000 returned '+type+' for an IR slot instead of impulse-response audio. Reconnect and retry.');
+    if(expectedFormat==='nam' && /text\/html/.test(type))
+      throw new Error('TONE3000 returned an HTML page instead of a NAM model. The download URL or authorization response is invalid.');
+    return blob;
   }
 
   return { configured, connected, connect, handleCallback, nativeAuthPlugin, clearTokens, search, favorited, getTone, listModels, resolveModel, downloadModel };
@@ -1568,27 +1586,46 @@ window.T3K=T3K;
     t3kResults.querySelectorAll('.t3kModelRow').forEach(row=>row.addEventListener('click',()=>loadToneModel(tone,models[parseInt(row.dataset.i,10)])));
     const back=document.getElementById('t3kVariantsBack'); if(back) back.addEventListener('click',()=>runSearch());
   }
+  function t3kLoadFormat(target,slot){
+    const format=String(target&&target.format||(slot==='cab'?'ir':'nam')).toLowerCase();
+    if(format!=='nam'&&format!=='ir') throw new Error('Unknown TONE3000 target format: '+format);
+    return format;
+  }
   async function loadToneModel(tone,model,opts){
     opts=opts||{};
     if(!model){ setStat('No model variant selected'); return; }
+    // Snapshot the destination before any await. The user may close this modal or
+    // open another slot while resolveModel/downloadModel is in flight.
+    const targetContext=t3kNAM8Target?{target:t3kNAM8Target.target,format:t3kNAM8Target.format}:null;
+    const slot=opts.slotOverride||t3kTargetSlot||'amp';
+    let requestedFormat;
+    try{requestedFormat=t3kLoadFormat(targetContext,slot);}
+    catch(e){setStat(e.message);return;}
+    const isIR=requestedFormat==='ir';
+    const toneFormat=String(tone&&tone.format||'').toLowerCase();
+    if(toneFormat&&toneFormat!==requestedFormat){
+      const msg='TONE3000 returned a '+toneFormat.toUpperCase()+' tone for a '+requestedFormat.toUpperCase()+' slot. Reopen search and choose the matching format.';
+      t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">'+escapeT3k(msg)+'</div>';
+      return;
+    }
     t3kResults.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc;">Loading '+escapeT3k(model.name||'model')+'…</div>';
     if(t3kPager) t3kPager.innerHTML='';
     try{
       // Resolve by model ID against the current API list, rather than trusting stale picker data.
       if(T3K.resolveModel){const resolved=await T3K.resolveModel(tone.id,model);model=resolved.model;if(resolved.variants&&resolved.variants.length)tone.models=resolved.variants;}
       if(!model.model_url) throw new Error('This variant has no downloadable model URL');
-      const blob=await T3K.downloadModel(model.model_url); const slot=opts.slotOverride||t3kTargetSlot||'amp';
-      const isIR=t3kNAM8Target ? t3kNAM8Target.format==='ir' : ((tone.format==='ir')||(slot==='cab'));
+      const blob=await T3K.downloadModel(model.model_url,requestedFormat);
       let displayTone=tone||{},thumbnail=t3kImageUrl(displayTone,model);
-      if(t3kNAM8Target&&!thumbnail){const enriched=await enrichToneForChain(displayTone,model);displayTone=enriched.tone;thumbnail=enriched.thumbnail;}
+      if(targetContext&&!thumbnail){const enriched=await enrichToneForChain(displayTone,model);displayTone=enriched.tone;thumbnail=enriched.thumbnail;}
       const label=(displayTone.title||displayTone.name||'TONE3000 tone')+(model.name?' — '+model.name:'');
-      if(t3kNAM8Target && window.NAM8){
+      if(targetContext && !window.NAM8) throw new Error('The eight-slot NAM/IR engine is not ready. Close RIG and reopen it, then retry.');
+      if(targetContext && window.NAM8){
         // The legacy store UI is reused, but loads into the selected stereo-rig slot.
         if(isIR){
           const ac=window.getAC&&window.getAC();
           if(!ac) throw new Error('Audio engine is not ready');
           const buf=await ac.decodeAudioData(await blob.arrayBuffer());
-          const side=t3kNAM8Target.target;
+          const side=targetContext.target;
           if(side==='BOTH'){ await window.NAM8.setIR('ALL',buf,{name:label,toneId:displayTone.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:displayTone.title||displayTone.name||'',thumbnail,enabled:true}); }
           else await window.NAM8.setIR(side,buf,{name:label,toneId:displayTone.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:displayTone.title||displayTone.name||'',thumbnail,enabled:true});
         }else{
@@ -1596,7 +1633,7 @@ window.T3K=T3K;
           let variants=[];
           try{const vr=await T3K.listModels(displayTone.id||tone.id);variants=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];}catch(e){console.warn('[T3K] variant metadata unavailable',e);}
           if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);
-          await window.NAM8.setModel(t3kNAM8Target.target,json,{name:label,toneId:displayTone.id||tone.id,modelId:model.id,modelName:model.name||'',toneTitle:displayTone.title||displayTone.name||'',variants,thumbnail,enabled:true});
+          await window.NAM8.setModel(targetContext.target,json,{name:label,toneId:displayTone.id||tone.id,modelId:model.id,modelName:model.name||'',toneTitle:displayTone.title||displayTone.name||'',variants,thumbnail,enabled:true});
         }
       }else{
         if(isIR){ await loadIrBlob(blob,label); }
@@ -1607,7 +1644,10 @@ window.T3K=T3K;
           if(!S[target].variants||!S[target].variants.length) { try{ const vr=await T3K.listModels(tone.id); S[target].variants=(vr&&vr.data)||vr||[]; }catch(e){ S[target].variants=[model]; } }
           refreshVariantSelect(target); }
       }
-      if(opts.keepModal!==true){ modal.style.display='none'; t3kNAM8Target=null; }
+      if(opts.keepModal!==true){
+        modal.style.display='none';
+        if(targetContext && t3kNAM8Target && t3kNAM8Target.target===targetContext.target && t3kNAM8Target.format===targetContext.format)t3kNAM8Target=null;
+      }
     }catch(err){ const msg=(err&&err.message)||(typeof err==='string'?err:'network/CORS error');
       t3kResults.innerHTML='<div style="padding:20px;color:#f87171;">Load failed: '+escapeT3k(msg)+'</div>';
       console.warn('[T3K] model load failed:',err); }
@@ -1787,7 +1827,7 @@ if(!namReady() && typeof window.loadModule === 'function'){
 'use strict';
 if(window.__IMPROVS2_NAM8_INSTALLED) return;
 window.__IMPROVS2_NAM8_INSTALLED=true;
-const VERSION='4.9.8.989';
+const VERSION='4.9.8.990';
 const SIDES=['R'];
 const NAM_KEYS=['R1','R2','R3','R4','R5','R6','R7','R8'];
 const IR_KEYS=['IR1','IR2','IR3','IR4'];
@@ -2492,8 +2532,8 @@ function openT3K(target,format){if(window.__openLegacyT3KForNAM8){window.__openL
 async function searchT3K(){const box=el('nam8T3KResults');if(!box)return;try{if(!window.T3K||!T3K.connected())throw new Error('Connect to TONE3000 first');box.textContent='Searching…';const q=el('nam8T3KQuery').value.trim(),gear=el('nam8T3KGear').value,fmt2=t3kTarget.format==='ir'?'ir':'nam';const res=await T3K.search({query:q,gears:gear,format:fmt2,sort:'trending',page:1,page_size:25});const list=Array.isArray(res)?res:(res.data||res.tones||res.results||[]);box.innerHTML='';if(!list.length){box.textContent='No results found.';return;}list.forEach(t=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:#e2e8f0;border:0;border-bottom:1px solid #263347;';b.textContent=(t.title||t.name||'Untitled')+' · '+(t.gear||t.format||gear)+' · '+((t.user&&t.user.username)||'');b.onclick=()=>showT3KModels(t);box.appendChild(b);});}catch(e){box.textContent='Search failed: '+(e.message||e);}}
 function preferredA2Lite(models){if(!Array.isArray(models))return null;return models.find(m=>/\bA2[\s_-]*Lite\b/i.test(String(m&&m.name||'')))||null;}
 function explicitTierForVariant(json,model){if(!json||json.architecture!=='SlimmableContainer'||!json.config||!Array.isArray(json.config.submodels)||!(/\bA2[\s_-]*Full\b/i.test(String(model&&model.name||''))))return null;const vals=json.config.submodels.map(x=>Number(x&&x.max_value)).filter(Number.isFinite);return vals.length?Math.max(...vals):null;}
-async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{const isIR=t3kTarget.format==='ir'||String(tone.format||'').toLowerCase()==='ir';const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent=isIR?'No downloadable IR models were returned.':'No downloadable model variants.';return;}if(!isIR){const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite available — loading…';await loadT3KTone(tone,lite,false,models);return;}}models.forEach((m,i)=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:'+(isIR?'#5eead4':'#e2e8f0')+';border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||(isIR?'IR model':'NAM model'))+' · ID '+(m.id==null?i+1:m.id);b.onclick=()=>loadT3KTone(tone,m,isIR,models);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+(e.message||e);}}
-async function loadT3KTone(tone,model,isIR,allModels){const box=el('nam8T3KResults');try{box.textContent='Resolving selected variant…';if(T3K.resolveModel){const resolved=await T3K.resolveModel(tone.id,model);model=resolved.model;if(resolved.variants&&resolved.variants.length)allModels=resolved.variants;}if(!model||!model.model_url)throw new Error('TONE3000 returned no download URL for the selected variant');box.textContent='Downloading '+(model.name||'variant')+'…';const blob=await T3K.downloadModel(model.model_url);let toneMeta=tone||{},thumb=toneThumbnail(toneMeta,model);if(!thumb&&toneMeta.id!=null&&T3K.getTone){try{const raw=await T3K.getTone(toneMeta.id),detail=raw&&(raw.data||raw);if(detail){toneMeta=Object.assign({},toneMeta,detail);thumb=toneThumbnail(toneMeta,model);}}catch(e){}}const label=(toneMeta.title||toneMeta.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR||t3kTarget.format==='ir'){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(t3kTarget.target,buf,{name:label,toneId:toneMeta.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:toneMeta.title||toneMeta.name||'',thumbnail:thumb});}else{const json=JSON.parse(await blob.text());let variants=Array.isArray(allModels)?allModels:[];if(!variants.some(x=>String(x.id)===String(model.id))){try{const vr=await T3K.listModels(toneMeta.id||tone.id),a=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];if(a.length)variants=a;}catch(e){}}if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);await setNAM(t3kTarget.target,json,{name:label,tier:explicitTierForVariant(json,model),toneId:toneMeta.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:toneMeta.title||toneMeta.name||'',variants,thumbnail:thumb,enabled:true});}const modal=el('nam8T3KModal');if(modal)modal.style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);paintRig();}}
+async function showT3KModels(tone){const box=el('nam8T3KResults');box.textContent='Loading model variants…';try{const isIR=t3kTarget.format==='ir';const res=await T3K.listModels(tone.id),models=Array.isArray(res)?res:(res.data||res.models||[]);box.innerHTML='';if(!models.length){box.textContent=isIR?'No downloadable IR models were returned.':'No downloadable model variants.';return;}if(!isIR){const lite=preferredA2Lite(models);if(lite){box.textContent='A2 Lite available — loading…';await loadT3KTone(tone,lite,false,models);return;}}models.forEach((m,i)=>{const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;padding:10px;background:#111827;color:'+(isIR?'#5eead4':'#e2e8f0')+';border:0;border-bottom:1px solid #263347;';b.textContent=(m.name||(isIR?'IR model':'NAM model'))+' · ID '+(m.id==null?i+1:m.id);b.onclick=()=>loadT3KTone(tone,m,isIR,models);box.appendChild(b);});}catch(e){box.textContent='Variants failed: '+(e.message||e);}}
+async function loadT3KTone(tone,model,isIR,allModels){const box=el('nam8T3KResults'),targetContext=t3kTarget?{target:t3kTarget.target,format:t3kTarget.format}:null;if(!targetContext){box.textContent='Choose a NAM or IR slot first.';return;}isIR=targetContext.format==='ir';const requestedFormat=isIR?'ir':'nam',toneFormat=String(tone&&tone.format||'').toLowerCase();if(toneFormat&&toneFormat!==requestedFormat){box.textContent='Selected '+requestedFormat.toUpperCase()+' slot cannot load a '+toneFormat.toUpperCase()+' tone.';return;}try{box.textContent='Resolving selected variant…';if(T3K.resolveModel){const resolved=await T3K.resolveModel(tone.id,model);model=resolved.model;if(resolved.variants&&resolved.variants.length)allModels=resolved.variants;}if(!model||!model.model_url)throw new Error('TONE3000 returned no download URL for the selected variant');box.textContent='Downloading '+(model.name||'variant')+'…';const blob=await T3K.downloadModel(model.model_url,isIR?'ir':'nam');let toneMeta=tone||{},thumb=toneThumbnail(toneMeta,model);if(!thumb&&toneMeta.id!=null&&T3K.getTone){try{const raw=await T3K.getTone(toneMeta.id),detail=raw&&(raw.data||raw);if(detail){toneMeta=Object.assign({},toneMeta,detail);thumb=toneThumbnail(toneMeta,model);}}catch(e){}}const label=(toneMeta.title||toneMeta.name||'TONE3000')+(model.name?' — '+model.name:'');if(isIR){const c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(targetContext.target,buf,{name:label,toneId:toneMeta.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:toneMeta.title||toneMeta.name||'',thumbnail:thumb});}else{const json=JSON.parse(await blob.text());let variants=Array.isArray(allModels)?allModels:[];if(!variants.some(x=>String(x.id)===String(model.id))){try{const vr=await T3K.listModels(toneMeta.id||tone.id),a=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];if(a.length)variants=a;}catch(e){}}if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);await setNAM(targetContext.target,json,{name:label,tier:explicitTierForVariant(json,model),toneId:toneMeta.id||tone.id,modelId:model.id,modelName:model.name,toneTitle:toneMeta.title||toneMeta.name||'',variants,thumbnail:thumb,enabled:true});}const modal=el('nam8T3KModal');if(modal)modal.style.display='none';status(label+' loaded');}catch(e){box.textContent='Load failed: '+(e.message||e);paintRig();}}
 async function switchNAMVariant(key,model){
  const st=NAM[key];if(!st||!model||!st.toneId)return;
  try{
@@ -2503,12 +2543,31 @@ async function switchNAMVariant(key,model){
   else {const vr=await T3K.listModels(st.toneId);const fresh=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];if(fresh.length){variants=fresh;picked=fresh.find(x=>String(x.id)===String(model.id))||picked;}}
   if(!picked.model_url)throw new Error('TONE3000 did not return a download URL for variant '+(picked.name||picked.id||''));
   status('Loading '+(picked.name||'variant')+' into '+key+'…');
-  const blob=await T3K.downloadModel(picked.model_url),json=JSON.parse(await blob.text());
+  const blob=await T3K.downloadModel(picked.model_url,'nam'),json=JSON.parse(await blob.text());
   if(!variants.some(x=>String(x.id)===String(picked.id)))variants=variants.concat([picked]);
   await setNAM(key,json,{name:(st.toneTitle||st.toneId)+(picked.name?' — '+picked.name:''),tier:explicitTierForVariant(json,picked),toneId:st.toneId,modelId:picked.id,modelName:picked.name||'',toneTitle:st.toneTitle,variants,thumbnail:st.thumbnail,enabled:st.enabled});
  }catch(e){status(key+' variant switch failed: '+(e.message||e));paintRig();}
 }
-async function loadT3KModel(slot,tone,model){if(IR_KEYS.includes(slot)||['cab','IR','IR-L','IR-R'].includes(slot)){t3kTarget={target:IR_KEYS.includes(slot)?slot:(slot==='IR-R'?'IR3':slot==='IR-L'?'IR1':'IR1'),format:'ir'};}else{t3kTarget={target:keyAlias(slot==='pedal'?'L1':slot==='amp'?'L2':slot),format:'nam'};}if(t3kTarget.format==='ir'){const blob=await T3K.downloadModel(model.model_url),c=audioContext();if(!c)throw new Error('Audio engine is not ready');const buf=await c.decodeAudioData(await blob.arrayBuffer());await setIR(t3kTarget.target,buf,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,thumbnail:toneThumbnail(tone,model)});}else{const blob=await T3K.downloadModel(model.model_url);let variants=[];try{const vr=await T3K.listModels(tone.id);variants=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];}catch(e){}if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);const json=JSON.parse(await blob.text());await setNAM(t3kTarget.target,json,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),tier:explicitTierForVariant(json,model),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants,thumbnail:toneThumbnail(tone,model),enabled:true});}}
+async function loadT3KModel(slot,tone,model){
+ const isIR=IR_KEYS.includes(slot)||['cab','IR','IR-L','IR-R'].includes(slot);
+ const targetContext={target:isIR?(IR_KEYS.includes(slot)?slot:(slot==='IR-R'?'IR3':slot==='IR-L'?'IR1':'IR1')):keyAlias(slot==='pedal'?'L1':slot==='amp'?'L2':slot),format:isIR?'ir':'nam'};
+ const actualFormat=String(tone&&tone.format||'').toLowerCase();
+ if(actualFormat&&actualFormat!==targetContext.format)throw new Error('Selected '+targetContext.format.toUpperCase()+' slot cannot load a '+actualFormat.toUpperCase()+' tone.');
+ t3kTarget=targetContext;
+ if(targetContext.format==='ir'){
+  const blob=await T3K.downloadModel(model.model_url,'ir'),c=audioContext();
+  if(!c)throw new Error('Audio engine is not ready');
+  const buf=await c.decodeAudioData(await blob.arrayBuffer());
+  await setIR(targetContext.target,buf,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,thumbnail:toneThumbnail(tone,model)});
+ }else{
+  const blob=await T3K.downloadModel(model.model_url,'nam');
+  let variants=[];
+  try{const vr=await T3K.listModels(tone.id);variants=Array.isArray(vr)?vr:(vr&&((vr.data)||(vr.models)))||[];}catch(e){}
+  if(!variants.some(x=>String(x.id)===String(model.id)))variants.push(model);
+  const json=JSON.parse(await blob.text());
+  await setNAM(targetContext.target,json,{name:(tone.title||tone.name||'TONE3000')+(model.name?' — '+model.name:''),tier:explicitTierForVariant(json,model),toneId:tone.id,modelId:model.id,modelName:model.name,toneTitle:tone.title,variants,thumbnail:toneThumbnail(tone,model),enabled:true});
+ }
+}
 function initialize(){buildUI();paintRigInputUI(rigExternalInput.getState());loadSnapshots().catch(e=>console.warn('[NAM8 snapshots]',e));const panel=el('rigPanel');if(panel){panel.style.maxHeight='min(76vh,900px)';panel.style.overflowY='auto';}window.RigSnapshotBridge={version:VERSION,getSnapshot:i=>SNAPSHOTS[i]||null,getSnapshotForDisk:i=>SNAPSHOTS[i]?snapshotForDisk(SNAPSHOTS[i]):null,loadFromDisk:loadSnapshots,capture,saveCurrent:saveSnapshot,clearIR:()=>clearIR('ALL'),recall:recallSnapshot,loadT3KModel,setStatus:status};window.NAM8={version:VERSION,slots:NAM,ir:IR,route,input:{getState:rigExternalInput.getState,enumerate:refreshRigInputDevices,setMode:rigExternalInput.setMode,setDeviceId:rigExternalInput.setDeviceId,connect:rigExternalInput.connect,disconnect:rigExternalInput.disconnect},setModel:setNAM,clearSlot:clearNAM,setIR,clearIR,setEnabled:setNAMEnabled,setSlotFx:async(key,patch)=>{key=keyAlias(key);if(!NAM[key])throw new Error('Unknown NAM slot '+key);const fx=NAM[key].fx=Object.assign({},SLOT_DSP_DEFAULT,NAM[key].fx||{},patch||{});if(slotFx[key])slotFx[key].apply();await route();paintRig();return Object.assign({},fx);},setIRFx:async(key,patch)=>{key=irAlias(key);if(!IR[key])throw new Error('Unknown IR slot '+key);const fx=IR[key].fx=Object.assign({},IR_FX_DEFAULT,IR[key].fx||{},patch||{});if(irFx[key])irFx[key].apply();await route();paintRig();return Object.assign({},fx);},setInputMode:(side,mode)=>{side=String(side||'').toUpperCase();if(!SIDES.includes(side)||!['both','left','right'].includes(mode))throw new Error('Invalid side/input mode');inputModes[side]=mode;try{window.localStorage.setItem(INPUT_MODE_KEY+'.'+side,mode);}catch(e){}return route().then(paintRig);},capture,recall:restoreSnapshot,isActive:active};paintRig();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initialize,{once:true});else initialize();
 window.registerModule&&window.registerModule('rig',{version:VERSION,isStub:false,NAMRealtime:window.NAMRealtime,NAM8:window.NAM8,T3K:window.T3K});
