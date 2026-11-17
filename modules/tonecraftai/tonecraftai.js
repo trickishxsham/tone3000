@@ -38,25 +38,83 @@ function inferTone(prompt){
  };
  return {tags,third,fx,queries:{R1:[pedalQuery,tags.join(' '),promptTerms].filter(Boolean).join(' '),R2:['guitar amplifier',tags.join(' '),promptTerms].filter(Boolean).join(' '),R3:third.query,IR1:['guitar cabinet impulse response',tags.join(' '),promptTerms].filter(Boolean).join(' ')}};
 }
-function listOf(r){return Array.isArray(r)?r:(r&&(r.data||r.tones||r.results||r.models)||[]);}
+function listOf(r){
+ if(Array.isArray(r))return r;
+ if(!r||typeof r!=='object')return [];
+ for(const key of ['data','tones','results','models','items']){
+  const value=r[key];
+  if(Array.isArray(value))return value;
+  if(value&&typeof value==='object'){
+   const nested=listOf(value);
+   if(nested.length)return nested;
+  }
+ }
+ return [];
+}
 function pickVariant(models,tier){
  const downloadable=(models||[]).filter(m=>m&&m.id!=null&&typeof m.model_url==='string'&&m.model_url.trim());
  if(!downloadable.length)return null;
  const re=tier==='full'?/A2\s*Full|Full/i:/A2\s*Lite|Lite/i;
  return downloadable.find(m=>re.test(String(m.name||m.title||'')))||downloadable.find(m=>/A2/i.test(String(m.name||'')))||downloadable[0];
 }
+function compactSearchSeed(slot,query){
+ const q=String(query||'').toLowerCase();
+ const modelNames=['vox ac30','ac30','twin reverb','deluxe reverb','bassman','jtm45','jcm800','plexi','marshall','fender','mesa boogie','dual rectifier','orange rockerverb','supro','celestion vintage 30','vintage 30','greenback','jensen','blue alnico','g12m'];
+ const model=modelNames.find(x=>q.includes(x));
+ if(model)return model;
+ if(slot==='R1'||slot==='R3'){
+  if(/\bfuzz\b/.test(q))return 'fuzz';
+  if(/distortion|high gain|metal/.test(q))return 'distortion';
+  if(/clean|transparent|chime|boost/.test(q))return 'boost';
+  return 'overdrive';
+ }
+ if(slot==='IR1'){
+  const tag=['blues','jazz','rock','metal','clean','vintage'].find(x=>q.includes(x));
+  return tag||'cabinet';
+ }
+ const ampTag=['blues','jazz','metal','clean','classic rock','vintage'].find(x=>q.includes(x));
+ return ampTag||'amplifier';
+}
 async function searchTone(api,slot,query,tier){
  const ir=slot==='IR1',gear=slot==='R1'||slot==='R3'?'pedal':'amp';
- const res=await api.search({query,gears:ir?'cab':gear,format:ir?'ir':'nam',sort:'trending',page:1,page_size:30});
- const tones=listOf(res),lookupErrors=[];
- for(const tone of tones.slice(0,24)){
-  if(tone.id==null)continue;
+ const seed=compactSearchSeed(slot,query);
+ const attempts=[{query:seed,sort:'best-match'},{query:'',sort:'trending'}];
+ const lookupErrors=[],seen=new Set();let candidateCount=0,firstTone=null,searchErrors=[],attemptsUsed=0;
+ for(let attempt=0;attempt<attempts.length;attempt++){
+  attemptsUsed=attempt+1;
+  const options={gears:ir?'cab':gear,format:ir?'ir':'nam',sort:attempts[attempt].sort,page:1,page_size:25};
+  if(attempts[attempt].query)options.query=attempts[attempt].query;
+  let tones=[];
   try{
-   const raw=await api.listModels(tone.id),models=listOf(raw),model=pickVariant(models,tier);
-   if(model)return {slot,tone,models:models.filter(m=>m&&m.id!=null&&typeof m.model_url==='string'&&m.model_url.trim()),model,query,ir,candidateCount:tones.length,lookupErrors};
-  }catch(err){lookupErrors.push((tone.title||tone.name||('Tone '+tone.id))+': '+(err&&err.message||String(err)));}
+   const res=await api.search(options);
+   tones=listOf(res);
+  }catch(err){
+   const message=err&&err.message||String(err);
+   searchErrors.push(message);
+   // A broad retry is useful for a rejected query parameter, but not for rate limits/auth failures.
+   if(attempt===0&&/(?:400|invalid|validation)/i.test(message))continue;
+   break;
+  }
+  for(const tone of tones){
+   if(!tone||tone.id==null||seen.has(String(tone.id)))continue;
+   seen.add(String(tone.id));candidateCount++;if(!firstTone)firstTone=tone;
+  }
+  if(!tones.length)continue;
+  for(const tone of tones){
+   if(!tone||tone.id==null)continue;
+   try{
+    const raw=await api.listModels(tone.id),models=listOf(raw),model=pickVariant(models,tier);
+    if(model){
+     const downloadable=models.filter(m=>m&&m.id!=null&&typeof m.model_url==='string'&&m.model_url.trim());
+     return {slot,tone,models:downloadable,model,query,searchQuery:options.query||'',searchAttempts:attempt+1,ir,candidateCount,lookupErrors,searchErrors};
+    }
+   }catch(err){lookupErrors.push((tone.title||tone.name||('Tone '+tone.id))+': '+(err&&err.message||String(err)));}
+  }
+  // A non-empty catalogue response means the filters worked. Do not spend another
+  // rate-limited search call if those tones simply lack a downloadable A2 variant.
+  if(tones.length)break;
  }
- return {slot,tone:tones[0]||null,models:[],model:null,query,ir,candidateCount:tones.length,lookupErrors};
+ return {slot,tone:firstTone,models:[],model:null,query,searchQuery:'',searchAttempts:attemptsUsed,ir,candidateCount,lookupErrors,searchErrors};
 }
 function defaultPrompt(){return 'A warm, articulate blues-rock lead. Bloomfield-style sustain, singing upper mids, gritty but controlled breakup, tight bass and excellent note separation.';}
 function render(){
@@ -86,7 +144,7 @@ async function generate(){
   renderProposal();
   const ready=found.filter(x=>x.model).length,failed=found.filter(x=>!x.model);
   status.textContent=failed.length
-   ?'Partial proposal: '+ready+'/'+found.length+' slots have downloadable models. '+failed.map(x=>x.slot+': '+(x.lookupErrors&&x.lookupErrors.length?'lookup failed for '+x.lookupErrors.length+' tone(s) — '+x.lookupErrors[0]:'no downloadable variant among '+(x.candidateCount||0)+' tone result(s)')).join(' · ')
+   ?'Partial proposal: '+ready+'/'+found.length+' slots have downloadable models. '+failed.map(x=>x.slot+': '+(x.searchErrors&&x.searchErrors.length?'search failed — '+x.searchErrors[0]:x.lookupErrors&&x.lookupErrors.length?'lookup failed for '+x.lookupErrors.length+' tone(s) — '+x.lookupErrors[0]:'no downloadable variant among '+(x.candidateCount||0)+' tone result(s)')).join(' · ')
    :'Proposal ready: all '+ready+' slots have downloadable models. Review the selections and controls before applying.';
  }catch(e){status.textContent='ToneCraftAI could not complete the search: '+(e.message||e);console.error('[ToneCraftAI]',e);}
 }
@@ -96,7 +154,7 @@ function renderProposal(){
   const title=slot.slot==='R1'?'R1 · DRIVE / BOOST':slot.slot==='R2'?'R2 · AMPLIFIER':slot.slot==='R3'?'R3 · OPTIONAL ADDITIONAL STAGE':'IR1 · CABINET';
   const fx=proposal.plan.fx[slot.slot],keys=Object.keys(fx);
   const variants=slot.models.map((m,i)=>'<option value="'+i+'" '+(String(m.id)===String(slot.model&&slot.model.id)?'selected':'')+'>'+esc(m.name||('Variant '+(i+1)))+'</option>').join('');
-  const lookupNote=slot.lookupErrors&&slot.lookupErrors.length?'Model lookup failed for '+slot.lookupErrors.length+' tone result(s): '+slot.lookupErrors.slice(0,2).join(' · '):'No downloadable variant among '+(slot.candidateCount||0)+' tone result(s).';
+  const lookupNote=slot.searchErrors&&slot.searchErrors.length?'TONE3000 search failed: '+slot.searchErrors.slice(0,2).join(' · '):slot.lookupErrors&&slot.lookupErrors.length?'Model lookup failed for '+slot.lookupErrors.length+' tone result(s): '+slot.lookupErrors.slice(0,2).join(' · '):'No downloadable variant among '+(slot.candidateCount||0)+' tone result(s).';
   return '<article class="tc-card" data-tc-slot="'+slot.slot+'"><h4>'+title+'</h4><div class="tc-model">'+esc(slot.tone&&(slot.tone.title||slot.tone.name)||'No compatible TONE3000 model found')+'</div><div class="tc-meta">'+esc(slot.model&&slot.model.name||'No downloadable variant')+' · '+(slot.ir?'IR':'NAM')+'</div>'+(slot.model?'<label class="tc-meta">MODEL VARIANT<select data-tc-variant>'+variants+'</select></label>':'<div class="tc-meta">'+esc(lookupNote)+'</div>')+
   '<div class="tc-fx">'+keys.map(k=>'<label>'+esc(k)+(k==='eqOn'?'<input type="checkbox" data-tc-fx="eqOn" '+(fx.eqOn?'checked':'')+' style="display:block;width:auto">':'<input type="number" step="0.1" min="'+FX_RANGES[k][0]+'" max="'+FX_RANGES[k][1]+'" data-tc-fx="'+k+'" value="'+esc(fx[k])+'">')+'</label>').join('')+'</div>'+(slot.model?'<button type="button" data-tc-apply="'+index+'">LOAD '+slot.slot+' + APPLY CONTROLS</button>':'')+'</article>';
  }).join('');
