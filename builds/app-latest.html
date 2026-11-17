@@ -1,14 +1,14 @@
 <!--
-IMPROVS2 BUILD 985 — HTML-FIRST RHYMELIGHT RESULTS AND T3K HANDOFF
-App shell carried forward from Build 955.
+IMPROVS2 BUILD 987 — RATE-MATCHED NAM AUDIO AND ADAPTIVE LOAD GUARD
+App shell carried forward from Build 986; Build 986 TONE3000 OTP and Rhymelight grade-first fixes retained.
 Patched components in Build 958:
   - modules/voice2guitar/voice2guitar.js — continuous note auto-match at >=90% pitch confidence, stable for five frames, with no timeout
-The shared microphone lease pool is retained. The global A-reference tuner integration, saved calibration frequencies, and NAM/IR modules are unchanged.
+The shared microphone lease pool, A-reference tuner integration, and saved calibration frequencies are retained. The realtime RIG module advances to 4.9.8.987; the offline NAM engine remains 4.9.8.862.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head><script src="../capacitor.js"></script>
-<!-- Build 4.9.8.984 — Eminem-calibrated colour-map technical-wit scoring; Genius API and Build 963 audio engine/NAM/IR routing retained -->
+<!-- Build 4.9.8.987 — rate-matched NAM blocks, underrun-safe AudioWorklet and adaptive load guard -->
 <script>
 // Build 958 retains Build 955 shared microphone stream leases. Key Listener and Voice2Guitar must not
 // independently open/stop the same device stream while the other feature is using it.
@@ -125,8 +125,8 @@ window.__rootRelative=function(path){
 window.__MODULES = window.__MODULES || {};
 // Explicit revisions invalidate the independent runtime modules when their code changes.
 window.__MODULE_CACHE_REVISIONS = Object.assign({}, window.__MODULE_CACHE_REVISIONS || {}, {
-  rig: '985-custom-tabs-oauth-r5',
-  rhymelight: '985-separated-results-r1'
+  rig: '987-rate-matched-nam-guard-r1',
+  rhymelight: '986-grade-first-r2'
 });
 window.__moduleScriptUrl = function(name){
   var file = name==='snapshot'?'snapshots':name;
@@ -348,7 +348,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.985';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.987';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 var __t3kNative=!!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform());
@@ -3490,9 +3490,13 @@ const DRIVE_CURVE=(()=>{const n=1024,c=new Float32Array(n),k=14;
 // §AUDIO ── WebAudio engine: context (_AC), master/comp/reverb, synth + sampler voices
 function ensureAudio(){
   if(_AC){ if(_AC.state==='suspended')_AC.resume(); return; }
-  // 'interactive' = smallest buffer the device allows — lowest trigger latency, snappiest play
-  _AC=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
-  console.info('[audio] AudioContext sample rate: '+_AC.sampleRate+' Hz; realtime NAM rate conversion is not yet implemented.');
+  // Prefer the established 48 kHz host rate while retaining the interactive latency hint.
+  // Some Android WebViews/devices may reject a requested rate; fall back cleanly and let
+  // the NAM AudioWorklet resample each capture to the actual host rate.
+  var AudioContextCtor=window.AudioContext||window.webkitAudioContext;
+  try{ _AC=new AudioContextCtor({sampleRate:48000,latencyHint:'interactive'}); }
+  catch(rateError){ _AC=new AudioContextCtor({latencyHint:'interactive'}); console.warn('[audio] 48 kHz request unavailable; using device rate:',rateError&&rateError.message||rateError); }
+  console.info('[audio] AudioContext sample rate: '+_AC.sampleRate+' Hz; NAM models are resampled to the host rate in the AudioWorklet (128-frame render quantum).');
   // master bus: gain boost into a limiter, so it's loud but never clips harshly
   _MASTER=_AC.createGain(); _MASTER.gain.value=1.5;
   window.__IMPROVS2_RIG_MASTER=_MASTER;
