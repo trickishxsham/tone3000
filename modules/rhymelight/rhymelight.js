@@ -16,7 +16,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '4.9.8.988';
+  var VERSION = '4.9.8.989';
   var MAX_TRACKS = 6;
   var PALETTE = ['#F0F2D0', '#5188DE', '#FF873F', '#70D9BD', '#D65DB7', '#98E66D', '#191919', '#FFD400', '#72D0E8', '#F04443', '#00C978', '#A875C5'];
   var SECONDARY_PALETTE = ['#F6C85F', '#6EC5FF', '#F78DA7', '#8DE0A8', '#B69CFF', '#FF9F68', '#55D6C2', '#F0A6CA', '#A6C8FF', '#D7D86E', '#E89BFF', '#9DD9D2'];
