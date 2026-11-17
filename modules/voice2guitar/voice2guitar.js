@@ -1,10 +1,10 @@
 /* IMPROVS2 voice2guitar — continuous microphone pitch calibration and sampler triggering.
- * Build 4.9.8.989. Voice2Guitar always analyses its leased microphone stream, never the Listener's strongest mixed analyser; the mic remains independent of Listener start/stop. Keep the analysis loop alive if an individual frame throws; note auto-matching has no timeout and requires >=90% pitch confidence plus stable frames; audio gesture training remains a separate finite capture. A-reference calibration and NAM/IR routing are untouched.
+ * Build 4.9.8.990. Voice2Guitar always analyses its leased microphone stream, never the Listener's strongest mixed analyser; the mic remains independent of Listener start/stop. Keep the analysis loop alive if an individual frame throws; note auto-matching has no timeout and requires >=90% pitch confidence plus stable frames; audio gesture training remains a separate finite capture. A-reference calibration and NAM/IR routing are untouched.
  */
 (function(){
 'use strict';
 if(window.__MODULES && window.__MODULES.voice2guitar) return;
-const VERSION='4.9.8.989';
+const VERSION='4.9.8.990';
 const STORE='improvs2.voice2guitar.v1';
 const GESTURE_STORE='improvs2.voice2guitar.gestures.v1';
 const HARMONICA_PROFILES=['Suzuki M-20 — Low C (underlined C)','Suzuki 24-Hole Tremolo — C','Promusica Gold — C','Seydel Session Steel — B♭','Hohner Special 20 — B natural'];
