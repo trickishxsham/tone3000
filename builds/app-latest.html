@@ -1,14 +1,14 @@
 <!--
-IMPROVS2 BUILD 987 — RATE-MATCHED NAM AUDIO AND ADAPTIVE LOAD GUARD
-App shell carried forward from Build 986; Build 986 TONE3000 OTP and Rhymelight grade-first fixes retained.
+IMPROVS2 BUILD 988 — RHYMELIGHT SEMANTIC SCORING, VOICE2GUITAR LOW-LATENCY TRACKING, TONECRAFT AI
+App shell carried forward from Build 987. Build 988 adds per-track grade placement above lyrics, semantic craft estimates, lower-latency Voice2Guitar pitch tracking and standalone ToneCraftAI.
 Patched components in Build 958:
   - modules/voice2guitar/voice2guitar.js — continuous note auto-match at >=90% pitch confidence, stable for five frames, with no timeout
-The shared microphone lease pool, A-reference tuner integration, and saved calibration frequencies are retained. The realtime RIG module advances to 4.9.8.987; the offline NAM engine remains 4.9.8.862.
+The shared microphone lease pool, A-reference tuner integration, saved calibration frequencies, 48 kHz NAM path and adaptive load governor are retained. This is an HTML-first release; no APK changes.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head><script src="../capacitor.js"></script>
-<!-- Build 4.9.8.987 — rate-matched NAM blocks, underrun-safe AudioWorklet and adaptive load guard -->
+<!-- Build 4.9.8.988 — Rhymelight semantic analysis, Voice2Guitar low-latency tracking and ToneCraftAI -->
 <script>
 // Build 958 retains Build 955 shared microphone stream leases. Key Listener and Voice2Guitar must not
 // independently open/stop the same device stream while the other feature is using it.
@@ -125,8 +125,10 @@ window.__rootRelative=function(path){
 window.__MODULES = window.__MODULES || {};
 // Explicit revisions invalidate the independent runtime modules when their code changes.
 window.__MODULE_CACHE_REVISIONS = Object.assign({}, window.__MODULE_CACHE_REVISIONS || {}, {
-  rig: '987-rate-matched-nam-guard-r1',
-  rhymelight: '986-grade-first-r2'
+  rig: '988-tonecraft-slot-fx-r1',
+  rhymelight: '988-semantic-grade-first-r1',
+  voice2guitar: '988-low-latency-pitch-r1',
+  tonecraftai: '988-prompt-rig-builder-r1'
 });
 window.__moduleScriptUrl = function(name){
   var file = name==='snapshot'?'snapshots':name;
@@ -348,7 +350,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.987';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.988';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 var __t3kNative=!!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform());
@@ -801,6 +803,14 @@ body.carousel-mode .switch-row{display:none !important;}
 
 
 
+</style>
+<style id="build988-feature-fit">
+/* Build 988: feature controls must wrap instead of clipping on narrow phones. */
+#tonecraftaiToggle{max-width:100%;white-space:normal;line-height:1.15;overflow-wrap:anywhere}
+#voice2guitarToggle,#rhymelightToggle,#sampToggle,#btToggle,#spectateToggle,#csToggle,#hiveToggle,#notationToggle,#libToggle{max-width:100%;white-space:normal;line-height:1.15;overflow-wrap:anywhere}
+#tonecraftaiPanel{width:100%;min-width:0;overflow:hidden}
+#tonecraftaiPanel textarea,#tonecraftaiPanel input,#tonecraftaiPanel select{max-width:100%;min-width:0}
+@media(max-width:430px){#tonecraftaiPanel{padding:8px!important}#tonecraftaiPanel [data-tc-grid]{grid-template-columns:minmax(0,1fr)!important}}
 </style>
 </head>
 <body class=" unlocked">
@@ -7472,10 +7482,10 @@ if(!vp){vp=document.createElement('div');vp.id='voice2guitarFeaturePanel';vp.sty
 if(rp){rp.style.margin='8px 0';host.insertBefore(rp,anchor);}
 host.insertBefore(vp,anchor);
 function closeOthers(keep){
-['sampPanel','csPanel','hivePanel','btPanel','libPanel','notationPanel','rhymelightPanel','voice2guitarFeaturePanel','rigPanel'].forEach(function(id){
+['sampPanel','csPanel','hivePanel','btPanel','libPanel','notationPanel','rhymelightPanel','voice2guitarFeaturePanel','tonecraftaiPanel','rigPanel'].forEach(function(id){
 if(id!==keep){var p=document.getElementById(id);if(p){if(id==='rigPanel')p.style.setProperty('display','none','important');else p.style.display='none';p.setAttribute('data-open','0');p.classList.remove('open');}}
 });
-['sampToggle','csToggle','hiveToggle','btToggle','libToggle','notationToggle','rhymelightToggle','voice2guitarToggle','btnRig'].forEach(function(id){
+['sampToggle','csToggle','hiveToggle','btToggle','libToggle','notationToggle','rhymelightToggle','voice2guitarToggle','tonecraftaiToggle','btnRig'].forEach(function(id){
 if((id==='btnRig'&&keep==='rigPanel')||(id==='voice2guitarToggle'&&keep==='voice2guitarFeaturePanel'))return;
 var b=document.getElementById(id);if(b)b.classList.remove('active','open');
 });
@@ -17777,7 +17787,7 @@ window.GlobalBoard={
   var MAP={
     sampToggle:'sampPanel', btnRig:'rigPanel', voice2guitarToggle:'voice2guitarFeaturePanel',
     csToggle:'csPanel', hiveToggle:'hivePanel', btToggle:'btPanel',
-    libToggle:'libPanel', notationToggle:'notationPanel', rhymelightToggle:'rhymelightPanel'
+    libToggle:'libPanel', notationToggle:'notationPanel', rhymelightToggle:'rhymelightPanel', tonecraftaiToggle:'tonecraftaiPanel'
   };
   document.addEventListener('click',function(e){
     var t=e.target&&e.target.closest&&e.target.closest('[id]');
@@ -19915,5 +19925,33 @@ window.__ensureMultiplayer = function(){
   });
 })();
 </script>
+
+<script>
+// Build 988 — ToneCraftAI is a separate, lazy-loaded feature/module.
+(function(){
+ function install(){
+  if(document.getElementById('tonecraftaiToggle'))return;
+  var voice=document.getElementById('voice2guitarToggle');
+  if(!voice)return;
+  var btn=document.createElement('button');btn.id='tonecraftaiToggle';btn.type='button';btn.textContent='✦ TONECRAFT AI';
+  btn.setAttribute('data-tip-title','TONECRAFT AI');btn.setAttribute('data-tip','Describe your target guitar tone. Build and review a TONE3000 NAM/IR rig proposal.');
+  btn.style.cssText='display:inline-block;margin:0 .4em .45em 0;padding:.3em .8em;cursor:pointer;background:linear-gradient(135deg,#6d28d9,#312e81);color:#fff;border:1px solid #a78bfa;border-radius:5px;font-weight:900;font-family:Bangers,cursive;font-size:1.05em;letter-spacing:.06em;';
+  voice.insertAdjacentElement('afterend',btn);
+  var panel=document.createElement('div');panel.id='tonecraftaiPanel';panel.style.cssText='display:none;margin:8px 0;padding:12px;background:#101827;border:1px solid #7c3aed;border-radius:10px;color:#e5e7eb;';
+  btn.insertAdjacentElement('afterend',panel);
+  btn.addEventListener('click',async function(){
+   var opening=panel.style.display==='none';
+   document.querySelectorAll('#sampPanel,#csPanel,#hivePanel,#btPanel,#libPanel,#notationPanel,#rhymelightPanel,#voice2guitarFeaturePanel,#rigPanel,#tonecraftaiPanel').forEach(function(el){if(el!==panel)el.style.display='none';});
+   if(!opening){panel.style.display='none';btn.classList.remove('active');return;}
+   panel.style.display='block';btn.classList.add('active');btn.disabled=true;
+   try{var api=await window.loadModule('tonecraftai');if(api&&api.open)api.open(panel);}
+   catch(err){panel.textContent='ToneCraftAI failed to load: '+(err.message||err);console.error('[ToneCraftAI]',err);}
+   finally{btn.disabled=false;}
+  });
+ }
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
+})();
+</script>
+
 </body>
 </html>
