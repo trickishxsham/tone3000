@@ -1,6 +1,6 @@
 <!--
-IMPROVS2 BUILD 988 — RHYMELIGHT SEMANTIC SCORING, VOICE2GUITAR LOW-LATENCY TRACKING, TONECRAFT AI
-App shell carried forward from Build 987. Build 988 adds per-track grade placement above lyrics, semantic craft estimates, lower-latency Voice2Guitar pitch tracking and standalone ToneCraftAI.
+IMPROVS2 BUILD 989 — 48 kHz AUDIO / 480-FRAME LATENCY TARGET / NAM FIFO HARDENING
+App shell carried forward from Build 988. Build 989 is an audio-only hardening increment: 48 kHz preferred AudioContext, 10 ms latency target, fixed-buffer NAM output FIFO, earlier DSP load protection and lower master oversampling.
 Patched components in Build 958:
   - modules/voice2guitar/voice2guitar.js — continuous note auto-match at >=90% pitch confidence, stable for five frames, with no timeout
 The shared microphone lease pool, A-reference tuner integration, saved calibration frequencies, 48 kHz NAM path and adaptive load governor are retained. This is an HTML-first release; no APK changes.
@@ -8,7 +8,7 @@ The shared microphone lease pool, A-reference tuner integration, saved calibrati
 <!DOCTYPE html>
 <html lang="en">
 <head><script src="../capacitor.js"></script>
-<!-- Build 4.9.8.988 — Rhymelight semantic analysis, Voice2Guitar low-latency tracking and ToneCraftAI -->
+<!-- Build 4.9.8.989 — Rhymelight semantic analysis, Voice2Guitar low-latency tracking and ToneCraftAI -->
 <script>
 // Build 958 retains Build 955 shared microphone stream leases. Key Listener and Voice2Guitar must not
 // independently open/stop the same device stream while the other feature is using it.
@@ -125,7 +125,7 @@ window.__rootRelative=function(path){
 window.__MODULES = window.__MODULES || {};
 // Explicit revisions invalidate the independent runtime modules when their code changes.
 window.__MODULE_CACHE_REVISIONS = Object.assign({}, window.__MODULE_CACHE_REVISIONS || {}, {
-  rig: '988-tonecraft-slot-fx-r1',
+  rig: '989-audio-480-frame-latency-r1',
   rhymelight: '988-semantic-grade-first-r1',
   voice2guitar: '988-low-latency-pitch-r1',
   tonecraftai: '988-prompt-rig-builder-r1'
@@ -350,7 +350,7 @@ window.registerSamplePack = function(p){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<script>window.BUILD='4.9.8.988';document.title='IMPROVS2 v'+window.BUILD;
+<script>window.BUILD='4.9.8.989';document.title='IMPROVS2 v'+window.BUILD;
 // TONE3000 v1 = OAuth 2.0 PKCE only (legacy ?api_key= is v0, returns 401 on v1). OAuth needs https redirect origin (GitHub Pages).
 window.T3K_PUBLISHABLE_KEY='t3k_pub_QvpcQwa5J8yM4U1bgi8YjlpjaNjIBtjf';
 var __t3kNative=!!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform());
@@ -805,7 +805,7 @@ body.carousel-mode .switch-row{display:none !important;}
 
 </style>
 <style id="build988-feature-fit">
-/* Build 988: feature controls must wrap instead of clipping on narrow phones. */
+/* Build 989: feature controls must wrap instead of clipping on narrow phones. */
 #tonecraftaiToggle{max-width:100%;white-space:normal;line-height:1.15;overflow-wrap:anywhere}
 #voice2guitarToggle,#rhymelightToggle,#sampToggle,#btToggle,#spectateToggle,#csToggle,#hiveToggle,#notationToggle,#libToggle{max-width:100%;white-space:normal;line-height:1.15;overflow-wrap:anywhere}
 #tonecraftaiPanel{width:100%;min-width:0;overflow:hidden}
@@ -3500,13 +3500,22 @@ const DRIVE_CURVE=(()=>{const n=1024,c=new Float32Array(n),k=14;
 // §AUDIO ── WebAudio engine: context (_AC), master/comp/reverb, synth + sampler voices
 function ensureAudio(){
   if(_AC){ if(_AC.state==='suspended')_AC.resume(); return; }
-  // Prefer the established 48 kHz host rate while retaining the interactive latency hint.
-  // Some Android WebViews/devices may reject a requested rate; fall back cleanly and let
-  // the NAM AudioWorklet resample each capture to the actual host rate.
+  // Build 989: request 48 kHz and a 10 ms latency target (480 frames at 48 kHz).
+  // The browser still owns the AudioWorklet render quantum (normally 128 frames); the
+  // 480-frame target is requested from the audio device and reinforced by the NAM FIFO.
+  // Some Android WebViews may reject 48 kHz, so retain a rate fallback without guessing.
   var AudioContextCtor=window.AudioContext||window.webkitAudioContext;
-  try{ _AC=new AudioContextCtor({sampleRate:48000,latencyHint:'interactive'}); }
-  catch(rateError){ _AC=new AudioContextCtor({latencyHint:'interactive'}); console.warn('[audio] 48 kHz request unavailable; using device rate:',rateError&&rateError.message||rateError); }
-  console.info('[audio] AudioContext sample rate: '+_AC.sampleRate+' Hz; NAM models are resampled to the host rate in the AudioWorklet (128-frame render quantum).');
+  var AUDIO_TARGET_RATE=48000, AUDIO_TARGET_FRAMES=480;
+  var AUDIO_TARGET_LATENCY=AUDIO_TARGET_FRAMES/AUDIO_TARGET_RATE;
+  try{ _AC=new AudioContextCtor({sampleRate:AUDIO_TARGET_RATE,latencyHint:AUDIO_TARGET_LATENCY}); }
+  catch(rateError){
+    try{ _AC=new AudioContextCtor({latencyHint:AUDIO_TARGET_LATENCY}); }
+    catch(latencyError){ _AC=new AudioContextCtor({latencyHint:'balanced'}); console.warn('[audio] numeric 10 ms latency hint unavailable:',latencyError&&latencyError.message||latencyError); }
+    console.warn('[audio] 48 kHz request unavailable; using device rate:',rateError&&rateError.message||rateError);
+  }
+  var _baseLatency=Number(_AC.baseLatency)||0, _outputLatency=Number(_AC.outputLatency)||0;
+  window.__IMPROVS2_AUDIO_DIAGNOSTICS={requestedSampleRate:AUDIO_TARGET_RATE,actualSampleRate:_AC.sampleRate,requestedBufferFrames:AUDIO_TARGET_FRAMES,requestedLatencySeconds:AUDIO_TARGET_LATENCY,baseLatencySeconds:_baseLatency,baseLatencyFrames:Math.round(_baseLatency*_AC.sampleRate),outputLatencySeconds:_outputLatency||null};
+  console.info('[audio] '+_AC.sampleRate+' Hz · requested '+AUDIO_TARGET_FRAMES+'-frame / '+(AUDIO_TARGET_LATENCY*1000).toFixed(1)+' ms latency target · browser baseLatency '+(_baseLatency?(_baseLatency*1000).toFixed(2)+' ms ('+Math.round(_baseLatency*_AC.sampleRate)+' frames)':'unavailable')+' · AudioWorklet quantum 128 frames.');
   // master bus: gain boost into a limiter, so it's loud but never clips harshly
   _MASTER=_AC.createGain(); _MASTER.gain.value=1.5;
   window.__IMPROVS2_RIG_MASTER=_MASTER;
@@ -3522,7 +3531,7 @@ function ensureAudio(){
   _MASTERCLIP=_AC.createWaveShaper();
   { const n=8192, c=new Float32Array(n), drive=1.6;   // gentle pre-knee; ceiling still hard at ±1
     for(let i=0;i<n;i++){ const x=(i/(n-1))*2-1; c[i]=Math.tanh(drive*x); }   // |tanh|<1 always
-    _MASTERCLIP.curve=c; _MASTERCLIP.oversample='4x'; }   // 4x oversample kills aliasing on hard peaks
+    _MASTERCLIP.curve=c; _MASTERCLIP.oversample='2x'; }   // 2x oversampling retains anti-aliasing with lower mobile CPU cost
   _MASTERCLIP.connect(_AC.destination);
   // ── RECORD BUS (v567) — a real unity-gain node carrying the same post-clip mix that
   //   reaches the speakers. The recorder taps THIS, not the clipper directly. Previously
@@ -19927,7 +19936,7 @@ window.__ensureMultiplayer = function(){
 </script>
 
 <script>
-// Build 988 — ToneCraftAI is a separate, lazy-loaded feature/module.
+// Build 989 — ToneCraftAI is a separate, lazy-loaded feature/module.
 (function(){
  function install(){
   if(document.getElementById('tonecraftaiToggle'))return;
