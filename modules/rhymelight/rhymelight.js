@@ -1,6 +1,6 @@
 /*
  * RHYMELIGHT — IMPROVS2 rap-song comparison module with official Genius API integration
- * Build: 4.9.8.985
+ * Build: 4.9.8.986
  * Source export: modules/rhymelight/rhymelight.json
  * Pronunciations: bundled CMU Pronouncing Dictionary (see CMUDICT-LICENSE.txt)
  * No AI or Lovable API. Optional Genius developer API uses the user's own Genius client access token.
@@ -16,7 +16,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '4.9.8.985';
+  var VERSION = '4.9.8.988';
   var MAX_TRACKS = 6;
   var PALETTE = ['#F0F2D0', '#5188DE', '#FF873F', '#70D9BD', '#D65DB7', '#98E66D', '#191919', '#FFD400', '#72D0E8', '#F04443', '#00C978', '#A875C5'];
   var SECONDARY_PALETTE = ['#F6C85F', '#6EC5FF', '#F78DA7', '#8DE0A8', '#B69CFF', '#FF9F68', '#55D6C2', '#F0A6CA', '#A6C8FF', '#D7D86E', '#E89BFF', '#9DD9D2'];
@@ -172,7 +172,7 @@
     if (!pronunciation) {
       var estimated = estimateSyllables(word);
       return {
-        text: word, group: null, known: false, syllables: splitSpelling(word, estimated).map(function (part, i, list) {
+        text: word, group: null, known: false, phonemes: null, syllables: splitSpelling(word, estimated).map(function (part, i, list) {
           return { text: part, group: null, stressed: i === 0 && list.length > 1 ? false : i === list.length - 1, rime: null };
         })
       };
@@ -185,6 +185,7 @@
     var wordRime = phones.slice(primary).map(function (s) { return s.rime; }).join(' + ');
     return {
       text: word, group: groupId(wordRime), known: true,
+      phonemes: String(pronunciation).trim().split(/\s+/).map(cleanPhone).join(' '),
       syllables: phones.map(function (s, i) {
         return { text: chunks[i] || word, group: groupId(s.rime), stressed: s.stressed, rime: s.rime };
       })
@@ -193,7 +194,7 @@
 
   function parseWordFallback(word) {
     var estimated = estimateSyllables(word);
-    return { text: word, group: null, known: false, syllables: splitSpelling(word, estimated).map(function (part, i, list) {
+    return { text: word, group: null, known: false, phonemes: null, syllables: splitSpelling(word, estimated).map(function (part, i, list) {
       return { text: part, group: null, stressed: i === list.length - 1, rime: null };
     }) };
   }
@@ -572,7 +573,7 @@
     };
   }
 
-  function computeTrackMetrics(analysis, groupTracks, multiByTrack) {
+  function computeTrackMetrics(analysis, groupTracks, multiByTrack, dictionary) {
     var totalSyllables = 0, rhymed = 0, internal = 0, totalWords = 0, knownWords = 0;
     // Complexity scores are calculated inside each song. Cross-song matches
     // are reported separately and must never inflate a song's own rhyme rate.
@@ -601,6 +602,7 @@
     var flow = calculateFlowScore(analysis, totalSyllables, stressVariation);
     var colourWitProfile = calculateColourWitProfile(analysis);
     var colourWitCalibration = scoreColourWit(colourWitProfile);
+    var semanticCraft = calculateSemanticCraft(analysis, dictionary || {});
     var calculatedTechnicalWit = analysis.technicalWitScore === null
       ? colourWitCalibration.score
       : Number(analysis.technicalWitScore);
@@ -625,8 +627,11 @@
       flowScore: flow.score,
       flowMethod: flow.method,
       sustainedComplexity: calculateSustainedComplexity(analysis),
-      wordplayScore: analysis.wordplayScore,
-      imageryScore: analysis.imageryScore,
+      wordplayScore: analysis.wordplayScore === null ? semanticCraft.wordplay.score : analysis.wordplayScore,
+      imageryScore: analysis.imageryScore === null ? semanticCraft.imagery.score : analysis.imageryScore,
+      wordplayManual: analysis.wordplayScore !== null,
+      imageryManual: analysis.imageryScore !== null,
+      semanticCraft: semanticCraft,
       technicalWitScore: calculatedTechnicalWit,
       technicalWitManual: analysis.technicalWitScore !== null,
       colourWitProfile: colourWitProfile,
@@ -659,7 +664,7 @@
         id: analysis.id,
         name: analysis.name,
         analysis: analysis,
-        metrics: computeTrackMetrics(analysis, groupTracks, multiByTrack)
+        metrics: computeTrackMetrics(analysis, groupTracks, multiByTrack, dictionary || {})
       };
     });
     var sharedGroups = groups.filter(function (group) {
@@ -745,6 +750,93 @@
     return output;
   }
 
+  var WORDPLAY_POLARITY_PAIRS = [
+    ['i','you'],['me','you'],['we','they'],['us','them'],['win','lose'],['life','death'],['love','hate'],
+    ['light','dark'],['rise','fall'],['give','take'],['inside','outside'],['right','wrong'],['rich','poor'],
+    ['heaven','hell'],['top','bottom'],['past','future'],['silence','noise'],['truth','lie'],['angel','devil'],
+    ['king','pawn'],['open','closed'],['free','bound'],['lost','found'],['build','break'],['save','spend']
+  ];
+  var WORDPLAY_DOMAIN_WORDS = new Set(('bar bars flow beat track record note key scale jam pick cap charge time right write bass base bank rock current sound play hook verse court judge shot line cell ring drop kick snare mic fire ice chain crown case pitch match sample bridge lead head body soul spirit cold heat gold metal wire strings').split(' '));
+  var IMAGE_WORDS = new Set(('fire flame smoke ash spark burn blaze heat ice frost cold storm thunder lightning rain flood ocean sea wave river blood bone skin eye eyes teeth heart lungs veins breath shadow light dark glass mirror blade steel iron gold silver rust dust wind sun moon stars sky night dawn grave ghost angel devil crown throne kingdom prison chains rope wall bridge road door window city street desert mountain cloud thunder fire wood stone rose thorn scar wound skin velvet silk ocean wave tide ember glow shine dark lightning hurricane winter winter frost frozen').split(' '));
+  var IMAGE_ACTIONS = new Set(('turn turns turned become becomes became is are was were make makes made wear wears wore carry carries carried drown drowns drown(ed) burn burns burned swallow swallows swallowed break breaks broke bleed bleeds bled rise rises rose fall falls fell melt melts melted freeze freezes froze bloom blooms bloom(ed) grow grows grew speak speaks spoke sing sings sang walk walks walked build builds built').split(' '));
+  var FIGURATIVE_MARKERS = /\b(?:like|as if|as though|become|becomes|became|turn into|turns into|turned into|is a|was a|are the|were the|my .* is|your .* is)\b/i;
+  function round1(v) { return Math.round(Number(v || 0) * 10) / 10; }
+  function calculateSemanticCraft(analysis, dictionary) {
+    dictionary = dictionary || {};
+    var lines = (analysis && analysis.lines) || [];
+    var wordplayEvidence = [], imageEvidence = [];
+    var homophoneGroups = new Map(), fusionCount = 0, splitCount = 0, polarityCount = 0, domainLines = 0;
+    var imageLines = 0, figurativeLines = 0, concreteTerms = new Set();
+    var totalWords = 0, knownWords = 0;
+    function cleanedPhones(word) { return word && word.phonemes ? String(word.phonemes).replace(/\s+/g, ' ').trim() : ''; }
+    function phonesOf(text) {
+      var pron = dictionaryEntry(dictionary, text);
+      return pron ? String(pron).trim().split(/\s+/).map(cleanPhone).join(' ') : '';
+    }
+    lines.forEach(function(line, lineIndex) {
+      var words = line.words || [], terms = words.map(function(w){return normaliseWord(w.text).replace(/[^a-z']/g,'');});
+      var lineText = words.map(function(w){return w.text;}).join(' ');
+      var phoneticWords = words.filter(function(w){return !!cleanedPhones(w);});
+      totalWords += words.length;
+      knownWords += phoneticWords.length;
+      phoneticWords.forEach(function(w){
+        var key=cleanedPhones(w), set=homophoneGroups.get(key);
+        if(!set){set=new Set();homophoneGroups.set(key,set);} set.add(normaliseWord(w.text));
+      });
+      // Same-sound spelling pairs are measurable wordplay candidates, not proof of intent.
+      var localHomophones = [];
+      homophoneGroups.forEach(function(forms, key){
+        if(forms.size>1 && phoneticWords.some(function(w){return cleanedPhones(w)===key;})) localHomophones.push(Array.from(forms).join(' / '));
+      });
+      if(localHomophones.length) wordplayEvidence.push('Line '+(lineIndex+1)+': homophone spellings '+Array.from(new Set(localHomophones)).slice(0,3).join('; '));
+      // Phrase boundary fusion: two adjacent spoken words form a dictionary word with the same phones.
+      for(var i=0;i<words.length-1;i++){
+        var left=terms[i],right=terms[i+1],joined=left+right;
+        if(left.length<1||right.length<2)continue;
+        var joinedPhones=phonesOf(joined),pairPhones=[cleanedPhones(words[i]),cleanedPhones(words[i+1])].filter(Boolean).join(' ');
+        if(joinedPhones && pairPhones && joinedPhones===pairPhones){
+          fusionCount++;wordplayEvidence.push('Line '+(lineIndex+1)+': phrase boundary “'+words[i].text+' '+words[i+1].text+'” also reads as “'+joined+'” with the same pronunciation');
+        }
+      }
+      // A single orthographic word can be re-segmented into two dictionary words.
+      words.forEach(function(w){
+        var token=normaliseWord(w.text).replace(/[^a-z]/g,''), whole=cleanedPhones(w);
+        if(token.length<5||!whole)return;
+        for(var cut=2;cut<=token.length-2;cut++){
+          var a=token.slice(0,cut),b=token.slice(cut),pa=phonesOf(a),pb=phonesOf(b);
+          if(pa&&pb&&pa+' '+pb===whole){splitCount++;wordplayEvidence.push('Line '+(lineIndex+1)+': “'+token+'” can split into “'+a+' '+b+'” with matching pronunciation');break;}
+        }
+      });
+      var foundPolarity=[];
+      WORDPLAY_POLARITY_PAIRS.forEach(function(pair){if(terms.indexOf(pair[0])>=0&&terms.indexOf(pair[1])>=0)foundPolarity.push(pair[0]+' ↔ '+pair[1]);});
+      if(foundPolarity.length){polarityCount++;wordplayEvidence.push('Line '+(lineIndex+1)+': opposing perspective/meaning pair '+foundPolarity.join(', '));}
+      var domains=terms.filter(function(t){return WORDPLAY_DOMAIN_WORDS.has(t);});
+      if(domains.length>=2){domainLines++;wordplayEvidence.push('Line '+(lineIndex+1)+': potential double-domain terms '+Array.from(new Set(domains)).join(', '));}
+
+      var images=terms.filter(function(t){return IMAGE_WORDS.has(t);});
+      images.forEach(function(t){concreteTerms.add(t);});
+      var hasFigurative=FIGURATIVE_MARKERS.test(lineText) || terms.some(function(t){return IMAGE_ACTIONS.has(t);});
+      if(images.length){imageLines++;}
+      if(images.length && hasFigurative){figurativeLines++;imageEvidence.push('Line '+(lineIndex+1)+': figurative image candidate — “'+lineText+'” (image terms: '+Array.from(new Set(images)).join(', ')+')');}
+      else if(images.length>=2){imageEvidence.push('Line '+(lineIndex+1)+': layered sensory/concrete imagery — “'+lineText+'” (terms: '+Array.from(new Set(images)).join(', ')+')');}
+    });
+    // Count global homophone groups only once, so the same pair repeated is not multiplied by line count.
+    var homophonePairCount=0;
+    homophoneGroups.forEach(function(forms){if(forms.size>1)homophonePairCount++;});
+    var excerptScale=Math.max(1,lines.length/4);
+    var wordplayRaw=(homophonePairCount*1.45+fusionCount*1.8+splitCount*2.0+polarityCount*1.25+domainLines*.55)/excerptScale;
+    var imageryRaw=(imageLines*1.05+figurativeLines*1.65+Math.min(concreteTerms.size,10)*.35)/excerptScale;
+    var wordplayScore=round1(Math.min(10,wordplayRaw));
+    var imageryScore=round1(Math.min(10,imageryRaw));
+    var coverage=totalWords?knownWords/totalWords:0, lengthConfidence=Math.min(1,lines.length/8);
+    var wordplayConfidence=round1(Math.min(.94,.18+coverage*.42+lengthConfidence*.2+Math.min(wordplayEvidence.length,5)*.035));
+    var imageryConfidence=round1(Math.min(.9,.2+coverage*.25+lengthConfidence*.25+Math.min(imageEvidence.length,5)*.04));
+    return {
+      wordplay:{score:wordplayScore,confidence:wordplayConfidence,evidence:wordplayEvidence.slice(0,12),signals:{homophoneGroups:homophonePairCount,phraseFusions:fusionCount,wordSplits:splitCount,povContrasts:polarityCount,doubleDomainLines:domainLines},method:'Heuristic evidence estimate from exact dictionary homophones, matching phrase-boundary fusions/splits, opposing terms and double-domain vocabulary. These are candidates, not proof of author intent.'},
+      imagery:{score:imageryScore,confidence:imageryConfidence,evidence:imageEvidence.slice(0,12),signals:{imageryLines:imageLines,figurativeLines:figurativeLines,uniqueImageTerms:concreteTerms.size},method:'Heuristic evidence estimate from concrete/sensory vocabulary and figurative constructions. It identifies image candidates, not a definitive interpretation of metaphor.'}
+    };
+  }
+
   function calculateComplexityGrade(metrics) {
     metrics = metrics || {};
     var lines = Math.max(0, Number(metrics.lines) || 0);
@@ -757,8 +849,8 @@
       { id: 'internalRhymes', label: 'Internal rhyme density', weight: 15, score: clampScore((internalPer100 / 20) * 100), benchmark: '20 internal-rhyme syllables per 100 syllables = 100' },
       { id: 'rhymeDensity', label: 'Rhyme density', weight: 10, score: clampScore(((Number(metrics.rhymeDensity) || 0) / 0.4) * 100), benchmark: '40% repeated rhyme-syllable density = 100' },
       { id: 'flow', label: 'Flow & rhythmic complexity', weight: 15, score: clampScore(metrics.flowScore === undefined ? flowFallback : metrics.flowScore), benchmark: 'Delivery pace, beat density and stress variation; text-only proxy when timing is absent' },
-      { id: 'wordplay', label: 'Wordplay & double meanings', weight: 15, score: optionalNumber(metrics.wordplayScore, 0, 10) === null ? null : Number(metrics.wordplayScore) * 10, benchmark: 'Manual 0–10 rating; Genius annotations are shown as supporting evidence, not converted into a quality score' },
-      { id: 'imagery', label: 'Metaphor & imagery', weight: 10, score: optionalNumber(metrics.imageryScore, 0, 10) === null ? null : Number(metrics.imageryScore) * 10, benchmark: 'Manual 0–10 rating; Genius metaphor/imagery annotations are shown as supporting evidence' },
+      { id: 'wordplay', label: 'Wordplay & double meanings', weight: 15, score: optionalNumber(metrics.wordplayScore, 0, 10) === null ? null : Number(metrics.wordplayScore) * 10, benchmark: 'Automatic semantic/phonetic estimate from homophones, phrase-boundary fusions/splits and perspective contrasts; optional manual override' },
+      { id: 'imagery', label: 'Metaphor & imagery', weight: 10, score: optionalNumber(metrics.imageryScore, 0, 10) === null ? null : Number(metrics.imageryScore) * 10, benchmark: 'Automatic imagery estimate from sensory vocabulary and figurative constructions; optional manual override' },
       { id: 'technicalWit', label: 'Technical wit · colour-map analysis', weight: 10, score: optionalNumber(metrics.technicalWitScore, 0, 10) === null ? null : Number(metrics.technicalWitScore) * 10, benchmark: 'Automatic phonetic colour-pattern score calibrated to Eminem — Rap God; optional manual override' },
       { id: 'sustained', label: 'Sustained complexity', weight: 5, score: clampScore(metrics.sustainedComplexity || 0), benchmark: 'Share of four-line blocks containing a recurring phonetic rhyme family' }
     ];
@@ -775,7 +867,7 @@
       complete: missing.length === 0,
       missing: missing,
       activeWeight: activeWeight,
-      method: 'Weighted technical analysis including automatic phonetic colour-pattern wit, plus manual semantic ratings. Missing wordplay/imagery ratings are excluded and the grade is provisional until supplied.'
+      method: 'Weighted technical, phonetic-colour and semantic-craft estimates. Optional manual overrides are retained; heuristic confidence and evidence are shown for review.'
     };
   }
 
@@ -1252,11 +1344,11 @@
   }
 
   function panelMarkup() {
-    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY COMPARISON · BUILD 980</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
+    return '<div class="rl-head"><div><div class="rl-wordmark">RHYME<span style="color:#7897bd">·</span>LIGHT</div><div class="rl-sub">RAP SONG COMPLEXITY · BUILD 986</div></div><button type="button" class="rl-quiet" data-rl-close>✕ CLOSE</button></div>' +
       '<p class="rl-intro">Compare the rhyme architecture of great rap passages. The same phonetic sound gets the same colour across every song — syllable by syllable, word by word and line by line.</p>' +
       '<div class="rl-local"><span class="rl-local-dot"></span>LOCAL LYRIC ANALYSIS <span>·</span> NO AI <span>·</span> GENIUS DEVELOPER API WHEN ENABLED</div>' +
       '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>MY SONG LIBRARY</strong><span class="rl-muted" data-rl-library-count>0 SONGS STORED ON THIS DEVICE</span></div><div class="rl-library-row"><select data-rl-library-select aria-label="Saved songs"><option value="">Choose a saved song…</option></select><button type="button" class="rl-quiet" data-rl-library-add>＋ ADD</button><button type="button" class="rl-quiet" data-rl-library-delete disabled>DELETE SELECTED</button></div><div class="rl-muted">Saved locally in this browser/device. No cloud account or upload.</div></div>' +
-      '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>CHOOSE YOUR TRACKS</strong><span class="rl-muted">2–6 SONGS</span></div>' +
+      '<div class="rl-sheet"><div class="rl-row rl-sectionhead"><strong>CHOOSE YOUR TRACKS</strong><span class="rl-muted">1–6 SONGS</span></div>' +
       '<div data-rl-track-editors></div>' +
       '<div class="rl-row rl-actions"><button type="button" class="rl-quiet" data-rl-add>＋ ADD SONG</button><button type="button" class="rl-primary" data-rl-compare>COMPARE RHYMES</button></div>' +
       '<section class="rl-genius-preview" data-rl-genius-panel hidden><div class="rl-row rl-genius-preview-head"><strong>GENIUS · IN-APP SONG LYRICS</strong><button type="button" class="rl-quiet" data-rl-genius-close>✕ CLOSE</button></div><div class="rl-genius-settings"><div class="rl-muted">Genius API is connected through your IMPROVS2 Vercel endpoint. Your Genius access token is held server-side as a Vercel environment variable; it is not stored in this browser or exposed in the app.</div></div><div data-rl-genius-api-results></div><details class="rl-genius-embed-details" data-rl-genius-embed-details><summary>EXPAND GENIUS LYRICS PREVIEW</summary><iframe data-rl-genius-frame title="Genius song lyrics preview inside Rhymelight" sandbox="allow-scripts" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="rl-muted">Only Genius song results are shown. Full lyrics are rendered by Genius’s own song embed script inside this isolated in-app preview; community lists and annotation panels are excluded, and no lyrics are scraped or copied into Rhymelight.</div></details></section>' +
@@ -1298,6 +1390,14 @@
     '#rhymelightPanel .rl-library-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;margin:8px 0}',
     '#rhymelightPanel .rl-save-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}',
     '#rhymelightPanel .rl-grade{display:flex;gap:10px;align-items:center;padding:9px;margin:0 8px 8px;background:#172538;border:1px solid #34465d;border-radius:6px}',
+    '#rhymelightPanel .rl-track-with-grade{margin:8px 0 12px}',
+    '#rhymelightPanel .rl-semantic-pair{display:grid;gap:5px;margin:6px 8px 9px}',
+    '#rhymelightPanel .rl-semantic-evidence{display:block;padding:6px 8px;margin:5px 8px;border:1px solid #34465d;border-radius:5px;background:#0f1b2b;color:#b9c8d9;font-size:10px}',
+    '#rhymelightPanel .rl-semantic-evidence summary{cursor:pointer;font-weight:900;color:#f5d76e}',
+    '#rhymelightPanel .rl-evidence-row{margin:5px 0;padding:5px 7px;border-left:2px solid #70d9bd;background:#122438;overflow-wrap:anywhere}',
+    '#rhymelightPanel .rl-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:7px}',
+    '#rhymelightPanel .rl-evidence-grid>div{padding:5px;background:#16283d;border-radius:4px}',
+    '#rhymelightPanel .rl-evidence-grid strong,#rhymelightPanel .rl-evidence-grid span{display:block}',
     '#rhymelightPanel .rl-grade-score{font-size:26px;font-weight:1000;color:#f5d76e;min-width:76px;text-align:center}',
     '#rhymelightPanel .rl-grade-detail{flex:1;min-width:0;color:#b4c3d5;font-size:9px}',
     '#rhymelightPanel .rl-grade-row{display:grid;grid-template-columns:125px minmax(0,1fr) 38px;gap:7px;align-items:center;margin:5px 8px;font-size:9px;color:#aebed0}',
@@ -1376,7 +1476,7 @@
     var host = state.panel.querySelector('[data-rl-track-editors]');
     if (!host) return;
     host.innerHTML = state.tracks.map(function (track, index) {
-      return '<section class="rl-track-editor" data-rl-track="' + index + '"><div class="rl-track-top"><select data-rl-preset aria-label="Benchmark track ' + (index + 1) + '">' + optionsMarkup(track.preset) + '</select><button type="button" class="rl-quiet" data-rl-genius-search data-rl-genius-query="' + escapeHTML(track.name + ' lyrics') + '" title="Find and preview this song&#39;s lyrics from Genius inside Rhymelight">GENIUS ▣</button><button type="button" class="rl-quiet" data-rl-remove="' + index + '"' + (state.tracks.length <= 2 ? ' disabled' : '') + '>REMOVE</button></div>' +
+      return '<section class="rl-track-editor" data-rl-track="' + index + '"><div class="rl-track-top"><select data-rl-preset aria-label="Benchmark track ' + (index + 1) + '">' + optionsMarkup(track.preset) + '</select><button type="button" class="rl-quiet" data-rl-genius-search data-rl-genius-query="' + escapeHTML(track.name + ' lyrics') + '" title="Find and preview this song&#39;s lyrics from Genius inside Rhymelight">GENIUS ▣</button><button type="button" class="rl-quiet" data-rl-remove="' + index + '"' + (state.tracks.length <= 1 ? ' disabled' : '') + '>REMOVE</button></div>' +
         '<input class="rl-track-name" type="text" data-rl-name maxlength="90" aria-label="Track name" value="' + escapeHTML(track.name) + '" placeholder="Artist — song title">' +
         '<textarea data-rl-lyrics maxlength="50000" aria-label="Song passage" placeholder="Paste the passage you want to compare — one bar per line…">' + escapeHTML(track.lyrics) + '</textarea>' +
         '<div class="rl-meta-grid">' +
@@ -1385,13 +1485,15 @@
           '<label class="rl-meta-field">WORDPLAY / 10<input data-rl-wordplay type="number" min="0" max="10" step="1" placeholder="Rate 0–10" value="' + (track.wordplayScore == null ? '' : escapeHTML(track.wordplayScore)) + '"></label>' +
           '<label class="rl-meta-field">IMAGERY / 10<input data-rl-imagery type="number" min="0" max="10" step="1" placeholder="Rate 0–10" value="' + (track.imageryScore == null ? '' : escapeHTML(track.imageryScore)) + '"></label>' +
           '<label class="rl-meta-field">TECHNICAL WIT / 10<input data-rl-technical-wit type="number" min="0" max="10" step="1" placeholder="Auto from colours · optional override" value="' + (track.technicalWitScore == null ? '' : escapeHTML(track.technicalWitScore)) + '"></label>' +
-        '</div><div class="rl-editor-help">BPM + exact duration measure delivery. Wordplay and imagery are subjective; technical wit is auto-scored from the colour map, with an optional manual override.</div>' +
+        '</div><div class="rl-editor-help">BPM + exact duration measure delivery. Wordplay and imagery are auto-estimated from phonetic, phrase and imagery evidence; manual 0–10 overrides remain optional. Technical wit uses the colour map.</div>' +
         '<div class="rl-row rl-save-row"><button type="button" class="rl-quiet" data-rl-save="' + index + '">SAVE TO MY LIBRARY</button></div>' +
         '<div class="rl-muted">' + (index + 1) + ' / ' + getMaxTracks() + ' · ' + String((track.lyrics || '').length).toLocaleString() + ' characters</div></section>';
     }).join('');
     var add = state.panel.querySelector('[data-rl-add]');
     if (add) add.disabled = state.tracks.length >= getMaxTracks();
     renderLibraryControls();
+    var compareButton = state.panel.querySelector('[data-rl-compare]');
+    if (compareButton) compareButton.textContent = state.tracks.length > 1 ? 'COMPARE RHYMES' : 'ANALYSE SONG';
   }
 
   function colorStyle(index) {
@@ -1400,40 +1502,54 @@
     return 'style="--rl-color:' + color + ';--rl-text-color:' + paletteTextColor(color) + '"';
   }
 
+  function renderTrackGradePanel(track) {
+    var metrics=track.metrics, grade=metrics.complexityGrade||calculateComplexityGrade(metrics);
+    var html='<div class="rl-grade"><div class="rl-grade-score">'+grade.total+'%</div><div class="rl-grade-detail"><strong>OVERALL LYRIC COMPLEXITY</strong><br><span>ALL 8 CATEGORIES SCORED · '+(grade.complete?'COMPLETE WEIGHTED GRADE':'PROVISIONAL')+'</span><br>Phonetic metrics + transparent semantic estimates</div></div>';
+    html+=grade.components.map(function(component){var score=Number(component.score)||0;return '<div class="rl-grade-row"><span>'+escapeHTML(component.label)+' ('+component.weight+'%)</span><span class="rl-grade-bar"><i style="width:'+score.toFixed(1)+'%"></i></span><strong>'+score.toFixed(0)+'</strong></div>';}).join('');
+    if(metrics.semanticCraft){
+      var pairs=[{key:'wordplay',label:'WORDPLAY · DOUBLE MEANINGS',manual:metrics.wordplayManual},{key:'imagery',label:'METAPHOR · IMAGERY',manual:metrics.imageryManual}];
+      html+='<div class="rl-semantic-pair">'+pairs.map(function(pair){var item=metrics.semanticCraft[pair.key]||{score:0,confidence:0,evidence:[],method:''};return '<details class="rl-semantic-evidence"><summary>'+pair.label+' · '+Number(item.score||0).toFixed(1)+'/10 · '+Math.round((item.confidence||0)*100)+'% CONFIDENCE'+(pair.manual?' · MANUAL OVERRIDE':' · AUTO')+'</summary><div>'+escapeHTML(item.method||'')+'</div>'+(item.evidence&&item.evidence.length?item.evidence.map(function(ev){return '<div class="rl-evidence-row">'+escapeHTML(ev)+'</div>';}).join(''):'<div class="rl-evidence-row">No strong phrase-level signals found in this excerpt. Numeric score retained; no unsupported interpretation added.</div>')+'</details>';}).join('')+'</div>';
+    }
+    if(metrics.colourWitProfile&&metrics.colourWitCalibration){
+      var wp=metrics.colourWitProfile,wc=metrics.colourWitCalibration;
+      html+='<details class="rl-semantic-evidence"><summary>TECHNICAL WIT · COLOUR MAP · '+Number(metrics.technicalWitScore||0).toFixed(1)+'/10 · '+Math.round((wc.confidence||0)*100)+'% CONFIDENCE</summary><div>Calibrated against the supplied Rap God reference. Palette colours identify repeated sound families; the score uses the underlying phonetic patterns, word forms and positions, not colour alone.</div><div class="rl-evidence-grid">'+[
+        ['COLOUR FAMILIES',wp.familyCount],['FAMILY WORD FORMS',wp.familyWordForms],['MULTI PATTERNS / 16',wp.multiPatternDensity.toFixed(2)],['INTERNAL COLOUR',wp.internalColourDensity.toFixed(1)+'%'],['COLOUR TRANSITIONS',wp.colourTransitionDensity.toFixed(1)+'%'],['MULTI-FAMILY LINES',wp.interwovenLineRate.toFixed(1)+'%']
+      ].map(function(pair){return '<div><strong>'+escapeHTML(pair[1])+'</strong><span>'+escapeHTML(pair[0])+'</span></div>';}).join('')+'</div></details>';
+    }
+    if(metrics.semanticEvidence){
+      var labels={wordplay:'WORDPLAY',imagery:'IMAGERY',technicalWit:'TECHNICAL WIT'};
+      html+='<details class="rl-semantic-evidence"><summary>GENIUS ANNOTATION CONTEXT (NOT USED AS SCORE)</summary>'+Object.keys(labels).map(function(key){var item=metrics.semanticEvidence[key];if(!item||!item.evidence.length)return '';return '<div><strong>'+labels[key]+'</strong>'+item.evidence.slice(0,2).map(function(entry){return '<div class="rl-evidence-row">“'+escapeHTML(entry.fragment)+'” — '+escapeHTML(entry.excerpt)+'</div>';}).join('')+'</div>';}).join('')+'</details>';
+    }
+    html+='<div class="rl-muted" style="margin:5px 9px 8px">'+escapeHTML(metrics.flowMethod)+(metrics.deliveryMeasured?' · '+metrics.syllablesPerSecond.toFixed(2)+' syllables/sec':'')+'</div>';
+    html+='<div class="rl-metrics">'+[
+      ['LINES',metrics.lines],['SYLLABLES',metrics.syllables],['RHYME DENSITY',Math.round(metrics.rhymeDensity*100)+'%'],['MULTI PATTERNS',metrics.multiRhymes],['INTERNAL',metrics.internalRhymes],['FLOW',metrics.flowScore.toFixed(0)+'%']
+    ].map(function(pair){return '<div class="rl-metric"><strong>'+pair[1]+'</strong><span>'+pair[0]+'</span></div>';}).join('')+'</div>';
+    html+='<div class="rl-export-row"><button type="button" class="rl-quiet" data-rl-export-jpeg="'+escapeHTML(track.id)+'">EXPORT JPEG</button><button type="button" class="rl-quiet" data-rl-export-pdf="'+escapeHTML(track.id)+'">EXPORT PDF</button></div>';
+    return html;
+  }
+
   function renderLyricsSummary(result, colorFor) {
     if(!result||!Array.isArray(result.tracks)||!result.tracks.length)return '';
     var track=result.tracks.find(function(item){return String(item.id)===String(state.lyricTrackId);});
     if(!track){track=result.tracks[0];state.lyricTrackId=track.id;}
     var letters=schemeLetters(track.analysis.lines,new Set(tally([track.analysis],'lines').keys()));
-    var html='<section class="rl-lyrics-front"><div class="rl-results-head">LYRICS</div>';
-    html+='<div class="rl-tabs rl-lyrics-tabs" role="tablist" aria-label="Choose song lyrics">'+result.tracks.map(function(item){
-      var selected=String(item.id)===String(state.lyricTrackId);
-      return '<button type="button" class="rl-pill '+(selected?'active':'')+'" data-rl-lyric-track="'+escapeHTML(item.id)+'" aria-pressed="'+(selected?'true':'false')+'">'+escapeHTML(item.name)+'</button>';
-    }).join('')+'</div>';
-    html+='<section class="rl-track-result"><div class="rl-result-title"><span class="rl-result-name">'+escapeHTML(track.name)+'</span></div>';
-      html += '<div class="rl-song-sheet">' + track.analysis.lines.map(function (line, li) {
-        var lineColor = state.view === 'lines' ? colorFor(line.group) : undefined;
-        var content = line.words.map(function (word, wi) {
-          var space = wi < line.words.length - 1 ? ' ' : '';
-          var dimWord = state.focus && state.view === 'words' && state.focus !== word.group ? ' dimmed' : '';
-          if (state.view === 'lines') return escapeHTML(word.text) + space;
-          if (state.view === 'words') {
-            var c = colorFor(word.group);
-            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + dimWord + '" ' + colorStyle(c) + '>' + escapeHTML(word.text) + '</span>' + space;
-          }
-          return word.syllables.map(function (syllable) {
-            var c = colorFor(syllable.group), dim = state.focus && state.focus !== syllable.group ? ' dimmed' : '';
-            return '<span class="rl-token' + (c === undefined ? '' : ' hl') + (syllable.stressed ? ' rl-stress' : '') + dim + '" ' + colorStyle(c) + '>' + escapeHTML(syllable.text) + '</span>';
-          }).join('<span style="color:#62748b">·</span>') + space;
-        }).join('');
-        var lineDim = state.focus && state.view === 'lines' && state.focus !== line.group ? ' dimmed' : '';
-        var lineStyle = lineColor === undefined ? '' : 'style="background:' + getPalette()[lineColor] + '18;border-left:3px solid ' + getPalette()[lineColor] + ';padding-left:5px"';
-        var count = line.words.reduce(function (n, w) { return n + w.syllables.length; }, 0);
-        var rawLyricLine = line.words.map(function (word) { return word.text; }).join(' ');
-        var geniusQuery = track.name + ' lyrics';
-        return '<div class="rl-sheetline"><span class="rl-letter">' + letters[li] + '</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">' + count + ' SYL</span><button type="button" class="rl-genius-line ' + lineDim + '" data-rl-genius-search data-rl-genius-query="' + escapeHTML(geniusQuery) + '" title="Find song lyrics on Genius inside Rhymelight" ' + lineStyle + '>' + content + '<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>'; 
-      }).join('') + '</div></section>';
-    return html+'</section>';
+    var html='<section class="rl-lyrics-front"><div class="rl-results-head">LYRICS + COMPLEXITY</div>';
+    if(result.tracks.length>1)html+='<div class="rl-tabs rl-lyrics-tabs" role="tablist" aria-label="Choose song lyrics">'+result.tracks.map(function(item){var selected=String(item.id)===String(state.lyricTrackId);return '<button type="button" class="rl-pill '+(selected?'active':'')+'" data-rl-lyric-track="'+escapeHTML(item.id)+'" aria-pressed="'+(selected?'true':'false')+'">'+escapeHTML(item.name)+'</button>';}).join('')+'</div>';
+    html+='<section class="rl-track-result rl-track-with-grade"><div class="rl-result-title"><span class="rl-result-name">'+escapeHTML(track.name)+'</span><span class="rl-muted">'+Math.round(track.metrics.dictionaryCoverage*100)+'% PHONETIC COVERAGE</span></div>';
+    // The complete scorecard is intentionally adjacent to and directly above this track's coloured lyrics.
+    html+=renderTrackGradePanel(track);
+    html+='<div class="rl-song-sheet">'+track.analysis.lines.map(function(line,li){
+      var lineColor=state.view==='lines'?colorFor(line.group):undefined;
+      var content=line.words.map(function(word,wi){var space=wi<line.words.length-1?' ':'',dimWord=state.focus&&state.view==='words'&&state.focus!==word.group?' dimmed':'';
+        if(state.view==='lines')return escapeHTML(word.text)+space;
+        if(state.view==='words'){var wc=colorFor(word.group);return '<span class="rl-token'+(wc===undefined?'':' hl')+dimWord+'" '+colorStyle(wc)+'>'+escapeHTML(word.text)+'</span>'+space;}
+        return word.syllables.map(function(syllable){var c=colorFor(syllable.group),dim=state.focus&&state.focus!==syllable.group?' dimmed':'';return '<span class="rl-token'+(c===undefined?'':' hl')+(syllable.stressed?' rl-stress':'')+dim+'" '+colorStyle(c)+'>'+escapeHTML(syllable.text)+'</span>';}).join('<span style="color:#62748b">·</span>')+space;
+      }).join('');
+      var lineDim=state.focus&&state.view==='lines'&&state.focus!==line.group?' dimmed':'',lineStyle=lineColor===undefined?'':'style="background:'+getPalette()[lineColor]+'18;border-left:3px solid '+getPalette()[lineColor]+';padding-left:5px"';
+      var count=line.words.reduce(function(n,w){return n+w.syllables.length;},0),geniusQuery=track.name+' lyrics';
+      return '<div class="rl-sheetline"><span class="rl-letter">'+letters[li]+'</span><div style="min-width:0;flex:1"><span class="rl-muted" style="font-size:8px;margin-right:6px">'+count+' SYL</span><button type="button" class="rl-genius-line '+lineDim+'" data-rl-genius-search data-rl-genius-query="'+escapeHTML(geniusQuery)+'" title="Find song lyrics on Genius inside Rhymelight" '+lineStyle+'>'+content+'<span class="rl-genius-mark">GENIUS ▣</span></button></div></div>';
+    }).join('')+'</div></section></section>';
+    return html;
   }
 
   function renderComparison(result) {
@@ -1447,40 +1563,17 @@
     function colorFor(id) { return id && (allCounts.get(id) || 0) >= 2 ? colors.get(id) : undefined; }
     var legend = Array.from(allCounts.entries()).filter(function (pair) { return pair[1] >= 2; }).sort(function (a, b) { return (colors.get(a[0]) || 0) - (colors.get(b[0]) || 0); });
     var resultLineCount = result.tracks.reduce(function (n, track) { return n + track.metrics.lines; }, 0);
-    // Keep the two user-facing results above the optional phonetic data.
-    // Lyrics first, complexity ratings second; the entire analysis remains below.
-    var html = renderLyricsSummary(result, colorFor);
-    html += renderMetricComparison(result);
-    html += '<details class="rl-analysis-details" data-rl-analysis-details><summary>EXPAND RHYMELIGHT ANALYSIS · ' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</summary><div class="rl-analysis-detail-body"><div class="rl-results-head">COMPARISON MAP</div><div class="rl-sheet"><div class="rl-row" style="justify-content:space-between"><strong>' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</strong><span class="rl-muted">ONE COLOUR = ONE SOUND</span></div>';
-    html += '<div class="rl-tabs" role="tablist">' + ['syllables', 'words', 'lines'].map(function (view) {
-      return '<button type="button" class="rl-pill ' + (state.view === view ? 'active' : '') + '" data-rl-view="' + view + '">' + view.toUpperCase() + '</button>';
-    }).join('') + '</div>';
-    if (legend.length) html += '<div class="rl-legend">' + legend.map(function (pair) {
-      var id = pair[0], entry = colourCounts.find(function (item) { return item.id === id; });
-      var description = entry ? entry.syllables + ' SYL · ' + entry.words + ' WORDS · ' + entry.lines + ' LINES' : pair[1] + ' MATCHES';
-      return '<button type="button" class="rl-chip ' + (state.focus && state.focus !== id ? 'dimmed' : '') + '" data-rl-focus="' + escapeHTML(id) + '" ' + colorStyle(colors.get(id)) + '>' + escapeHTML(paletteNote(colors.get(id))) + ' · ' + escapeHTML(globalSounds.get(id) || id) + ' · ' + description + '</button>';
-    }).join('') + '</div>';
-    else html += '<div class="rl-muted">No repeated phonetic rhyme groups found yet. Add more lines or compare another passage.</div>';
-    if (colourCounts.length) {
-      html += '<div class="rl-sectionhead" style="margin-top:10px">COLOUR COUNTS · TAP TO FILTER</div><div class="rl-colour-counts">' + colourCounts.map(function (entry) {
-        var active = state.focus && state.focus !== entry.id ? ' opacity:.22;' : '';
-        return '<button type="button" class="rl-colour-count" data-rl-focus="' + escapeHTML(entry.id) + '" style="background:' + entry.color + ';color:' + entry.textColor + ';' + active + '">' + escapeHTML(entry.note) + ' · ' + escapeHTML(entry.sound) + '<br>' + entry.syllables + ' SYL · ' + entry.words + ' WORDS · ' + entry.lines + ' LINES<br>' + entry.uniqueWords + ' WORD FORMS · ' + entry.tracks + ' TRACKS</button>';
-      }).join('') + '</div>';
-    }
-    if (result.sharedGroups.length) {
-      html += '<div class="rl-muted" style="margin-top:8px">SHARED BETWEEN TRACKS: ' + result.sharedGroups.map(function (g) { return escapeHTML(g.sound); }).join(' · ') + '</div>';
-    }
-    html += '</div>';
+    var html = '';
     result.tracks.forEach(function (track) {
       var metrics = track.metrics, grade = metrics.complexityGrade || calculateComplexityGrade(metrics);
       var trackId = escapeHTML(track.id);
-      html += '<section class="rl-track-result"><div class="rl-result-title"><span class="rl-result-name">' + escapeHTML(track.name) + '</span><span class="rl-muted">' + Math.round(metrics.dictionaryCoverage * 100) + '% PHONETIC COVERAGE</span></div>';
+      html += '<section class="rl-track-result" data-rl-score-summary><div class="rl-result-title"><span class="rl-result-name">' + escapeHTML(track.name) + '</span><span class="rl-muted">' + Math.round(metrics.dictionaryCoverage * 100) + '% PHONETIC COVERAGE</span></div>';
       html += '<div class="rl-grade"><div class="rl-grade-score">' + grade.total + '%</div><div class="rl-grade-detail"><strong>OVERALL LYRIC COMPLEXITY</strong><br><span class="' + (grade.complete ? '' : 'rl-grade-incomplete') + '">' + (grade.complete ? 'Full weighted grade' : 'PROVISIONAL · ' + grade.missing.length + ' artistry ratings missing') + '</span><br>Automated phonetic metrics + transparent human ratings</div></div>';
       html += grade.components.map(function (component) {
         var absent = component.score === null;
         return '<div class="rl-grade-row"><span>' + escapeHTML(component.label) + ' (' + component.weight + '%)</span><span class="rl-grade-bar"><i style="width:' + (absent ? 0 : component.score).toFixed(1) + '%;opacity:' + (absent ? '.25' : '1') + '"></i></span><strong>' + (absent ? '—' : component.score.toFixed(0)) + '</strong></div>';
       }).join('');
-      if (!grade.complete) html += '<div class="rl-grade-missing">Wordplay and imagery remain subjective manual ratings. Technical wit is calculated automatically from the phonetic colour map; Genius annotations are supporting context, not quality scores.</div>';
+      if (!grade.complete) html += '<div class="rl-grade-missing">Wordplay and imagery are heuristic estimates with visible evidence and confidence. Optional manual overrides remain available; Genius annotations are context, not quality scores.</div>';
       if (metrics.colourWitProfile && metrics.colourWitCalibration) {
         var witProfile = metrics.colourWitProfile, witCalibration = metrics.colourWitCalibration;
         html += '<details class="rl-muted" style="margin:4px 9px 8px"><summary>TECHNICAL WIT · COLOUR MAP · ' + Number(metrics.technicalWitScore || 0).toFixed(1) + '/10' + (metrics.technicalWitManual ? ' · MANUAL OVERRIDE' : '') + ' · ' + Math.round(witProfile.pronunciationCoverage) + '% PRONUNCIATION COVERAGE · ' + Math.round(witCalibration.confidence * 100) + '% CONFIDENCE</summary>';
@@ -1525,12 +1618,31 @@
       html += '<div class="rl-export-row"><button type="button" class="rl-quiet" data-rl-export-jpeg="' + trackId + '">EXPORT JPEG</button><button type="button" class="rl-quiet" data-rl-export-pdf="' + trackId + '">EXPORT PDF</button></div>';
       html += '</section>';
     });
-    html += '<div class="rl-note">Grade weights: multisyllabic rhyming 20%, internal rhyme density 15%, rhyme density 10%, flow 15%, wordplay 15%, imagery 10%, technical wit 10%, sustained complexity 5%. Technical wit is calculated from recurring phonetic colour families and calibrated to the supplied Eminem — Rap God reference; short excerpts and limited pronunciation coverage reduce confidence. Wordplay and imagery remain separate human assessments. These are transparent analysis heuristics, not definitive measures of lyric quality, delivery or influence.</div>';
+    html += renderLyricsSummary(result, colorFor);
+    html += renderMetricComparison(result);
+    html += '<details class="rl-analysis-details" data-rl-analysis-details><summary>EXPAND RHYMELIGHT ANALYSIS · ' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</summary><div class="rl-analysis-detail-body"><div class="rl-results-head">COMPARISON MAP</div><div class="rl-sheet"><div class="rl-row" style="justify-content:space-between"><strong>' + result.tracks.length + ' TRACKS · ' + resultLineCount + ' LINES</strong><span class="rl-muted">ONE COLOUR = ONE SOUND</span></div>';
+    html += '<div class="rl-tabs" role="tablist">' + ['syllables', 'words', 'lines'].map(function (view) {
+      return '<button type="button" class="rl-pill ' + (state.view === view ? 'active' : '') + '" data-rl-view="' + view + '">' + view.toUpperCase() + '</button>';
+    }).join('') + '</div>';
+    if (legend.length) html += '<div class="rl-legend">' + legend.map(function (pair) {
+      var id = pair[0], entry = colourCounts.find(function (item) { return item.id === id; });
+      var description = entry ? entry.syllables + ' SYL · ' + entry.words + ' WORDS · ' + entry.lines + ' LINES' : pair[1] + ' MATCHES';
+      return '<button type="button" class="rl-chip ' + (state.focus && state.focus !== id ? 'dimmed' : '') + '" data-rl-focus="' + escapeHTML(id) + '" ' + colorStyle(colors.get(id)) + '>' + escapeHTML(paletteNote(colors.get(id))) + ' · ' + escapeHTML(globalSounds.get(id) || id) + ' · ' + description + '</button>';
+    }).join('') + '</div>';
+    else html += '<div class="rl-muted">No repeated phonetic rhyme groups found yet. Add more lines or compare another passage.</div>';
+    if (colourCounts.length) {
+      html += '<div class="rl-sectionhead" style="margin-top:10px">COLOUR COUNTS · TAP TO FILTER</div><div class="rl-colour-counts">' + colourCounts.map(function (entry) {
+        var active = state.focus && state.focus !== entry.id ? ' opacity:.22;' : '';
+        return '<button type="button" class="rl-colour-count" data-rl-focus="' + escapeHTML(entry.id) + '" style="background:' + entry.color + ';color:' + entry.textColor + ';' + active + '">' + escapeHTML(entry.note) + ' · ' + escapeHTML(entry.sound) + '<br>' + entry.syllables + ' SYL · ' + entry.words + ' WORDS · ' + entry.lines + ' LINES<br>' + entry.uniqueWords + ' WORD FORMS · ' + entry.tracks + ' TRACKS</button>';
+      }).join('') + '</div>';
+    }
+    if (result.sharedGroups.length) {
+      html += '<div class="rl-muted" style="margin-top:8px">SHARED BETWEEN TRACKS: ' + result.sharedGroups.map(function (g) { return escapeHTML(g.sound); }).join(' · ') + '</div>';
+    }
+    html += '</div>';
+    html += '<div class="rl-note">Grade weights: multisyllabic rhyming 20%, internal rhyme density 15%, rhyme density 10%, flow 15%, wordplay 15%, imagery 10%, technical wit 10%, sustained complexity 5%. Technical wit is calculated from recurring phonetic colour families and calibrated to the supplied Eminem — Rap God reference; short excerpts and limited pronunciation coverage reduce confidence. Wordplay and imagery use dictionary homophones, phrase-boundary fusion/splitting, perspective contrasts and figurative-image candidates. These are transparent heuristic estimates, not proof of author intent or definitive measures of lyric quality.</div>';
     html += '</div></details>';
     out.innerHTML = html;
-    // Re-rendering must never reopen hundreds of phonetic rows by accident.
-    var analysisDetails = out.querySelector('[data-rl-analysis-details]');
-    if (analysisDetails) analysisDetails.open = false;
   }
 
   function renderMetricComparison(result) {
@@ -1545,7 +1657,8 @@
       { key: 'deliveryRate', label: 'Delivery pace (syllables/sec)', read: function (m) { return m.deliveryMeasured ? m.syllablesPerSecond : null; }, format: function (v) { return v == null ? '—' : v.toFixed(2); } },
       { key: 'sharedRhymeSounds', label: 'Shared sounds', read: function (m) { return m.sharedRhymeSounds; }, format: function (v) { return String(v); } }
     ];
-    var html = '<div class="rl-compare"><div class="rl-sectionhead">COMPLEXITY COMPARISON</div>';
+    var comparisonTitle = result.tracks.length > 1 ? 'COMPLEXITY COMPARISON' : 'COMPLEXITY RATINGS';
+    var html = '<div class="rl-compare"><div class="rl-sectionhead">' + comparisonTitle + '</div>';
     specs.forEach(function (spec) {
       var values = result.tracks.map(function (t) { return spec.read(t.metrics); });
       var numericValues = values.filter(function (value) { return value !== null && value !== undefined && Number.isFinite(Number(value)); });
@@ -1826,7 +1939,7 @@
     var remove = event.target.closest('[data-rl-remove]');
     if (remove) {
       var index = Number(remove.getAttribute('data-rl-remove'));
-      if (state.tracks.length > 2) {
+      if (state.tracks.length > 1) {
         var editor = remove.closest('[data-rl-track]'); if (editor) syncTrackFromEditor(editor);
         state.tracks.splice(index, 1); state.results = null;
         renderTrackEditors(); state.panel.querySelector('[data-rl-results]').innerHTML = '';
@@ -1857,7 +1970,7 @@
       if (editor) syncTrackFromEditor(editor);
     });
     var populated = state.tracks.filter(function (track) { return String(track.lyrics || '').trim(); });
-    if (populated.length < 2) { updateStatus('Add a passage for at least two tracks to compare their rhyme sounds.', 'warn'); return; }
+    if (populated.length < 1) { updateStatus('Enter a lyric passage before analysing this song.', 'warn'); return; }
     if (populated.some(function (track) { return track.lyrics.length > 50000; })) { updateStatus('Each comparison passage must be 50,000 characters or fewer.', 'error'); return; }
     var button = state.panel.querySelector('[data-rl-compare]');
     button.disabled = true; button.textContent = 'LOADING LOCAL DICTIONARY…';
@@ -1942,6 +2055,7 @@
     buildColorMap: buildColorMap,
     buildColorCounts: buildColorCounts,
     calculateComplexityGrade: calculateComplexityGrade,
+    calculateSemanticCraft: calculateSemanticCraft,
     calculateColourWitProfile: calculateColourWitProfile,
     scoreColourWit: scoreColourWit,
     scoreGeniusEvidence: scoreGeniusEvidence,
