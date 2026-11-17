@@ -1,11 +1,11 @@
 // modules/rig/rig.js
-// version: 4.9.8.989-480-frame-buffered-nam-audio
+// version: 4.9.8.990-48000hz-480frame-target-nam-transition-fix
 // Legacy NAMRealtime compatibility layer + eight-slot serial NAM rig and four serial IR slots
 // Fetches models online from tone3000.com; inference runs locally.
 // Depends on: NAMEngine (modules/nam) for offline / _namActive check.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.989';
+var MODULE_VERSION = '4.9.8.990';
 var _booted=false;
 var _uiBound=false;
 
@@ -426,14 +426,14 @@ class NAMProcessor extends AudioWorkletProcessor {
         const next=!!d.value;
         if(next!==this.bypass){
           if(next){this.bypass=true;this._bypassFade=128;}
-          else{this.bypass=false;this._resetQueues();this._fade=128;this._bypassFade=0;}
+          else{this.bypass=false;this._resetQueues();this._fade=0;this._bypassFade=0;}
         }
       } else if(d.type==='unload'){this.bypass=true;this.cur=null;this.next=null;this._resetQueues();this._pinged=false;this.port.postMessage({type:'unloaded'});}
     };
   }
   _resetOutputQueue(){
     this._wetQ.fill(0);this._dryQ.fill(0);this._qRead=0;this._qWrite=0;this._qCount=0;
-    this._streamReady=false;this._queueUnderruns=0;this._queueOverflows=0;
+    this._streamReady=false;this._queueUnderruns=0;this._queueOverflows=0;this._fade=0;
   }
   _resetQueues(){
     this._srcQ=null; this._rateKey=''; this._planKey=''; this._resetOutputQueue();
@@ -516,7 +516,7 @@ class NAMProcessor extends AudioWorkletProcessor {
     }
     // Fixed-size render FIFO: avoids Array.push growth and periodic compaction on the
     // audio thread. Start after one complete 128-frame worklet quantum; the separate
-    // AudioContext latency target requests the 480-frame device/output buffer.
+    // The AudioContext requests a 480-frame / 10 ms device-latency target; it is a hint, not a forced hardware buffer.
     const capacity=this._queueCapacity;
     for(let i=0;i<hostCount;i++){
       if(this._qCount>=capacity){
@@ -525,7 +525,12 @@ class NAMProcessor extends AudioWorkletProcessor {
       this._wetQ[this._qWrite]=wet[i];this._dryQ[this._qWrite]=dry[i];
       this._qWrite=(this._qWrite+1)%capacity;this._qCount++;
     }
-    if(this._qCount>=this._queuePrimeFrames)this._streamReady=true;
+    if(!this._streamReady&&this._qCount>=this._queuePrimeFrames){
+      // The first source quantum may not yet contain enough FIR history to produce a
+      // model block. Start the crossfade only when wet audio is actually queued; otherwise
+      // the fade is spent on dry-through and the first wet sample arrives as a step.
+      this._streamReady=true;this._fade=128;
+    }
   }
   _processLegacy(inputs,outputs){
     this._runtimeStage='legacy direct render setup';
@@ -587,7 +592,7 @@ class NAMProcessor extends AudioWorkletProcessor {
       if(!out||!out.length)return true;
       if(!inp||!inp.length||!inp[0]){for(const ch of out)ch.fill(0);return true;}
       const inCh=inp[0],L=inCh.length,outL=out[0],outR=out[1]||out[0];
-      if(this.next){this.cur=this.next;this.next=null;this._resetQueues();this._fade=128;}
+      if(this.next){this.cur=this.next;this.next=null;this._resetQueues();this._fade=0;}
       const m=this.cur;
       if(this._runtimeFaulted){
         for(let i=0;i<L;i++){const x=inCh[i]||0;outL[i]=x;if(out[1])outR[i]=x;}
@@ -643,12 +648,13 @@ class NAMProcessor extends AudioWorkletProcessor {
           y=this._wetQ[this._qRead]||0;dry=this._dryQ[this._qRead]||0;
           this._qRead=(this._qRead+1)%this._queueCapacity;this._qCount--;
         }else{
-          // Prime to the 480-frame minimum before using wet audio. If an underrun ever
-          // empties the FIFO, fail open to dry and re-prime instead of outputting silence.
+          // Prime one complete 128-frame AudioWorklet quantum before using wet audio. The
+          // requested 480-frame / 10 ms device-latency target is configured by the app.
+          // If an underrun empties the FIFO, fail open to dry and re-prime instead of silence.
           y=inCh[i]||0;dry=y;
           if(this._streamReady){this._streamReady=false;this._queueUnderruns++;}
         }
-        if(this._fade>0){const g=(128-this._fade)/128;y=dry*(1-g)+y*g;this._fade--;}
+        if(this._streamReady&&this._fade>0){const g=(128-this._fade)/128;y=dry*(1-g)+y*g;this._fade--;}
         if(!(y>-16&&y<16)){y=0;this._bad=(this._bad|0)+1;}
         outL[i]=y;if(out[1])outR[i]=y;
         this._lastWet[i%this._lastWet.length]=y;
