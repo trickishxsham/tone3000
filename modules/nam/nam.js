@@ -1,5 +1,6 @@
 // modules/nam/nam.js — Optimized offline WaveNet (NAM) inference
-// version: 4.9.8.862
+// Build 987 carries forward the verified offline engine unchanged.
+// version: 4.9.8.987
 // Matches app lineage 4.9.8.860; .862 = buffer-pool + fused-loop optimization.
 // Latency-focused rewrite of NAMEngine:
 //   • weights pre-materialized (no iterator in hot path)
@@ -10,7 +11,7 @@
 // RIG still fetches models online via TONE3000; this module is local inference only.
 (function(){
 'use strict';
-var MODULE_VERSION = '4.9.8.862';
+var MODULE_VERSION = '4.9.8.987';
 
 const NAMEngine = (function(){
   let model = null;
