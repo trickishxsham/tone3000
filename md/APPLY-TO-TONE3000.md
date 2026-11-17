@@ -1,17 +1,9 @@
-# Apply the Build 987 HTML-first files
+# Apply Build 988
 
-Copy the contents of the `tone3000/` folder in this package into the root of the `trickishxsham/tone3000` repository, preserving directory paths and replacing the existing files:
+1. Extract `IMPROVS2-Build-988-HTML.zip` at the Tone3000 repository root.
+2. Keep the included directory structure and replace the listed files.
+3. Do not remove the existing Rhymelight pronunciation dictionary or CMU licence file.
+4. Commit/deploy to Vercel.
+5. Open `https://improvs2.vercel.app/builds/app-latest.html` and hard-refresh.
 
-- `app-latest.html`
-- `builds/app-987.html`
-- `builds/app-latest.html`
-- `modules/rig/rig.js`
-- `modules/nam/nam.js`
-
-Copy `tests/rig-audio.test.cjs` into the repository's `tests/` folder. Run it from the repository root with:
-
-```bash
-node --test tests/rig-audio.test.cjs
-```
-
-The two `app-latest.html` copies and `builds/app-987.html` are intentionally byte-for-byte identical. Keep them that way when continuing HTML development.
+This is HTML-only. No APK or Android project files are included.
