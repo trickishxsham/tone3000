@@ -1321,7 +1321,7 @@ input[type=range]:not(.tune-slider)::-moz-range-thumb{ width:19px; height:19px; 
 </div>
 
 <!-- Colour Scale Generator -->
-<div style="margin-top:0.5em; padding:0.5em; background:#140d1e; border-radius:4px; font-size:0.9em;">
+<div id="featureSection" style="margin-top:0.5em; padding:0.5em; background:transparent; border-radius:4px; font-size:0.9em;">
   <button id="sampToggle" data-tip-title="SAMPLER" data-tip="Open the sample instrument panel. Load audio, auto-detect notes, build a sample map." style="padding:0.3em 0.8em; margin-right:0.5em; cursor:pointer; background:#f59e0b; color:#000; border:none; border-radius:3px; font-weight:900;">🎸 SAMPLER</button>
   <div id="sampPanel" style="display:none; margin-top:0.6em; background:rgba(245,158,11,0.14); border:1px solid #2a2a2a; border-left:4px solid #f59e0b; border-radius:6px; padding:0.8em; font-size:0.8em;">
     <div style="margin-bottom:0.5em; color:#fbbf24; font-weight:700;">SAMPLE INSTRUMENT</div>
@@ -19403,7 +19403,7 @@ window.__ensureMultiplayer = function(){
 <!-- v861-lite40: JAM pinned under MIDDLE board crest (sig2) — 3STR + 4STR; lowest safe spot -->
 <div id="jamBtn" role="button" tabindex="0" aria-label="Live Jam — multiplayer" style="position:fixed;right:10px;left:auto;top:45%;bottom:auto;z-index:8500;background:#7c3aed;color:#fff;
   font-weight:900;font-size:0.72em;padding:8px 14px 8px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.4);
-  cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.65em;font-weight:900;line-height:16px;text-align:center;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">0</span></div>
+  cursor:pointer;letter-spacing:0.5px;text-align:center;line-height:1.25;min-width:52px;" title="Live Jam — green badge = online players">🎸 JAM<span id="jamBtnBadge" aria-label="Online app users / players in live lobbies" style="display:inline-flex;align-items:center;justify-content:center;position:absolute;top:-8px;right:-10px;min-width:38px;height:20px;padding:0 6px;border:1px solid #bbf7d0;border-radius:99px;background:#22c55e;color:#052e16;font-size:0.68em;font-weight:1000;line-height:20px;text-align:center;white-space:nowrap;box-shadow:0 0 8px #22c55ecc;letter-spacing:0;">—/—</span></div>
 <script>
 (function(){
   // Pin 🎸 JAM under the middle segment crest (box2 / sig2) for Expert + Simple + Chords,
@@ -19962,5 +19962,167 @@ window.__ensureMultiplayer = function(){
 })();
 </script>
 
+
+<script>
+// Build 990 UI polish — grouped feature launcher; artwork remains fully visible.
+(function(){
+  function installFeatureLauncher(){
+    if(document.getElementById('featureLauncher'))return true;
+    var first=document.getElementById('sampToggle');
+    if(!first||!first.parentNode)return false;
+    var required=['libToggle','notationToggle','rhymelightToggle','btToggle','spectateToggle',
+      'csToggle','hiveToggle','chessToggle','keyBpmToggle','voice2guitarToggle','tonecraftaiToggle','btnRig'];
+    for(var i=0;i<required.length;i++)if(!document.getElementById(required[i]))return false;
+    var host=first.parentNode;
+    var launcher=document.createElement('nav');
+    launcher.id='featureLauncher';
+    launcher.setAttribute('aria-label','App features');
+    launcher.style.cssText='display:flex;flex-direction:column;gap:7px;margin:8px 0 10px;padding:0;background:transparent;border:0;box-shadow:none;';
+    var style=document.createElement('style');
+    style.id='featureLauncherStyles';
+    style.textContent=`
+      #featureSection,#featureLauncher,#featureLauncher .feature-launcher__group{background:transparent!important;border:0!important;box-shadow:none!important}
+      #featureLauncher,#featureLauncher *{box-sizing:border-box}
+      #featureLauncher .feature-launcher__group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 8px;min-width:0;padding:0;margin:0}
+      #featureLauncher .feature-launcher__group--practice{grid-template-columns:repeat(4,minmax(0,1fr))}
+      #featureLauncher .feature-launcher__heading{grid-column:1/-1;display:flex;align-items:center;gap:9px;margin:0 0 1px;color:#ffd45f;font:900 .72rem/1.1 Bangers,cursive;letter-spacing:1.25px;text-shadow:0 1px 3px #000}
+      #featureLauncher .feature-launcher__heading:after{content:'';height:1px;flex:1;background:linear-gradient(90deg,rgba(255,211,95,.55),transparent)}
+      #featureLauncher button{width:100%!important;min-width:0!important;min-height:40px;margin:0!important;padding:6px 5px!important;display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;overflow-wrap:anywhere;line-height:1.05;font-size:clamp(.68rem,2.5vw,.92rem)!important;letter-spacing:.025em;border-radius:6px!important}
+      #featureLauncher button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+      @media(max-width:390px){#featureLauncher .feature-launcher__group{gap:5px}#featureLauncher button{min-height:38px;padding:5px 3px!important;font-size:.66rem!important}}
+    `;
+    document.head.appendChild(style);
+    function group(title,kind){
+      var section=document.createElement('section');
+      section.className='feature-launcher__group'+(kind?' feature-launcher__group--'+kind:'');
+      var heading=document.createElement('div');
+      heading.className='feature-launcher__heading';
+      heading.textContent=title;
+      section.appendChild(heading);
+      launcher.appendChild(section);
+      return section;
+    }
+    var core=group('CORE TOOLS'),creative=group('CREATIVE'),play=group('PLAY & PRACTICE','practice'),tone=group('TONE & RIG');
+    host.insertBefore(launcher,first);
+    function move(id,target,label){
+      var el=document.getElementById(id);
+      if(!el)return;
+      if(label)el.textContent=label;
+      el.classList.add('feature-launcher__button');
+      target.appendChild(el);
+    }
+    move('sampToggle',core,'🎸 SAMPLER');
+    move('libToggle',core,'🎙 IMPROVS LIBRARY');
+    move('notationToggle',core,'🎼 NOTATION');
+    move('rhymelightToggle',creative,'✦ RHYMELIGHT');
+    move('btToggle',creative,'🎧 BACKING TRACKS');
+    move('csToggle',creative,'🎨 COLOUR SCALE');
+    move('spectateToggle',play,'👁 SPECTATE');
+    move('hiveToggle',play,'⬢ HIVE');
+    move('chessToggle',play,'♟ CHESS');
+    move('keyBpmToggle',play,'🎵 KEY/BPM');
+    move('voice2guitarToggle',tone,'🎙 VOICE2GUITAR');
+    move('tonecraftaiToggle',tone,'✦ TONECRAFT AI');
+    move('btnRig',tone,'🎛 RIG ▾');
+    var oldWrap=document.getElementById('chessKbWrap');
+    if(oldWrap&&!oldWrap.querySelector('button'))oldWrap.remove();
+    launcher.style.background='transparent';
+    return true;
+  }
+  function boot(){
+    if(installFeatureLauncher())return;
+    if(!window.MutationObserver)return;
+    var observer=new MutationObserver(function(){
+      if(installFeatureLauncher())observer.disconnect();
+    });
+    observer.observe(document.documentElement,{childList:true,subtree:true});
+    document.addEventListener('DOMContentLoaded',function(){
+      if(installFeatureLauncher())observer.disconnect();
+    },{once:true});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});
+  else boot();
+})();
+</script>
+
+<script>
+// Build 990 — live JAM badge: online app users / players in open lobbies.
+(function(){
+  function summarizeJamPresence(entries, now){
+    var sessions=Object.create(null),lobbies=Object.create(null);
+    (Array.isArray(entries)?entries:[]).forEach(function(entry){
+      if(!entry)return;
+      if(entry.isLive){
+        if(String(entry.kind||'').toLowerCase()!=='app')return;
+        var sid=String(entry.sid||'').trim(),ts=Number(entry.ts)||0,age=now-ts;
+        if(!sid||!ts||age< -30000||age>90000)return;
+        var players=Math.max(1,Number(entry.players)||1);
+        sessions[sid]=Math.max(sessions[sid]||0,players);
+      }else if(entry.isLobby){
+        var code=String(entry.code||'').trim().toUpperCase();
+        var key=String(entry.lobbyKey==null?entry.lobbySize:entry.lobbyKey)+'|'+code;
+        var count=Math.max(0,Number(entry.count)||0);
+        if(!code||entry.sealed||count<=0)return;
+        lobbies[key]=Math.max(lobbies[key]||0,count);
+      }
+    });
+    var online=Object.keys(sessions).reduce(function(sum,key){return sum+sessions[key];},0);
+    var inLobbies=Object.keys(lobbies).reduce(function(sum,key){return sum+lobbies[key];},0);
+    return{online:online,inLobbies:inLobbies};
+  }
+  var busy=false,lastGood=null;
+  async function refreshJamBadge(){
+    var badge=document.getElementById('jamBtnBadge'),button=document.getElementById('jamBtn');
+    if(!badge||busy||document.visibilityState==='hidden')return;
+    if(!window.GlobalBoard||typeof window.GlobalBoard.fetchAll!=='function')return;
+    busy=true;
+    try{
+      var entries=await window.GlobalBoard.fetchAll();
+      var counts=summarizeJamPresence(entries,Date.now());
+      lastGood=counts;
+      badge.textContent=counts.online+'/'+counts.inLobbies;
+      badge.style.display='inline-flex';
+      badge.title=counts.online+' players online in IMPROVS2 · '+counts.inLobbies+' players in open lobbies';
+      badge.setAttribute('aria-label',badge.title);
+      if(button)button.title='Live Jam · '+badge.title;
+    }catch(err){
+      if(!lastGood){
+        badge.textContent='—/—';
+        badge.style.display='inline-flex';
+        badge.title='Live player counts temporarily unavailable';
+        badge.setAttribute('aria-label',badge.title);
+      }
+    }finally{busy=false;}
+  }
+  function start(){
+    var appSid='';
+    try{
+      appSid=sessionStorage.getItem('improvs2_app_presence_sid')||'';
+      if(!appSid){
+        appSid='APP'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);
+        sessionStorage.setItem('improvs2_app_presence_sid',appSid);
+      }
+    }catch(e){appSid='APP'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);}
+    function publishAppPresence(){
+      try{
+        if(window.GlobalBoard&&typeof window.GlobalBoard.publishPresence==='function')
+          window.GlobalBoard.publishPresence({sid:appSid,players:1,kind:'app'});
+      }catch(e){}
+    }
+    publishAppPresence();
+    window.setInterval(publishAppPresence,30000);
+    window.setTimeout(refreshJamBadge,1200);
+    window.setInterval(refreshJamBadge,30000);
+    document.addEventListener('visibilitychange',function(){
+      if(document.visibilityState==='visible'){
+        publishAppPresence();
+        refreshJamBadge();
+      }
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});
+  else start();
+})();
+</script>
 </body>
 </html>
