@@ -1,9 +1,9 @@
-/* IMPROVS2 ToneCraftAI — Build 4.9.8.989
+/* IMPROVS2 ToneCraftAI — Build 4.9.8.990
  * Prompt-guided TONE3000 model discovery, per-slot DSP parameter proposals and rig snapshots.
  */
 (function(){
 'use strict';
-const VERSION='4.9.8.989';
+const VERSION='4.9.8.990';
 const state={panel:null,prompt:'',proposal:null,busy:false};
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(v,min,max)=>Math.max(min,Math.min(max,Number(v)));
@@ -24,41 +24,44 @@ function inferTone(prompt){
  if(has('sustain','singing','lead'))tags.push('singing sustain lead');
  if(has('bright','sparkle'))tags.push('bright upper mids');
  if(has('dark','smooth'))tags.push('smooth dark');
- const third=has('stacked','stack','more gain','extra drive','boost','sustain')?{enabled:true,gear:'pedal',query:'overdrive boost sustain '+tags.join(' ')}:{enabled:false,gear:'pedal',query:''};
- const clean=has('clean');
+ const promptTerms=String(prompt||'').replace(/[\r\n\t]+/g,' ').replace(/[;|]/g,' ').replace(/\s+/g,' ').trim().slice(0,220);
+ const clean=has('clean','transparent','chime','edge of breakup');
  const tight=has('tight');
  const highGain=has('metal','high gain','heavy');
+ const pedalQuery=has('fuzz')?'fuzz guitar pedal':highGain?'high gain distortion pedal':clean?'clean boost transparent overdrive pedal':'overdrive boost pedal';
+ const third=has('stacked','stack','more gain','extra drive','boost','sustain')?{enabled:true,gear:'pedal',query:'overdrive boost sustain '+tags.join(' ')+' '+promptTerms}:{enabled:false,gear:'pedal',query:''};
  const fx={
   R1:{inputDb:clean?-1:1.5,drive:clean?.22:highGain?.68:.48,outputDb:0,mix:100,clip:.05,eqOn:true,lowCut:tight?90:70,bassFreq:120,bass:tight?4.4:5.2,midFreq:has('singing','upper mid')?950:750,midQ:.85,middle:has('singing','upper mid')?6.4:5.8,trebleFreq:3200,treble:has('bright')?6:5.2,highCut:has('dark')?6800:9000},
   R2:{inputDb:0,drive:clean?.28:highGain?.72:.55,outputDb:-1,mix:100,clip:.04,eqOn:true,lowCut:tight?85:65,bassFreq:110,bass:tight?4.5:5.3,midFreq:has('singing','upper mid')?900:700,midQ:.8,middle:has('singing','upper mid')?6.8:5.8,trebleFreq:3300,treble:has('bright')?6.1:5.3,highCut:has('dark')?7000:9500},
   R3:{inputDb:-1,drive:has('fuzz')?.62:.32,outputDb:-2,mix:has('fuzz')?72:55,clip:.08,eqOn:true,lowCut:95,bassFreq:130,bass:4.8,midFreq:1000,midQ:.9,middle:6.2,trebleFreq:3600,treble:5.2,highCut:8200},
   IR1:{inputDb:0,outputDb:-1,mix:100,clip:0,eqOn:true,lowCut:tight?85:70,bassFreq:120,bass:5,midFreq:800,midQ:.8,middle:5.5,trebleFreq:3200,treble:5,highCut:has('dark')?6500:9000}
  };
- return {tags,third,fx,queries:{R1:'overdrive boost pedal '+tags.join(' '),R2:'guitar amplifier '+tags.join(' '),R3:third.query,IR1:'guitar cabinet impulse response '+tags.join(' ')}};
+ return {tags,third,fx,queries:{R1:[pedalQuery,tags.join(' '),promptTerms].filter(Boolean).join(' '),R2:['guitar amplifier',tags.join(' '),promptTerms].filter(Boolean).join(' '),R3:third.query,IR1:['guitar cabinet impulse response',tags.join(' '),promptTerms].filter(Boolean).join(' ')}};
 }
 function listOf(r){return Array.isArray(r)?r:(r&&(r.data||r.tones||r.results||r.models)||[]);}
 function pickVariant(models,tier){
- if(!models.length)return null;
+ const downloadable=(models||[]).filter(m=>m&&m.id!=null&&typeof m.model_url==='string'&&m.model_url.trim());
+ if(!downloadable.length)return null;
  const re=tier==='full'?/A2\s*Full|Full/i:/A2\s*Lite|Lite/i;
- return models.find(m=>re.test(String(m.name||m.title||'')))||models.find(m=>/A2/i.test(String(m.name||'')))||models[0];
+ return downloadable.find(m=>re.test(String(m.name||m.title||'')))||downloadable.find(m=>/A2/i.test(String(m.name||'')))||downloadable[0];
 }
 async function searchTone(api,slot,query,tier){
  const ir=slot==='IR1',gear=slot==='R1'||slot==='R3'?'pedal':'amp';
- const res=await api.search({query,gears:ir?'cab':gear,format:ir?'ir':'nam',sort:'trending',page:1,page_size:18});
- const tones=listOf(res);
- for(const tone of tones.slice(0,12)){
+ const res=await api.search({query,gears:ir?'cab':gear,format:ir?'ir':'nam',sort:'trending',page:1,page_size:30});
+ const tones=listOf(res),lookupErrors=[];
+ for(const tone of tones.slice(0,24)){
   if(tone.id==null)continue;
   try{
    const raw=await api.listModels(tone.id),models=listOf(raw),model=pickVariant(models,tier);
-   if(model)return {slot,tone,models,model,query,ir};
-  }catch(_){ }
+   if(model)return {slot,tone,models:models.filter(m=>m&&m.id!=null&&typeof m.model_url==='string'&&m.model_url.trim()),model,query,ir,candidateCount:tones.length,lookupErrors};
+  }catch(err){lookupErrors.push((tone.title||tone.name||('Tone '+tone.id))+': '+(err&&err.message||String(err)));}
  }
- return {slot,tone:tones[0]||null,models:[],model:null,query,ir};
+ return {slot,tone:tones[0]||null,models:[],model:null,query,ir,candidateCount:tones.length,lookupErrors};
 }
 function defaultPrompt(){return 'A warm, articulate blues-rock lead. Bloomfield-style sustain, singing upper mids, gritty but controlled breakup, tight bass and excellent note separation.';}
 function render(){
  const p=state.panel;if(!p)return;
- p.innerHTML='<div class="tc-head"><strong>✦ TONECRAFT AI</strong><span>BUILD 988 · NAM + IR RIG CRAFTER</span></div>'+
+ p.innerHTML='<div class="tc-head"><strong>✦ TONECRAFT AI</strong><span>BUILD 990 · NAM + IR RIG CRAFTER</span></div>'+
  '<p class="tc-help">Describe the tone. ToneCraft searches your connected TONE3000 library, chooses compatible NAM variants and proposes independent DSP controls for each slot. Nothing loads until you approve it.</p>'+
  '<textarea id="tcPrompt" rows="3" maxlength="1200" placeholder="Describe your guitar tone…">'+esc(state.prompt||defaultPrompt())+'</textarea>'+ 
  '<div class="tc-actions"><label>MODEL TIER <select id="tcTier"><option value="lite">A2 Lite preferred</option><option value="full">A2 Full preferred</option><option value="auto">Automatic</option></select></label><label class="tc-check"><input id="tcUseR3" type="checkbox" '+(state.proposal&&state.proposal.useR3?'checked':'')+'> Add R3 when useful</label><button id="tcGenerate" type="button">GENERATE PROPOSAL</button></div>'+ 
@@ -80,7 +83,11 @@ async function generate(){
   const jobs=[searchTone(api,'R1',plan.queries.R1,tier),searchTone(api,'R2',plan.queries.R2,tier),searchTone(api,'IR1',plan.queries.IR1,tier)];
   if(useR3)jobs.splice(2,0,searchTone(api,'R3',plan.queries.R3,tier));
   const found=await Promise.all(jobs);state.proposal={prompt,plan,slots:found,useR3,tier};
-  renderProposal();status.textContent='Proposal ready. Review the selected models, tiers and independent slot controls before applying.';
+  renderProposal();
+  const ready=found.filter(x=>x.model).length,failed=found.filter(x=>!x.model);
+  status.textContent=failed.length
+   ?'Partial proposal: '+ready+'/'+found.length+' slots have downloadable models. '+failed.map(x=>x.slot+': '+(x.lookupErrors&&x.lookupErrors.length?'lookup failed for '+x.lookupErrors.length+' tone(s) — '+x.lookupErrors[0]:'no downloadable variant among '+(x.candidateCount||0)+' tone result(s)')).join(' · ')
+   :'Proposal ready: all '+ready+' slots have downloadable models. Review the selections and controls before applying.';
  }catch(e){status.textContent='ToneCraftAI could not complete the search: '+(e.message||e);console.error('[ToneCraftAI]',e);}
 }
 function renderProposal(){
@@ -89,7 +96,8 @@ function renderProposal(){
   const title=slot.slot==='R1'?'R1 · DRIVE / BOOST':slot.slot==='R2'?'R2 · AMPLIFIER':slot.slot==='R3'?'R3 · OPTIONAL ADDITIONAL STAGE':'IR1 · CABINET';
   const fx=proposal.plan.fx[slot.slot],keys=Object.keys(fx);
   const variants=slot.models.map((m,i)=>'<option value="'+i+'" '+(String(m.id)===String(slot.model&&slot.model.id)?'selected':'')+'>'+esc(m.name||('Variant '+(i+1)))+'</option>').join('');
-  return '<article class="tc-card" data-tc-slot="'+slot.slot+'"><h4>'+title+'</h4><div class="tc-model">'+esc(slot.tone&&(slot.tone.title||slot.tone.name)||'No compatible TONE3000 model found')+'</div><div class="tc-meta">'+esc(slot.model&&slot.model.name||'No variant available')+' · '+(slot.ir?'IR':'NAM')+'</div>'+(slot.model?'<label class="tc-meta">MODEL VARIANT<select data-tc-variant>'+variants+'</select></label>':'<div class="tc-meta">No variant returned. Adjust the prompt or connect a different TONE3000 library.</div>')+
+  const lookupNote=slot.lookupErrors&&slot.lookupErrors.length?'Model lookup failed for '+slot.lookupErrors.length+' tone result(s): '+slot.lookupErrors.slice(0,2).join(' · '):'No downloadable variant among '+(slot.candidateCount||0)+' tone result(s).';
+  return '<article class="tc-card" data-tc-slot="'+slot.slot+'"><h4>'+title+'</h4><div class="tc-model">'+esc(slot.tone&&(slot.tone.title||slot.tone.name)||'No compatible TONE3000 model found')+'</div><div class="tc-meta">'+esc(slot.model&&slot.model.name||'No downloadable variant')+' · '+(slot.ir?'IR':'NAM')+'</div>'+(slot.model?'<label class="tc-meta">MODEL VARIANT<select data-tc-variant>'+variants+'</select></label>':'<div class="tc-meta">'+esc(lookupNote)+'</div>')+
   '<div class="tc-fx">'+keys.map(k=>'<label>'+esc(k)+(k==='eqOn'?'<input type="checkbox" data-tc-fx="eqOn" '+(fx.eqOn?'checked':'')+' style="display:block;width:auto">':'<input type="number" step="0.1" min="'+FX_RANGES[k][0]+'" max="'+FX_RANGES[k][1]+'" data-tc-fx="'+k+'" value="'+esc(fx[k])+'">')+'</label>').join('')+'</div>'+(slot.model?'<button type="button" data-tc-apply="'+index+'">LOAD '+slot.slot+' + APPLY CONTROLS</button>':'')+'</article>';
  }).join('');
  out.innerHTML='<div class="tc-grid">'+cards+'</div><button type="button" class="tc-applyall" id="tcApplyAll">APPLY PROPOSED RIG</button><div class="tc-actions"><label>SAVE SNAPSHOT <select id="tcSnapshot">'+['A','B','C','D','E','F','G'].map((x,i)=>'<option value="'+i+'">'+x+'</option>').join('')+'</select></label><button type="button" id="tcSave">SAVE CURRENT RIG</button></div>';
