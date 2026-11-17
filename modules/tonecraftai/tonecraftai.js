@@ -1,9 +1,9 @@
-/* IMPROVS2 ToneCraftAI — Build 4.9.8.988
+/* IMPROVS2 ToneCraftAI — Build 4.9.8.989
  * Prompt-guided TONE3000 model discovery, per-slot DSP parameter proposals and rig snapshots.
  */
 (function(){
 'use strict';
-const VERSION='4.9.8.988';
+const VERSION='4.9.8.989';
 const state={panel:null,prompt:'',proposal:null,busy:false};
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(v,min,max)=>Math.max(min,Math.min(max,Number(v)));
